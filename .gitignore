@@ -1,0 +1,24 @@
+# Java / Maven
+**/target/
+
+# Node.js
+**/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.expo/
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+**/application-local.properties
+**/application-secret.properties
+
+# Logs and OS files
+*.log
+.DS_Store
+Thumbs.db
+
+# IDE settings
+.idea/
+*.iml
