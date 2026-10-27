@@ -1,8 +1,8 @@
-# 🌱 GoPlant — Hệ thống quản lý và chăm sóc cây trồng
+🌱 GoPlant — Hệ thống quản lý và chăm sóc cây trồng
 
-GoPlant là dự án hướng đến việc hỗ trợ người dùng quản lý cây trồng và khu vườn trên một nền tảng tập trung. Hệ thống được định hướng theo mô hình **Frontend + Backend REST API + cơ sở dữ liệu**, với giao diện tham khảo được thiết kế trên Figma.
+GoPlant là dự án hỗ trợ người dùng quản lý cây trồng và khu vườn trên một nền tảng tập trung. Kiến trúc mục tiêu gồm **ứng dụng di động React Native (Android) + Backend REST API bằng Spring Boot + cơ sở dữ liệu MySQL**. Android Studio được dùng để thiết lập Android SDK, chạy trình giả lập, kiểm thử và build ứng dụng Android; mã giao diện di động vẫn được phát triển bằng React Native trong thư mục `frontend/`.
 
-> **Trạng thái phát triển:** Dự án đang được xây dựng. README này phân biệt rõ phần khung source hiện có và phạm vi tính năng dự kiến. Ảnh cây trong bản thiết kế giao diện chỉ là **ảnh minh họa/placeholder**, không phải ảnh sản phẩm thực tế hoặc dữ liệu cây đã được xác thực. Camera trong phạm vi hiện tại phục vụ giám sát và lưu/hiển thị hình ảnh; không có chức năng AI tự nhận diện hoặc chẩn đoán bệnh cây.
+> **Trạng thái phát triển:** Dự án đang được xây dựng. README phân biệt phần source hiện có và kiến trúc dự kiến. Trong phiên bản repository được mô tả ở đây, Backend mới có bộ khung; `frontend/` và dự án Android do React Native tạo ra chưa được xác nhận có trong repo, vì vậy chưa thể build APK/AAB ngay. Ảnh cây trong bản thiết kế Figma chỉ là **ảnh minh họa/placeholder**, không phải dữ liệu cây đã được xác thực. Camera trong phạm vi hiện tại phục vụ giám sát và lưu/hiển thị hình ảnh; không có chức năng AI tự nhận diện hoặc chẩn đoán bệnh cây.
 
 ## Mục lục
 
@@ -15,13 +15,14 @@ GoPlant là dự án hướng đến việc hỗ trợ người dùng quản lý
 - [7. Cấu trúc repository](#7-cấu-trúc-repository)
 - [8. Chạy Backend trên máy cá nhân](#8-chạy-backend-trên-máy-cá-nhân)
 - [9. Cấu hình cơ sở dữ liệu](#9-cấu-hình-cơ-sở-dữ-liệu)
-- [10. Frontend: cách chuẩn bị và chạy](#10-frontend-cách-chuẩn-bị-và-chạy)
-- [11. API và hợp đồng tích hợp dự kiến](#11-api-và-hợp-đồng-tích-hợp-dự-kiến)
-- [12. Kiểm thử](#12-kiểm-thử)
-- [13. Quy trình đóng góp và Git](#13-quy-trình-đóng-góp-và-git)
-- [14. Xử lý lỗi thường gặp](#14-xử-lý-lỗi-thường-gặp)
-- [15. Lộ trình phát triển](#15-lộ-trình-phát-triển)
-- [16. Nhóm phát triển](#16-nhóm-phát-triển)
+- [10. Frontend React Native: chuẩn bị và chạy](#10-frontend-react-native-chuẩn-bị-và-chạy)
+- [11. Android Studio: chạy thử và build ứng dụng Android](#11-android-studio-chạy-thử-và-build-ứng-dụng-android)
+- [12. API và hợp đồng tích hợp dự kiến](#12-api-và-hợp-đồng-tích-hợp-dự-kiến)
+- [13. Kiểm thử](#13-kiểm-thử)
+- [14. Quy trình đóng góp và Git](#14-quy-trình-đóng-góp-và-git)
+- [15. Xử lý lỗi thường gặp](#15-xử-lý-lỗi-thường-gặp)
+- [16. Lộ trình phát triển](#16-lộ-trình-phát-triển)
+- [17. Nhóm phát triển](#17-nhóm-phát-triển)
 
 ---
 
@@ -81,7 +82,7 @@ Người trồng cây hoặc người yêu thích thực vật, có nhu cầu:
 
 ### Phạm vi triển khai hiện tại trên repository
 
-Repo đang có **bộ khung Spring Boot** với lớp khởi động ứng dụng, Maven Wrapper và cấu hình H2. Khi tạo README này, chưa thấy `frontend/package.json`/source Frontend được commit; Backend cũng chưa có các Controller/Service/Repository và endpoint nghiệp vụ hoàn chỉnh. Do đó, có thể chạy và kiểm tra khởi động Backend theo hướng dẫn bên dưới, nhưng **chưa thể xem toàn bộ tính năng trong bảng là đã triển khai hoặc kiểm thử xong**.
+Repo đang có **bộ khung Spring Boot** với lớp khởi động ứng dụng, Maven Wrapper và cấu hình H2. Khi cập nhật README này, chưa thấy `frontend/package.json`, source React Native hoặc thư mục `frontend/android/` được commit; Backend cũng chưa có các Controller/Service/Repository và endpoint nghiệp vụ hoàn chỉnh. Vì vậy, chưa thể build ứng dụng Android hoặc xem toàn bộ chức năng trong bảng là đã triển khai/kiểm thử xong. Cần bổ sung Frontend React Native, hoàn thiện Backend và database trước khi kiểm thử tích hợp toàn hệ thống.
 
 ## 4. Thiết kế giao diện và luồng sử dụng
 
@@ -128,17 +129,20 @@ flowchart TD
 
 ## 5. Kiến trúc hệ thống
 
-Kiến trúc mục tiêu của hệ thống:
+Kiến trúc mục tiêu được thống nhất theo hướng ứng dụng di động Android bằng React Native:
 
 ```mermaid
 flowchart LR
-    UI[Frontend: MiniApp / Web / React Native] <-->|HTTP + JSON| API[Spring Boot REST API]
+    APP[Ứng dụng Android: React Native] <-->|HTTPS/HTTP + JSON| API[Spring Boot REST API]
     API --> C[Controller]
     C --> S[Service / nghiệp vụ]
     S --> R[Repository]
     R --> J[Spring Data JPA / Hibernate]
-    J --> DB[(H2 khi phát triển hoặc MySQL khi cấu hình)]
+    J --> DB[(MySQL: dữ liệu chính; H2: phát triển/kiểm thử)]
+    AS[Android Studio + Android SDK/Emulator] -. build, chạy thử .-> APP
 ```
+
+**Nguyên tắc tích hợp:** ứng dụng Android gọi Backend qua REST API; Backend mới là thành phần kết nối database. Không nhúng thông tin đăng nhập MySQL vào ứng dụng và không để ứng dụng Android truy cập thẳng vào database. Với React Native, mã giao diện trong `frontend/` chính là mã nguồn ứng dụng di động; Android Studio dùng để quản lý môi trường Android, mở phần native project và build/chạy ứng dụng.
 
 ### Vai trò các lớp Backend
 
@@ -169,12 +173,18 @@ flowchart LR
 
 ### Công nghệ định hướng cho toàn hệ thống
 
-- **Frontend:** React Native/JavaScript/JSX theo định hướng trong tài liệu; cần xác nhận runtime và script theo `frontend/package.json` khi source Frontend được thêm.
-- **Trao đổi dữ liệu:** REST API, HTTP và JSON.
-- **CSDL mục tiêu:** MySQL cho dữ liệu bền vững; H2 hiện dùng để khởi động nhanh trong môi trường phát triển.
-- **Kiểm thử API:** Postman hoặc công cụ HTTP tương đương.
-- **Quản lý mã nguồn:** Git và GitHub.
-- **Tự động kiểm tra:** có thể bổ sung GitHub Actions cho build/test khi workflow được cấu hình.
+| Công nghệ | Vai trò/trạng thái |
+|---|---|
+| React Native + JavaScript/JSX | Frontend di động, xây dựng màn hình, component, navigation, gọi API và lưu cục bộ khi cần; cần bổ sung vào `frontend/` |
+| React Native Community CLI | Hướng triển khai được README này giả định để có dự án native Android trong `frontend/android/`; nếu nhóm chọn Expo thì cần điều chỉnh lệnh build theo cấu hình Expo thực tế |
+| Android Studio + Android SDK | Cài SDK/Build Tools, tạo emulator, mở dự án native Android và kiểm tra/build ứng dụng |
+| Gradle | Build phần native Android do React Native khởi tạo |
+| REST API, HTTP/HTTPS, JSON | Giao tiếp giữa ứng dụng Android với Backend |
+| MySQL | Database mục tiêu lưu dữ liệu bền vững trên máy chủ; H2 hiện dùng để khởi động/kiểm tra nhanh Backend |
+| Postman hoặc công cụ HTTP tương đương | Kiểm thử API |
+| Git, GitHub, GitHub Actions | Quản lý source; có thể bổ sung pipeline build/test sau khi cấu hình |
+
+**Lưu ý về Java:** Backend hiện cấu hình Java 21. Bộ công cụ React Native/Gradle có yêu cầu JDK riêng theo phiên bản; tài liệu React Native hiện khuyến nghị JDK 17 cho thiết lập Android. Không mặc định rằng JDK dùng chạy Backend phải là JDK dùng build Android. Kiểm tra phiên bản tương thích trong [hướng dẫn môi trường React Native chính thức](https://reactnative.dev/docs/set-up-your-environment) và chọn Gradle JDK trong Android Studio nếu cần.
 
 ## 7. Cấu trúc repository
 
@@ -202,21 +212,30 @@ GoPlant/
             └── java/
 ```
 
-### Cấu trúc mục tiêu khi Frontend và các phân hệ được bổ sung
+### Cấu trúc mục tiêu khi bổ sung React Native, Backend và database
 
 ```text
 GoPlant/
 ├── README.md
 ├── .gitignore
-├── frontend/                       # Source MiniApp/Web (đang cần bổ sung)
+├── frontend/                         # Ứng dụng di động React Native (cần bổ sung)
 │   ├── package.json
+│   ├── package-lock.json
+│   ├── index.js
 │   ├── src/
-│   │   ├── components/              # Thành phần giao diện tái sử dụng
-│   │   ├── screens/                 # Welcome, Auth, Home, Garden, Plant...
-│   │   ├── navigation/              # Stack/Tab và luồng màn hình
-│   │   ├── services/                # Gọi REST API
-│   │   └── storage/                 # Cấu hình lưu cục bộ nếu cần
-│   └── assets/                      # Icon và tài nguyên đã chọn sử dụng
+│   │   ├── components/               # Component giao diện tái sử dụng
+│   │   ├── screens/                  # Welcome, Auth, Home, Garden, Plant...
+│   │   ├── navigation/               # Stack/Tab và luồng màn hình
+│   │   ├── services/                 # Gọi REST API
+│   │   ├── storage/                  # Lưu cục bộ nếu cần
+│   │   └── config/                   # API base URL theo môi trường
+│   ├── assets/                       # Icon và tài nguyên giao diện
+│   └── android/                      # Native Android project; mở thư mục này bằng Android Studio
+│       ├── app/
+│       │   ├── build.gradle
+│       │   └── src/main/             # AndroidManifest.xml, native resources...
+│       ├── gradle/
+│       └── gradlew.bat
 ├── backend/
 │   ├── pom.xml
 │   ├── mvnw
@@ -230,15 +249,15 @@ GoPlant/
 │       │   ├── dto/
 │       │   ├── config/
 │       │   └── exception/
-│       ├── main/resources/
-│       │   └── application.properties
-│       └── test/java/
+│       └── main/resources/application.properties
+├── database/                         # Tuỳ chọn: migration/seed SQL và tài liệu schema
 └── docs/
-    ├── design/                      # Preview/đường dẫn thiết kế Figma
-    └── api/                         # Tài liệu API, ví dụ request/response
+    ├── design/                       # Preview/đường dẫn thiết kế Figma
+    ├── api/                          # API contract, ví dụ request/response
+    └── database/                     # ERD, schema và migration notes
 ```
 
-Cấu trúc mục tiêu là gợi ý tổ chức khi code phát triển; các package chưa tồn tại trong repo hiện tại không nên hiểu là đã được cài đặt.
+Đây là cấu trúc mục tiêu, không phải danh sách file đã có trong repository. Cấu trúc con của `frontend/android/` phụ thuộc template React Native/Gradle được sử dụng. Không commit các thư mục sinh tự động như `node_modules/`, `.gradle/`, `build/` hoặc thông tin signing secret. Thư mục `database/` chỉ chứa schema/migration/tài liệu nếu nhóm cần quản lý chúng trong Git; dữ liệu MySQL thật vẫn chạy riêng, không nằm bên trong Android app.
 
 ## 8. Chạy Backend trên máy cá nhân
 
@@ -364,39 +383,140 @@ MySQL Connector/J đã có trong `pom.xml`, nhưng cấu hình được commit h
 
 Không commit mật khẩu thật lên GitHub. Trong dự án dùng chung, nên quản lý cấu hình cá nhân bằng biến môi trường hoặc file cấu hình local được `.gitignore` loại trừ. Khi chuyển datasource, kiểm tra xem các thư viện H2/MySQL và `application.properties` có khớp nhau hay không.
 
-## 10. Frontend: cách chuẩn bị và chạy
+## 10. Frontend React Native: chuẩn bị và chạy
 
-Thiết kế giao diện đã định hướng các màn hình và luồng sử dụng trong [Mục 4](#4-thiết-kế-giao-diện-và-luồng-sử-dụng). Tuy nhiên, tại thời điểm README này được tạo, repository chưa có `frontend/package.json` và source Frontend nên chưa có lệnh chạy giao diện có thể xác nhận từ repo.
+README này định hướng `frontend/` là ứng dụng di động **React Native**. Đây không phải một website được tự động chuyển thành ứng dụng Android: nếu giao diện hiện có được viết bằng HTML/React Web hoặc framework chỉ chạy trên trình duyệt, cần xây dựng/chuyển đổi giao diện sang React Native trước khi build APK/AAB.
 
-Khi source Frontend đã được commit:
+Tại thời điểm cập nhật README, repository chưa có `frontend/package.json` và source Frontend nên các lệnh dưới đây chỉ dùng sau khi nhóm đã tạo và commit ứng dụng React Native.
 
-1. Mở Terminal tại thư mục gốc `GoPlant`.
-2. Chuyển vào `frontend`:
+### 10.1. Cài dependencies
+
+Từ Terminal:
+
+```powershell
+cd GoPlantrontend
+npm ci
+```
+
+Dùng `npm ci` khi `package-lock.json` đã được commit. Nếu đây là lần đầu cài đặt và chưa có lockfile, dùng `npm install`, kiểm tra ứng dụng rồi commit cả `package.json` và `package-lock.json`.
+
+### 10.2. Chạy Metro và ứng dụng
+
+Với React Native Community CLI, mở Android Emulator trước rồi chạy từ thư mục `frontend`:
+
+```powershell
+npm start
+```
+
+Mở Terminal thứ hai, vẫn tại `frontend`, chạy:
+
+```powershell
+npm run android
+```
+
+Lệnh phải tồn tại trong `scripts` của `package.json`. Nếu project dùng template/phiên bản khác, hãy làm theo script thật trong file đó và [hướng dẫn chạy trên thiết bị Android của React Native](https://reactnative.dev/docs/running-on-device).
+
+### 10.3. Cấu hình kết nối Frontend tới Backend
+
+- **Backend chạy trên cùng máy tính:** `http://localhost:8080` dùng được từ Terminal trên máy tính, nhưng không dùng như địa chỉ API bên trong Android Emulator.
+- **Android Studio Emulator:** thường truy cập máy tính host qua `http://10.0.2.2:8080`.
+- **Điện thoại Android thật:** dùng địa chỉ IP LAN của máy tính chạy Backend, ví dụ `http://192.168.1.10:8080` (địa chỉ ví dụ; thay bằng IP thực tế). Hai thiết bị cần cùng mạng và firewall của máy tính phải cho phép kết nối.
+- **Bản phát hành:** dùng URL Backend đã triển khai trên máy chủ, ưu tiên HTTPS. Không dùng `localhost`, `10.0.2.2` hoặc IP LAN làm URL API của bản phát hành cho người dùng.
+- Đặt `API base URL` tập trung trong cấu hình, ví dụ `frontend/src/config/`, không rải URL trực tiếp trong từng màn hình.
+- Ứng dụng gửi/nhận JSON qua API. Mỗi màn hình cần xử lý loading, success, empty, lỗi mạng và phản hồi API thất bại.
+
+**Lưu ý:** ứng dụng Android không kết nối trực tiếp tới MySQL. Mọi thao tác đọc/ghi dữ liệu phải đi qua Backend để kiểm soát xác thực, quyền truy cập và quy tắc nghiệp vụ.
+
+
+## 11. Android Studio: chạy thử và build ứng dụng Android
+
+Phần này giả định Frontend dùng **React Native Community CLI** và đã có thư mục `frontend/android/`. Android Studio không thay thế React Native; công cụ này cung cấp Android SDK, trình giả lập và môi trường mở/build phần native Android. Khi Frontend, Backend và database đã tích hợp, có thể kiểm thử toàn hệ thống trên Android Emulator/điện thoại rồi tạo APK/AAB.
+
+### 11.1. Cài đặt Android Studio và Android SDK
+
+1. Cài [Android Studio](https://developer.android.com/studio).
+2. Trong Setup Wizard hoặc **Tools/More Actions → SDK Manager**, cài Android SDK, Android SDK Platform, Android SDK Build-Tools, Android SDK Platform-Tools, Android Emulator và phiên bản SDK được template React Native đang dùng yêu cầu. Không cố định một API level nếu template của project yêu cầu phiên bản khác.
+3. Trong **Device Manager**, chọn **Create Device**, chọn một thiết bị điện thoại và system image tương thích, sau đó khởi động emulator. Xem [tài liệu tạo Android Virtual Device](https://developer.android.com/studio/run/managing-avds).
+4. Kiểm tra SDK Location trong Android Studio. Trên Windows, vị trí mặc định thường là `%LOCALAPPDATA%\Android\Sdk`, nhưng phải dùng đúng đường dẫn hiển thị trên máy.
+5. Nếu lệnh `adb` chưa được nhận diện, thêm thư mục `platform-tools` trong SDK vào biến môi trường `Path`; kiểm tra bằng:
 
    ```powershell
-   cd frontend
+   adb --version
+   adb devices
    ```
 
-3. Cài dependencies theo lockfile của dự án:
+### 11.2. Kiểm tra JDK và môi trường React Native
+
+- Cài Node.js phiên bản tương thích với React Native đang dùng; xem yêu cầu hiện hành trong [React Native environment setup](https://reactnative.dev/docs/set-up-your-environment).
+- Backend GoPlant hiện cần Java 21 theo cấu hình Maven. Android/React Native lại cần JDK tương thích với phiên bản React Native và Gradle Plugin. Tài liệu React Native hiện khuyến nghị JDK 17 cho thiết lập Android, vì vậy có thể cần cài thêm JDK phù hợp thay vì đổi/xoá JDK 21 của Backend.
+- Trong Android Studio, chọn JDK dùng cho Gradle tại **Settings → Build, Execution, Deployment → Build Tools → Gradle → Gradle JDK**. Tránh thay đổi hàng loạt biến môi trường Windows nếu chưa kiểm tra ứng dụng nào đang phụ thuộc chúng.
+- Sau khi cài đặt, mở Terminal mới và kiểm tra:
+
+  ```powershell
+  node -v
+  npm -v
+  java -version
+  adb devices
+  ```
+
+### 11.3. Chạy ứng dụng sau khi hoàn thiện Backend và database
+
+Thực hiện theo thứ tự sau để tránh nhầm lỗi giao diện với lỗi kết nối dữ liệu:
+
+1. **Khởi động database:** chạy MySQL nếu đã chuyển sang cấu hình MySQL; kiểm tra database/schema và tài khoản kết nối. Nếu Backend vẫn đang dùng H2 in-memory, dữ liệu sẽ không bền vững sau khi ứng dụng dừng.
+2. **Khởi động Backend:** mở Terminal tại `GoPlant/backend` và chạy:
 
    ```powershell
-   npm ci
+   .\mvnw.cmd spring-boot:run
    ```
 
-   Nếu repo chưa có `package-lock.json`, dùng `npm install` trong lần cài đầu để tạo lockfile rồi commit lockfile.
+   Kiểm tra log khởi động và xác nhận các endpoint thực tế đã được triển khai. `http://localhost:8080` là địa chỉ phía máy tính; không có nghĩa toàn bộ API đã hoàn chỉnh.
+3. **Khởi động Android Emulator:** mở Android Studio → Device Manager và chạy emulator.
+4. **Chạy Frontend:** mở Terminal tại `GoPlant/frontend`, cài dependencies rồi chạy `npm start`. Ở Terminal khác, chạy `npm run android` để build debug và cài app lên emulator.
+5. **Mở bằng Android Studio khi cần:** chọn **Open** và mở thư mục `GoPlant/frontend/android` (không mở riêng thư mục `backend`). Chờ Gradle Sync hoàn tất; chọn emulator làm thiết bị đích và nhấn **Run**. Khi chạy cấu hình debug từ Android Studio, Metro bundler thường cần được khởi động riêng bằng `npm start` tại thư mục `frontend`.
+6. **Kiểm thử xuyên suốt:** đăng nhập, xem danh sách cây, xem chi tiết, tạo/quản lý vườn, cập nhật lịch và nhật ký chăm sóc; kiểm tra cả loading, dữ liệu rỗng, API lỗi và mất mạng. Chỉ xác nhận tính năng hoàn tất sau khi đã chạy thử với API và database thật của môi trường phát triển.
 
-4. Xem các script thực tế trong `package.json`. Chạy script đã khai báo, ví dụ `npm run start`. Nếu ứng dụng được khởi tạo bằng Expo, có thể dùng `npx expo start`; chỉ dùng lệnh phù hợp với framework thực tế của source.
-5. Với Android emulator/thiết bị thật, bảo đảm môi trường React Native tương ứng đã được thiết lập.
+### 11.4. Tạo APK để cài thử
 
-### Kết nối Frontend tới Backend
+Sau khi cấu hình môi trường Android và đảm bảo project React Native đã được tạo:
 
-- Backend chạy trên máy phát triển: `http://localhost:8080`.
-- Với Android emulator, `localhost` bên trong emulator không phải máy tính host; cần dùng địa chỉ host phù hợp emulator (thường là `10.0.2.2` cho Android Studio Emulator) hoặc IP LAN của máy.
-- Với điện thoại thật, máy tính và điện thoại cần cùng mạng LAN và Backend phải lắng nghe trên địa chỉ có thể truy cập từ thiết bị.
-- Nên cấu hình API base URL qua file cấu hình môi trường của Frontend thay vì rải URL trực tiếp trong các màn hình.
-- Các request sẽ gửi/nhận JSON khi API tương ứng được triển khai; cần xử lý trạng thái loading, success, empty và error ở giao diện.
+```powershell
+cd GoPlant\frontend\android
+.\gradlew.bat assembleDebug
+```
 
-## 11. API và hợp đồng tích hợp dự kiến
+Với cấu hình React Native/Gradle tương thích, APK debug thường được tạo tại:
+
+```text
+frontend/android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+Có thể chép APK này sang thiết bị Android để cài thử; đây là bản debug, không phải bản phát hành chính thức. Nếu build thất bại, kiểm tra JDK, SDK Platform/Build Tools, Gradle Sync và log lỗi gốc trước khi xoá cache hoặc thay đổi phiên bản thư viện.
+
+### 11.5. Tạo bản phát hành AAB/APK
+
+Khi app đã tích hợp và kiểm thử đầy đủ, có thể tạo Android App Bundle theo hướng dẫn React Native hiện hành:
+
+```powershell
+cd GoPlant\frontend
+npx react-native build-android --mode=release
+```
+
+Lệnh và đường dẫn đầu ra phụ thuộc phiên bản React Native. Theo hướng dẫn hiện hành, file AAB được tạo tại `android/app/build/outputs/bundle/release/app-release.aab` sau khi cấu hình signing phù hợp. Xem [hướng dẫn phát hành Android của React Native](https://reactnative.dev/docs/signed-apk-android) trước khi sử dụng.
+
+- Không commit keystore, mật khẩu signing, token hoặc secret vào GitHub; quản lý chúng bên ngoài source code.
+- **APK** phù hợp khi cần cài đặt trực tiếp lên thiết bị; **AAB** là định dạng thường dùng để phát hành qua Google Play.
+- Build thành công chưa chứng minh hệ thống hoạt động đúng: cần kiểm thử app release, kết nối Backend và các chức năng chính trên thiết bị thật.
+
+### 11.6. Điều kiện trước khi đưa app ra ngoài máy phát triển
+
+- Deploy Backend và MySQL lên môi trường máy chủ có thể truy cập từ điện thoại; cấu hình URL API chính thức và HTTPS.
+- Không dùng URL emulator `10.0.2.2` hoặc IP LAN của máy phát triển trong bản phát hành.
+- Bật xác thực/phân quyền ở Backend, kiểm tra quyền sở hữu dữ liệu và không để lộ thông tin database.
+- Kiểm thử đăng nhập, đọc/ghi dữ liệu, xử lý mất mạng và lỗi server từ Android app.
+- Cấu hình app name, package/application ID, icon, version và signing trước khi tạo bản phát hành cuối cùng.
+
+## 12. API và hợp đồng tích hợp dự kiến
 
 Các đường dẫn dưới đây xuất phát từ luồng nghiệp vụ và thiết kế API trong tài liệu. **Đây là API contract dự kiến, không phải cam kết rằng endpoint đã có trong source hiện tại.** Endpoint chỉ dùng được sau khi Controller, Service và cơ chế bảo mật tương ứng được cài đặt.
 
@@ -422,7 +542,7 @@ Các đường dẫn dưới đây xuất phát từ luồng nghiệp vụ và t
 - Người dùng chỉ được đọc/thay đổi dữ liệu thuộc quyền sở hữu; endpoint quản trị yêu cầu vai trò tương ứng.
 - Không lưu password dạng văn bản thuần; khi triển khai xác thực, dùng BCrypt hoặc cơ chế băm mật khẩu phù hợp của Spring Security.
 
-## 12. Kiểm thử
+## 13. Kiểm thử
 
 ### Build/test Backend
 
@@ -451,11 +571,13 @@ Dùng Postman hoặc công cụ HTTP tương đương để kiểm tra:
 - Xác thực token, vai trò và quyền sở hữu dữ liệu.
 - Các trường hợp lịch chăm sóc đến hạn/quá hạn và cập nhật nhật ký.
 
-### Kiểm thử giao diện khi Frontend đã được bổ sung
+### Kiểm thử giao diện và Android
 
-Kiểm tra các luồng chính: đăng nhập → trang chủ → khám phá cây → xem chi tiết → thêm vào vườn; và quản lý vườn → cây → lịch chăm sóc → ghi nhận chăm sóc → xem nhật ký phát triển. Cần kiểm tra cả trạng thái loading, empty, lỗi mạng và dữ liệu không hợp lệ.
+Kiểm tra các luồng chính: đăng nhập → trang chủ → khám phá cây → xem chi tiết → thêm vào vườn; và quản lý vườn → cây → lịch chăm sóc → ghi nhận chăm sóc → xem nhật ký phát triển. Cần kiểm tra trạng thái loading, empty, lỗi mạng và dữ liệu không hợp lệ.
 
-## 13. Quy trình đóng góp và Git
+Trên Android Emulator và ít nhất một điện thoại thật khi có thể, kiểm tra kích thước màn hình, bàn phím/nhập liệu, điều hướng Back, quyền truy cập ảnh/camera nếu tính năng đã có, kết nối API, resume app sau khi đưa xuống nền, và cài đặt APK release. Không coi việc app mở được hoặc build thành công là bằng chứng toàn bộ chức năng đã hoàn tất.
+
+## 14. Quy trình đóng góp và Git
 
 Nên làm việc theo nhánh tính năng để tránh ghi đè code của thành viên khác:
 
@@ -479,7 +601,7 @@ Trước khi commit:
 - Không sao chép thư mục `.git` của repo Frontend/Backend cũ vào repo GoPlant; repo này nên có một `.git` ở thư mục gốc.
 - Thống nhất tên branch, format code, API contract và kiểu dữ liệu với cả nhóm.
 
-## 14. Xử lý lỗi thường gặp
+## 15. Xử lý lỗi thường gặp
 
 ### `release version 25 not supported`
 
@@ -522,23 +644,40 @@ Source hiện tại chưa có các API nghiệp vụ được xác nhận và de
 
 ### Frontend không tìm thấy `package.json`
 
-Frontend source chưa được commit vào repository hoặc đang mở sai thư mục. Kiểm tra `GoPlant/frontend/package.json`; nếu file chưa có, cần thêm project Frontend trước khi chạy lệnh npm.
+Frontend source React Native chưa được commit vào repository hoặc đang mở sai thư mục. Kiểm tra `GoPlant/frontend/package.json`; nếu file chưa có, cần tạo và commit project React Native trước khi chạy lệnh npm.
 
-## 15. Lộ trình phát triển
+### Android Studio không tìm thấy SDK hoặc `adb` không được nhận diện
 
-- [ ] Hoàn thiện source Frontend dựa trên các màn hình và luồng thiết kế.
-- [ ] Chốt mô hình dữ liệu, quan hệ Entity và ERD.
-- [ ] Triển khai CRUD cho vườn, cây cá nhân và danh mục cây.
-- [ ] Triển khai tìm kiếm, lọc, sắp xếp và phân trang.
-- [ ] Triển khai đăng ký/đăng nhập, BCrypt, JWT, phân quyền User/Admin và kiểm soát quyền sở hữu dữ liệu.
-- [ ] Triển khai lịch chăm sóc lặp, trạng thái công việc, nhật ký chăm sóc và nhật ký phát triển.
-- [ ] Chuẩn hóa response/error, Bean Validation và logging/AOP.
-- [ ] Hoàn thiện API contract/OpenAPI và bộ test nghiệp vụ.
-- [ ] Kết nối Frontend với Backend và kiểm tra các luồng đầu-cuối.
-- [ ] Tích hợp camera ở phạm vi giám sát/hình ảnh nếu đáp ứng được môi trường thử nghiệm; không đưa AI chẩn đoán bệnh vào phạm vi mặc định.
-- [ ] Thêm GitHub Actions cho build/test và hướng dẫn triển khai.
+Mở Android Studio → SDK Manager để xem chính xác SDK Location. Kiểm tra biến `ANDROID_HOME` và bổ sung `<SDK path>\platform-tools` vào `Path`, sau đó mở Terminal mới và chạy `adb devices`.
 
-## 16. Nhóm phát triển
+### Android Emulator không gọi được Backend
+
+Không dùng `localhost` làm API host bên trong emulator. Dùng `http://10.0.2.2:8080` khi Backend chạy trên máy host; dùng IP LAN của máy phát triển khi chạy trên điện thoại thật. Kiểm tra Backend đang chạy, cổng, firewall và API URL trong cấu hình Frontend. Với bản phát hành, dùng URL máy chủ đã triển khai qua HTTPS.
+
+### `npm run android` hoặc Gradle build thất bại
+
+Kiểm tra phiên bản Node, JDK/Gradle tương thích với phiên bản React Native, Android SDK Platform/Build Tools và kết quả Gradle Sync. Đối chiếu lỗi gốc với tài liệu [thiết lập môi trường React Native](https://reactnative.dev/docs/set-up-your-environment); không nâng/hạ đồng thời nhiều phiên bản khi chưa xác định nguyên nhân.
+
+### App mở nhưng báo lỗi không tải được JavaScript/Metro
+
+Với cấu hình debug, chạy `npm start` trong thư mục `frontend` để khởi động Metro, sau đó reload app. Bản release phải được bundle đúng khi build và không phụ thuộc Metro đang chạy trên máy phát triển.
+
+## 16. Lộ trình phát triển
+
+- [ ] Chốt mô hình dữ liệu, quan hệ Entity, ERD và chiến lược lưu trữ bền vững bằng MySQL.
+- [ ] Hoàn thiện Backend: CRUD cho vườn, cây cá nhân, danh mục cây, lịch chăm sóc và nhật ký.
+- [ ] Triển khai tìm kiếm, lọc, sắp xếp, phân trang, xác thực/phân quyền và kiểm soát quyền sở hữu dữ liệu.
+- [ ] Chuẩn hóa response/error, Bean Validation, logging và API contract/OpenAPI; bổ sung test nghiệp vụ.
+- [ ] Xây dựng Frontend bằng React Native theo màn hình và luồng đã thiết kế; hoàn thiện Component, Props/State, danh sách, Navigation, API và lưu cục bộ khi cần.
+- [ ] Cấu hình môi trường API để Frontend kết nối Backend; kiểm thử các luồng đầu-cuối với database.
+- [ ] Cài Android Studio/SDK, tạo Android Emulator và xác nhận `frontend/android/` build được.
+- [ ] Chạy thử app trên Emulator và điện thoại Android thật; kiểm tra lỗi mạng, kích thước màn hình, quyền thiết bị và trạng thái ứng dụng.
+- [ ] Tạo APK debug để cài thử; cấu hình signing và tạo APK/AAB release khi sẵn sàng.
+- [ ] Deploy Backend + MySQL lên máy chủ trước khi chia sẻ bản Android ngoài mạng phát triển; cấu hình HTTPS và URL API chính thức.
+- [ ] Tích hợp camera trong phạm vi giám sát/hình ảnh nếu đáp ứng được môi trường thử nghiệm; không đưa AI chẩn đoán bệnh vào phạm vi mặc định.
+- [ ] Thêm GitHub Actions cho build/test và cập nhật hướng dẫn triển khai.
+
+## 17. Nhóm phát triển
 
 - Vũ Tuấn Đạt
 - Vũ Minh Đức
@@ -549,4 +688,6 @@ Frontend source chưa được commit vào repository hoặc đang mở sai thư
 
 **Repository:** https://github.com/vuduc6002/GoPlant
 
-**Lưu ý về trạng thái:** README sẽ cần được cập nhật cùng source code. Khi một chức năng hoàn tất, hãy bổ sung endpoint thực tế, hướng dẫn cấu hình, test case và bằng chứng chạy thử; chỉ đánh dấu hoàn thành sau khi đã kiểm tra trên mã nguồn.
+**Tài liệu chính thức tham khảo:** [React Native - Set Up Your Environment](https://reactnative.dev/docs/set-up-your-environment), [React Native - Running on Device](https://reactnative.dev/docs/running-on-device), [React Native - Publishing to Google Play](https://reactnative.dev/docs/signed-apk-android), [Android Studio - Create and Manage Virtual Devices](https://developer.android.com/studio/run/managing-avds).
+
+**Lưu ý về trạng thái:** README cần được cập nhật cùng source code. Khi một chức năng hoàn tất, hãy bổ sung endpoint thực tế, hướng dẫn cấu hình, test case và bằng chứng chạy thử; chỉ đánh dấu hoàn thành sau khi đã kiểm tra trên mã nguồn và môi trường Android.
