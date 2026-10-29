@@ -365,7 +365,7 @@ jdbc:postgresql://<POOLER_HOST>:5432/postgres?sslmode=require
 
 Dùng host, port, database và username đúng như **Connect → Session pooler** hiển thị. Cần thay toàn bộ placeholder bằng thông tin thực tế của bạn. Nếu password chứa ký tự đặc biệt, đặt password trực tiếp trong biến riêng `SUPABASE_DB_PASSWORD`; không ghép password vào URL.
 
-PostgreSQL JDBC driver đã được khai báo trong `backend/pom.xml`. H2 vẫn được giữ để chạy cục bộ khi chưa kích hoạt profile. Không cần cài MySQL và không được commit password vào GitHub.
+PostgreSQL JDBC driver đã được khai báo trong `backend/pom.xml`. H2 vẫn được giữ để chạy cục bộ khi chưa kích hoạt profile. Dự án đã chuyển hướng database dùng chung sang Supabase PostgreSQL; không cần cài MySQL Server và không được commit password vào GitHub.
 
 ### 9.3. Chạy Backend bằng Supabase trên Windows
 
@@ -438,7 +438,7 @@ Lệnh phải tồn tại trong `scripts` của `package.json`. Nếu project d�
 - Đặt `API base URL` tập trung trong cấu hình, ví dụ `frontend/src/config/`, không rải URL trực tiếp trong từng màn hình.
 - Ứng dụng gửi/nhận JSON qua API. Mỗi màn hình cần xử lý loading, success, empty, lỗi mạng và phản hồi API thất bại.
 
-**Lưu ý:** ứng dụng Android không kết nối trực tiếp tới MySQL. Mọi thao tác đọc/ghi dữ liệu phải đi qua Backend để kiểm soát xác thực, quyền truy cập và quy tắc nghiệp vụ.
+**Lưu ý:** ứng dụng Android không kết nối trực tiếp tới PostgreSQL/Supabase. Mọi thao tác đọc/ghi dữ liệu phải đi qua Backend để kiểm soát xác thực, quyền truy cập và quy tắc nghiệp vụ.
 
 
 ## 11. Android Studio: chạy thử và build ứng dụng Android
@@ -476,7 +476,7 @@ Phần này giả định Frontend dùng **React Native Community CLI** và đã
 
 Thực hiện theo thứ tự sau để tránh nhầm lỗi giao diện với lỗi kết nối dữ liệu:
 
-1. **Khởi động database:** chạy MySQL nếu đã chuyển sang cấu hình MySQL; kiểm tra database/schema và tài khoản kết nối. Nếu Backend vẫn đang dùng H2 in-memory, dữ liệu sẽ không bền vững sau khi ứng dụng dừng.
+1. **Khởi động database:** nếu dùng Supabase, đảm bảo project đang sẵn sàng và các biến môi trường đã được đặt; không cần cài PostgreSQL Server cục bộ. Nếu Backend chạy bằng cấu hình H2 mặc định, dữ liệu chỉ phục vụ kiểm tra cục bộ và thường mất khi ứng dụng dừng.
 2. **Khởi động Backend:** mở Terminal tại `GoPlant/backend` và chạy:
 
    ```powershell
@@ -523,7 +523,7 @@ Lệnh và đường dẫn đầu ra phụ thuộc phiên bản React Native. Th
 
 ### 11.6. Điều kiện trước khi đưa app ra ngoài máy phát triển
 
-- Deploy Backend và MySQL lên môi trường máy chủ có thể truy cập từ điện thoại; cấu hình URL API chính thức và HTTPS.
+- Deploy Backend lên môi trường máy chủ có thể truy cập từ điện thoại; giữ Supabase PostgreSQL làm database cloud và cấu hình URL API chính thức qua HTTPS.
 - Không dùng URL emulator `10.0.2.2` hoặc IP LAN của máy phát triển trong bản phát hành.
 - Bật xác thực/phân quyền ở Backend, kiểm tra quyền sở hữu dữ liệu và không để lộ thông tin database.
 - Kiểm thử đăng nhập, đọc/ghi dữ liệu, xử lý mất mạng và lỗi server từ Android app.
