@@ -1,6 +1,6 @@
 🌱 GoPlant — Hệ thống quản lý và chăm sóc cây trồng
 
-GoPlant là dự án hỗ trợ người dùng quản lý cây trồng và khu vườn trên một nền tảng tập trung. Kiến trúc mục tiêu gồm **ứng dụng di động React Native (Android) + Backend REST API bằng Spring Boot + cơ sở dữ liệu MySQL**. Android Studio được dùng để thiết lập Android SDK, chạy trình giả lập, kiểm thử và build ứng dụng Android; mã giao diện di động vẫn được phát triển bằng React Native trong thư mục `frontend/`.
+GoPlant là dự án hỗ trợ người dùng quản lý cây trồng và khu vườn trên một nền tảng tập trung. Kiến trúc mục tiêu gồm **ứng dụng di động React Native (Android) + Backend REST API bằng Spring Boot + Supabase PostgreSQL**. Android Studio được dùng để thiết lập Android SDK, chạy trình giả lập, kiểm thử và build ứng dụng Android; mã giao diện di động vẫn được phát triển bằng React Native trong thư mục `frontend/`.
 
 > **Trạng thái phát triển:** Dự án đang được xây dựng. README phân biệt phần source hiện có và kiến trúc dự kiến. Trong phiên bản repository được mô tả ở đây, Backend mới có bộ khung; `frontend/` và dự án Android do React Native tạo ra chưa được xác nhận có trong repo, vì vậy chưa thể build APK/AAB ngay. Ảnh cây trong bản thiết kế Figma chỉ là **ảnh minh họa/placeholder**, không phải dữ liệu cây đã được xác thực. Camera trong phạm vi hiện tại phục vụ giám sát và lưu/hiển thị hình ảnh; không có chức năng AI tự nhận diện hoặc chẩn đoán bệnh cây.
 
@@ -138,11 +138,11 @@ flowchart LR
     C --> S[Service / nghiệp vụ]
     S --> R[Repository]
     R --> J[Spring Data JPA / Hibernate]
-    J --> DB[(MySQL: dữ liệu chính; H2: phát triển/kiểm thử)]
+    J --> DB[(Supabase PostgreSQL: dữ liệu dùng chung; H2: chạy local nhanh)]
     AS[Android Studio + Android SDK/Emulator] -. build, chạy thử .-> APP
 ```
 
-**Nguyên tắc tích hợp:** ứng dụng Android gọi Backend qua REST API; Backend mới là thành phần kết nối database. Không nhúng thông tin đăng nhập MySQL vào ứng dụng và không để ứng dụng Android truy cập thẳng vào database. Với React Native, mã giao diện trong `frontend/` chính là mã nguồn ứng dụng di động; Android Studio dùng để quản lý môi trường Android, mở phần native project và build/chạy ứng dụng.
+**Nguyên tắc tích hợp:** ứng dụng Android gọi Backend qua REST API; Backend mới là thành phần kết nối database. Không nhúng thông tin đăng nhập PostgreSQL vào ứng dụng và không để ứng dụng Android truy cập thẳng vào database. Với React Native, mã giao diện trong `frontend/` chính là mã nguồn ứng dụng di động; Android Studio dùng để quản lý môi trường Android, mở phần native project và build/chạy ứng dụng.
 
 ### Vai trò các lớp Backend
 
@@ -168,8 +168,8 @@ flowchart LR
 | Spring Data JPA | Tích hợp truy cập dữ liệu |
 | Spring Security | Thư viện bảo mật hiện có trong dependency; cấu hình nghiệp vụ riêng vẫn cần triển khai |
 | Spring Validation | Thư viện kiểm tra dữ liệu đầu vào |
-| H2 Database | CSDL phát triển dạng in-memory đang được cấu hình trong `application.properties` |
-| MySQL Connector/J | Driver đã có trong dependency để chuẩn bị kết nối MySQL |
+| H2 Database | CSDL in-memory dùng cho chạy nhanh cục bộ; dữ liệu bị mất khi ứng dụng dừng |
+| PostgreSQL JDBC Driver | Driver JDBC để Backend kết nối PostgreSQL trên Supabase |
 
 ### Công nghệ định hướng cho toàn hệ thống
 
@@ -180,7 +180,7 @@ flowchart LR
 | Android Studio + Android SDK | Cài SDK/Build Tools, tạo emulator, mở dự án native Android và kiểm tra/build ứng dụng |
 | Gradle | Build phần native Android do React Native khởi tạo |
 | REST API, HTTP/HTTPS, JSON | Giao tiếp giữa ứng dụng Android với Backend |
-| MySQL | Database mục tiêu lưu dữ liệu bền vững trên máy chủ; H2 hiện dùng để khởi động/kiểm tra nhanh Backend |
+| Supabase PostgreSQL | Database cloud dùng chung cho các thành viên; H2 giữ vai trò chạy thử cục bộ |
 | Postman hoặc công cụ HTTP tương đương | Kiểm thử API |
 | Git, GitHub, GitHub Actions | Quản lý source; có thể bổ sung pipeline build/test sau khi cấu hình |
 
@@ -257,7 +257,7 @@ GoPlant/
     └── database/                     # ERD, schema và migration notes
 ```
 
-Đây là cấu trúc mục tiêu, không phải danh sách file đã có trong repository. Cấu trúc con của `frontend/android/` phụ thuộc template React Native/Gradle được sử dụng. Không commit các thư mục sinh tự động như `node_modules/`, `.gradle/`, `build/` hoặc thông tin signing secret. Thư mục `database/` chỉ chứa schema/migration/tài liệu nếu nhóm cần quản lý chúng trong Git; dữ liệu MySQL thật vẫn chạy riêng, không nằm bên trong Android app.
+Đây là cấu trúc mục tiêu, không phải danh sách file đã có trong repository. Cấu trúc con của `frontend/android/` phụ thuộc template React Native/Gradle được sử dụng. Không commit các thư mục sinh tự động như `node_modules/`, `.gradle/`, `build/` hoặc thông tin signing secret. Thư mục `database/` chỉ chứa schema/migration/tài liệu nếu nhóm cần quản lý chúng trong Git; dữ liệu PostgreSQL thật vẫn chạy riêng, không nằm bên trong Android app.
 
 ## 8. Chạy Backend trên máy cá nhân
 
@@ -301,7 +301,7 @@ Nếu lệnh `clean verify` hoàn tất với `BUILD SUCCESS`, bước build đ�
 .\mvnw.cmd spring-boot:run
 ```
 
-Khi log có dòng tương tự `Started PlantCareBackendApplication`, ứng dụng đã khởi động. Mặc định Spring Boot sử dụng cổng `8080`, vì vậy địa chỉ gốc là:
+Khi log có dòng tương tự `Started PlantCareBackendApplication`, ứng dụng đã khởi động. Mặc định chạy không bật profile sẽ dùng H2 cục bộ. Để kết nối database dùng chung trên Supabase, xem mục 9 và kích hoạt profile `supabase`. Mặc định Spring Boot sử dụng cổng `8080`, vì vậy địa chỉ gốc là:
 
 - `http://localhost:8080`
 
@@ -325,63 +325,76 @@ Nếu quyền thực thi chưa được cấp, chạy `chmod +x mvnw` một lầ
 
 ## 9. Cấu hình cơ sở dữ liệu
 
-### 9.1. Cấu hình phát triển mặc định hiện tại: H2
+GoPlant giữ hai cách chạy Backend:
 
-File: `backend/src/main/resources/application.properties`
+- **Mặc định (H2):** dùng để khởi động và kiểm tra nhanh trên máy cá nhân; dữ liệu in-memory thường mất khi ứng dụng dừng.
+- **Profile `supabase` (PostgreSQL):** dùng database cloud chung để mọi thành viên truy cập cùng bộ dữ liệu. Không cần cài PostgreSQL Server trên từng máy.
 
-Cấu hình hiện tại sử dụng H2 in-memory:
+### 9.1. Tạo project Supabase
 
-```properties
-spring.application.name=plant-care-backend
-spring.datasource.url=jdbc:h2:mem:plantcaredb
-spring.datasource.driver-class-name=org.h2.Driver
-spring.datasource.username=sa
-spring.datasource.password=
-spring.jpa.hibernate.ddl-auto=update
-spring.jpa.show-sql=true
-spring.h2.console.enabled=true
-spring.h2.console.path=/h2-console
+1. Mở [Supabase](https://supabase.com/) và đăng nhập.
+2. Tạo project mới, đặt tên ví dụ `goplant-dev`, chọn mật khẩu database mạnh và lưu ở nơi an toàn.
+3. Chờ database sẵn sàng.
+4. Mở **Connect** ở dashboard của project và chọn **Session pooler**. Với môi trường mạng IPv4 phổ biến, đây là lựa chọn dễ tương thích hơn kết nối direct vốn cần IPv6 hoặc cấu hình IPv4 bổ sung.
+5. Lưu lại host, port, database, username và password do dashboard cung cấp. Không tự đoán pooler host hoặc username vì chúng phụ thuộc project.
+
+Tài liệu chính thức: [Connect to your database](https://supabase.com/docs/guides/database/connecting-to-postgres).
+
+### 9.2. Cấu hình Backend
+
+File profile dùng chung đã được thêm vào:
+
+`backend/src/main/resources/application-supabase.properties`
+
+Profile đọc các biến môi trường sau:
+
+| Biến | Giá trị |
+|---|---|
+| `SUPABASE_DB_URL` | JDBC URL của Session pooler, dùng cổng theo dashboard và có `?sslmode=require` |
+| `SUPABASE_DB_USERNAME` | Username trong chuỗi kết nối; Session pooler thường có dạng `postgres.<project-ref>` |
+| `SUPABASE_DB_PASSWORD` | Password database đã tạo cho project |
+| `DB_POOL_MAX_SIZE` | Tuỳ chọn; mặc định 5 connection |
+| `DB_POOL_MIN_IDLE` | Tuỳ chọn; mặc định 0 |
+| `DB_SHOW_SQL` | Tuỳ chọn; mặc định `false` |
+
+Ví dụ định dạng URL (chỉ là placeholder, không phải thông tin kết nối thật):
+
+```text
+jdbc:postgresql://<POOLER_HOST>:5432/postgres?sslmode=require
 ```
 
-- Database URL: `jdbc:h2:mem:plantcaredb`
-- Username: `sa`
-- Password: để trống.
-- H2 in-memory chỉ giữ dữ liệu trong phiên chạy ứng dụng; dữ liệu thường mất khi ứng dụng dừng.
-- H2 Console được bật theo cấu hình tại `http://localhost:8080/h2-console`. Tùy cấu hình Spring Security đang được áp dụng, console có thể cần cấu hình bảo mật phát triển riêng để truy cập được.
+Dùng host, port, database và username đúng như **Connect → Session pooler** hiển thị. Cần thay toàn bộ placeholder bằng thông tin thực tế của bạn. Nếu password chứa ký tự đặc biệt, đặt password trực tiếp trong biến riêng `SUPABASE_DB_PASSWORD`; không ghép password vào URL.
 
-### 9.2. Chuyển sang MySQL
+PostgreSQL JDBC driver đã được khai báo trong `backend/pom.xml`. H2 vẫn được giữ để chạy cục bộ khi chưa kích hoạt profile. Không cần cài MySQL và không được commit password vào GitHub.
 
-MySQL Connector/J đã có trong `pom.xml`, nhưng cấu hình được commit hiện tại vẫn dùng H2. Khi cần dùng MySQL:
+### 9.3. Chạy Backend bằng Supabase trên Windows
 
-1. Cài và khởi động MySQL Server.
-2. Tạo database, ví dụ:
+Mở PowerShell tại thư mục repository gốc `GoPlant`, sau đó:
 
-   ```sql
-   CREATE DATABASE plant_care_db
-     CHARACTER SET utf8mb4
-     COLLATE utf8mb4_unicode_ci;
-   ```
+```powershell
+$env:SUPABASE_DB_URL = "jdbc:postgresql://<POOLER_HOST>:5432/postgres?sslmode=require"
+$env:SUPABASE_DB_USERNAME = "postgres.<PROJECT_REF>"
+$env:SUPABASE_DB_PASSWORD = "<DATABASE_PASSWORD>"
 
-3. Thay cấu hình datasource trong `backend/src/main/resources/application.properties` bằng cấu hình MySQL, ví dụ:
+cd backend
+.\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=supabase"
+```
 
-   ```properties
-   spring.datasource.url=jdbc:mysql://localhost:3306/plant_care_db?serverTimezone=Asia/Ho_Chi_Minh
-   spring.datasource.username=${DB_USERNAME:root}
-   spring.datasource.password=${DB_PASSWORD}
-   spring.datasource.driver-class-name=com.mysql.cj.jdbc.Driver
-   spring.jpa.hibernate.ddl-auto=update
-   spring.jpa.show-sql=true
-   ```
+Thay các giá trị placeholder bằng thông tin thật lấy từ dashboard. Các biến môi trường trên chỉ áp dụng cho cửa sổ PowerShell hiện tại; mỗi thành viên cần cấu hình trên máy của mình. Có thể đặt `SPRING_PROFILES_ACTIVE=supabase` nếu muốn bật profile qua biến môi trường, nhưng không đồng thời chạy backend bằng cấu hình H2 mặc định.
 
-4. Đặt biến môi trường cho tài khoản MySQL trước khi khởi động ứng dụng, ví dụ PowerShell:
+Sau khi chạy, kiểm tra log để xác nhận Spring Boot khởi động thành công. Khi profile Supabase hoạt động, các Entity JPA sẽ được ánh xạ vào PostgreSQL theo cấu hình hiện tại. `spring.jpa.hibernate.ddl-auto=update` phù hợp cho giai đoạn phát triển ban đầu; trước khi dùng dữ liệu quan trọng hoặc triển khai chính thức, nên quản lý thay đổi schema bằng migration như Flyway và sao lưu dữ liệu.
 
-   ```powershell
-   $env:DB_USERNAME = "root"
-   $env:DB_PASSWORD = "mat_khau_mysql_cua_ban"
-   .\mvnw.cmd spring-boot:run
-   ```
+### 9.4. Chạy Backend mặc định bằng H2
 
-Không commit mật khẩu thật lên GitHub. Trong dự án dùng chung, nên quản lý cấu hình cá nhân bằng biến môi trường hoặc file cấu hình local được `.gitignore` loại trừ. Khi chuyển datasource, kiểm tra xem các thư viện H2/MySQL và `application.properties` có khớp nhau hay không.
+Không đặt profile `supabase` thì Backend tiếp tục dùng H2 in-memory từ `application.properties`. Đây là cách tiện để thử khởi động source mà chưa cần tài khoản Supabase, nhưng dữ liệu không được chia sẻ giữa các thành viên và thường bị mất sau khi dừng ứng dụng.
+
+### 9.5. Bảo mật database
+
+- Không commit `SUPABASE_DB_PASSWORD`, URL có chứa credential, file `.env` thực tế hoặc token vào GitHub.
+- Không đặt thông tin database trong frontend React Native; chỉ Backend được phép kết nối PostgreSQL bằng credential máy chủ.
+- Dùng Supabase **Session pooler** cho phát triển nhóm nếu mạng không bảo đảm IPv6; lấy nguyên host, port và username từ dashboard.
+- `sslmode=require` mã hóa kết nối nhưng không xác minh đầy đủ danh tính chứng chỉ máy chủ. Với môi trường production, hãy làm theo hướng dẫn SSL của Supabase/JDBC và cân nhắc xác minh chứng chỉ.
+- Chỉ dùng database dùng chung cho dữ liệu thử nghiệm của nhóm; tránh lưu thông tin cá nhân thật. Giới hạn quyền thành viên, đặt mật khẩu mạnh và không chia sẻ tài khoản quản trị nếu có thể tránh.
 
 ## 10. Frontend React Native: chuẩn bị và chạy
 
@@ -626,7 +639,7 @@ cd E:\GoPlant\backend
 
 ### `Failed to configure a DataSource`
 
-Kiểm tra `backend/src/main/resources/application.properties`, dependency driver và URL database. Cấu hình mặc định hiện tại phải có H2 dependency và `jdbc:h2:mem:plantcaredb`; nếu chuyển sang MySQL thì phải có URL MySQL, driver, server đang chạy và thông tin đăng nhập hợp lệ.
+Khi chạy mặc định, kiểm tra dependency H2 và URL `jdbc:h2:mem:plantcaredb` trong `application.properties`. Khi dùng Supabase, xác nhận đã bật profile `supabase`, ba biến `SUPABASE_DB_URL`, `SUPABASE_DB_USERNAME`, `SUPABASE_DB_PASSWORD` có giá trị đúng; kiểm tra pooler host/port và `sslmode=require` trong URL.
 
 ### Port `8080` đã được sử dụng
 
@@ -664,7 +677,7 @@ Với cấu hình debug, chạy `npm start` trong thư mục `frontend` để kh
 
 ## 16. Lộ trình phát triển
 
-- [ ] Chốt mô hình dữ liệu, quan hệ Entity, ERD và chiến lược lưu trữ bền vững bằng MySQL.
+- [ ] Chốt mô hình dữ liệu, quan hệ Entity, ERD và chiến lược lưu trữ bền vững bằng Supabase PostgreSQL.
 - [ ] Hoàn thiện Backend: CRUD cho vườn, cây cá nhân, danh mục cây, lịch chăm sóc và nhật ký.
 - [ ] Triển khai tìm kiếm, lọc, sắp xếp, phân trang, xác thực/phân quyền và kiểm soát quyền sở hữu dữ liệu.
 - [ ] Chuẩn hóa response/error, Bean Validation, logging và API contract/OpenAPI; bổ sung test nghiệp vụ.
@@ -673,7 +686,7 @@ Với cấu hình debug, chạy `npm start` trong thư mục `frontend` để kh
 - [ ] Cài Android Studio/SDK, tạo Android Emulator và xác nhận `frontend/android/` build được.
 - [ ] Chạy thử app trên Emulator và điện thoại Android thật; kiểm tra lỗi mạng, kích thước màn hình, quyền thiết bị và trạng thái ứng dụng.
 - [ ] Tạo APK debug để cài thử; cấu hình signing và tạo APK/AAB release khi sẵn sàng.
-- [ ] Deploy Backend + MySQL lên máy chủ trước khi chia sẻ bản Android ngoài mạng phát triển; cấu hình HTTPS và URL API chính thức.
+- [ ] Deploy Backend lên máy chủ và cấu hình Supabase PostgreSQL trước khi chia sẻ bản Android ngoài mạng phát triển; cấu hình HTTPS và URL API chính thức.
 - [ ] Tích hợp camera trong phạm vi giám sát/hình ảnh nếu đáp ứng được môi trường thử nghiệm; không đưa AI chẩn đoán bệnh vào phạm vi mặc định.
 - [ ] Thêm GitHub Actions cho build/test và cập nhật hướng dẫn triển khai.
 
