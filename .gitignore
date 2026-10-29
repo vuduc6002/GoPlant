@@ -22,3 +22,20 @@ Thumbs.db
 # IDE settings
 .idea/
 *.iml
+
+# Dependencies and generated build files
+node_modules/
+**/.gradle/
+**/build/
+**/local.properties
+
+# Android packages and signing keys
+*.apk
+*.aab
+*.jks
+*.keystore
+
+# Local secrets
+.env
+.env.*
+!.env.example
