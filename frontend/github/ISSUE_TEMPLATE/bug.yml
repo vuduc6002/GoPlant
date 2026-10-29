@@ -1,0 +1,45 @@
+
+name: "Bug Report"
+description: "Báo cáo lỗi trong ứng dụng GoPlant"
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: "Mô tả lỗi"
+      placeholder: "Lỗi xảy ra như thế nào?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: "Các bước tái hiện"
+      placeholder: |
+        1. Mở ứng dụng
+        2. Thực hiện thao tác
+        3. Quan sát lỗi
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: "Kết quả mong đợi"
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: "Kết quả thực tế"
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: "Môi trường"
+      placeholder: "Ví dụ: Android Emulator, Expo SDK 57"

@@ -1,0 +1,56 @@
+
+name: "Task / Development"
+description: "Theo dõi một công việc phát triển GoPlant"
+title: "[Task] "
+labels:
+  - task
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Mô tả rõ công việc, phạm vi và kết quả mong muốn.
+
+  - type: textarea
+    id: objective
+    attributes:
+      label: "Mục tiêu"
+      description: "Tại sao cần thực hiện công việc này?"
+      placeholder: "Ví dụ: Thiết lập kiến trúc ứng dụng GoPlant."
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: "Phạm vi công việc"
+      description: "Liệt kê các việc cần thực hiện."
+      placeholder: |
+        - [ ] Công việc 1
+        - [ ] Công việc 2
+        - [ ] Công việc 3
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: "Tiêu chí hoàn thành"
+      description: "Điều kiện để xác nhận Issue đã hoàn tất."
+      placeholder: |
+        - [ ] Đáp ứng yêu cầu
+        - [ ] Kiểm thử thành công
+        - [ ] Cập nhật tài liệu liên quan
+    validations:
+      required: true
+
+  - type: textarea
+    id: testing
+    attributes:
+      label: "Kiểm thử và xác minh"
+      placeholder: "Ghi các lệnh đã chạy và kết quả kiểm thử."
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: "Ghi chú"
+      description: "Rủi ro, phụ thuộc hoặc tài liệu tham khảo."
