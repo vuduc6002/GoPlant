@@ -375,9 +375,10 @@ Mở PowerShell tại thư mục repository gốc `GoPlant`, sau đó:
 $env:SUPABASE_DB_URL = "jdbc:postgresql://<POOLER_HOST>:5432/postgres?sslmode=require"
 $env:SUPABASE_DB_USERNAME = "postgres.<PROJECT_REF>"
 $env:SUPABASE_DB_PASSWORD = "<DATABASE_PASSWORD>"
+$env:SPRING_PROFILES_ACTIVE = "supabase"
 
 cd backend
-.\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=supabase"
+.\mvnw.cmd spring-boot:run
 ```
 
 Thay các giá trị placeholder bằng thông tin thật lấy từ dashboard. Các biến môi trường trên chỉ áp dụng cho cửa sổ PowerShell hiện tại; mỗi thành viên cần cấu hình trên máy của mình. Có thể đặt `SPRING_PROFILES_ACTIVE=supabase` nếu muốn bật profile qua biến môi trường, nhưng không đồng thời chạy backend bằng cấu hình H2 mặc định.
