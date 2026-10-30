@@ -1,9 +1,8 @@
-
 name: Maven CI
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "feature/integrate-frontend-report"]
   pull_request:
     branches: ["main"]
 
