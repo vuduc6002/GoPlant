@@ -1,707 +1,514 @@
-🌱 GoPlant — Hệ thống quản lý và chăm sóc cây trồng
+# 🌱 GoPlant — Hệ thống Quản lý và Chăm sóc Cây trồng
 
-GoPlant là dự án hỗ trợ người dùng quản lý cây trồng và khu vườn trên một nền tảng tập trung. Kiến trúc mục tiêu gồm **ứng dụng di động React Native (Android) + Backend REST API bằng Spring Boot + Supabase PostgreSQL**. Android Studio được dùng để thiết lập Android SDK, chạy trình giả lập, kiểm thử và build ứng dụng Android; mã giao diện di động vẫn được phát triển bằng React Native trong thư mục `frontend/`.
+GoPlant là giải pháp ứng dụng di động hỗ trợ người dùng số hóa quy trình quản lý, theo dõi quá trình sinh trưởng và lập lịch chăm sóc cây trồng trên một nền tảng tập trung.
 
-> **Trạng thái phát triển:** Dự án đang được xây dựng. README phân biệt phần source hiện có và kiến trúc dự kiến. Trong phiên bản repository được mô tả ở đây, Backend mới có bộ khung; `frontend/` và dự án Android do React Native tạo ra chưa được xác nhận có trong repo, vì vậy chưa thể build APK/AAB ngay. Ảnh cây trong bản thiết kế Figma chỉ là **ảnh minh họa/placeholder**, không phải dữ liệu cây đã được xác thực. Camera trong phạm vi hiện tại phục vụ giám sát và lưu/hiển thị hình ảnh; không có chức năng AI tự nhận diện hoặc chẩn đoán bệnh cây.
+Kiến trúc mục tiêu của dự án là **Ứng dụng di động React Native + Expo (Android) kết nối qua RESTful API với Backend Spring Boot và cơ sở dữ liệu Supabase PostgreSQL**.
+
+> **Trạng thái phát triển hiện tại (Giai đoạn 2):**
+> - **Frontend:** Đã tích hợp hoàn chỉnh mã nguồn giao diện trong thư mục `frontend/` sử dụng **React Native (v0.86.3) + Expo SDK 57 (Managed Workflow) + Expo Router**. Toàn bộ 11 phân hệ màn hình và điều hướng đã sẵn sàng. Dữ liệu tài khoản hiện dùng mock (`mockAuth.ts`) và dữ liệu cây/vườn được quản lý in-memory (`PlantDataStore.tsx`).
+> - **Backend:** Khung ứng dụng Java 21 + Spring Boot 4.1.1 nằm trong `backend/` đang chạy với cấu hình H2 in-memory cục bộ; đã chuẩn bị sẵn profile kết nối Supabase PostgreSQL qua biến môi trường. Các Entity, Repository, Service và Controller REST API nghiệp vụ sẽ được xây dựng ở các giai đoạn tiếp theo.
+> - **Camera & AI:** Camera trong thiết kế phục vụ chụp ảnh nhật ký và giám sát; dự án **không** triển khai AI tự chẩn đoán bệnh cây.
+
+---
 
 ## Mục lục
 
 - [1. Mục tiêu dự án](#1-mục-tiêu-dự-án)
-- [2. Người dùng và vai trò](#2-người-dùng-và-vai-trò)
-- [3. Phạm vi chức năng](#3-phạm-vi-chức-năng)
-- [4. Thiết kế giao diện và luồng sử dụng](#4-thiết-kế-giao-diện-và-luồng-sử-dụng)
-- [5. Kiến trúc hệ thống](#5-kiến-trúc-hệ-thống)
-- [6. Công nghệ và môi trường](#6-công-nghệ-và-môi-trường)
-- [7. Cấu trúc repository](#7-cấu-trúc-repository)
-- [8. Chạy Backend trên máy cá nhân](#8-chạy-backend-trên-máy-cá-nhân)
-- [9. Cấu hình cơ sở dữ liệu](#9-cấu-hình-cơ-sở-dữ-liệu)
-- [10. Frontend React Native: chuẩn bị và chạy](#10-frontend-react-native-chuẩn-bị-và-chạy)
-- [11. Android Studio: chạy thử và build ứng dụng Android](#11-android-studio-chạy-thử-và-build-ứng-dụng-android)
-- [12. API và hợp đồng tích hợp dự kiến](#12-api-và-hợp-đồng-tích-hợp-dự-kiến)
-- [13. Kiểm thử](#13-kiểm-thử)
-- [14. Quy trình đóng góp và Git](#14-quy-trình-đóng-góp-và-git)
-- [15. Xử lý lỗi thường gặp](#15-xử-lý-lỗi-thường-gặp)
-- [16. Lộ trình phát triển](#16-lộ-trình-phát-triển)
-- [17. Nhóm phát triển](#17-nhóm-phát-triển)
+- [2. Chức năng chính và trạng thái phát triển](#2-chức-năng-chính-và-trạng-thái-phát-triển)
+- [3. Công nghệ sử dụng](#3-công-nghệ-sử-dụng)
+- [4. Kiến trúc tổng thể hệ thống](#4-kiến-trúc-tổng-thể-hệ-thống)
+- [5. Cấu trúc repository hiện tại](#5-cấu-trúc-repository-hiện-tại)
+- [6. Yêu cầu môi trường phát triển (Windows 10/11 & VS Code)](#6-yêu-cầu-môi-trường-phát-triển-windows-1011--vs-code)
+- [7. Cài đặt và chạy Backend](#7-cài-đặt-và-chạy-backend)
+- [8. Cấu hình cơ sở dữ liệu H2 local](#8-cấu-hình-cơ-sở-dữ-liệu-h2-local)
+- [9. Cấu hình cơ sở dữ liệu Supabase PostgreSQL](#9-cấu-hình-cơ-sở-dữ-liệu-supabase-postgresql)
+- [10. Cài đặt và chạy Frontend Expo](#10-cài-đặt-và-chạy-frontend-expo)
+- [11. Thiết lập Android Studio, Android SDK và Android Emulator](#11-thiết-lập-android-studio-android-sdk-và-android-emulator)
+- [12. Kiểm thử Frontend và Backend](#12-kiểm-thử-frontend-và-backend)
+- [13. GitHub Actions và Continuous Integration (CI)](#13-github-actions-và-continuous-integration-ci)
+- [14. Hướng dẫn xử lý lỗi thường gặp](#14-hướng-dẫn-xử-lý-lỗi-thường-gặp)
+- [15. Lộ trình phát triển và các chức năng kế tiếp](#15-lộ-trình-phát-triển-và-các-chức-năng-kế-tiếp)
+- [16. Nhóm phát triển](#16-nhóm-phát-triển)
 
 ---
 
 ## 1. Mục tiêu dự án
 
-GoPlant hướng đến việc số hóa các công việc quản lý và chăm sóc cây trồng, hạn chế phụ thuộc vào ghi chép thủ công và giúp người dùng theo dõi dữ liệu theo thời gian.
+GoPlant hướng đến việc thay thế sổ tay và ghi nhớ thủ công bằng một ứng dụng di động trực quan, giúp người làm vườn đô thị, văn phòng hoặc người yêu cây:
 
-Các mục tiêu chính:
+- Quản lý danh mục cây trồng tham khảo và hồ sơ từng cây cá nhân đang sở hữu.
+- Tạo và phân loại nhiều khu vườn/khu vực trồng (ban công, sân thượng, trong nhà).
+- Thiết lập lịch chăm sóc định kỳ (tưới nước, bón phân, cắt tỉa, thay đất) với chu kỳ nhắc nhở.
+- Ghi nhận nhật ký phát triển, theo dõi sức khỏe, hình thái lá/thân và hình ảnh theo thời gian.
+- Cung cấp nền tảng REST API bảo mật, hỗ trợ phân quyền người dùng (`ROLE_USER`) và quản trị (`ROLE_ADMIN`).
 
-- Quản lý danh mục cây tham khảo và hồ sơ cây mà người dùng đang sở hữu.
-- Tạo và quản lý nhiều khu vườn/khu vực trồng.
-- Lập lịch chăm sóc như tưới nước, bón phân, cắt tỉa và thay đất.
-- Ghi nhận lịch sử chăm sóc cùng ghi chú và hình ảnh trước/sau khi chăm sóc.
-- Theo dõi quá trình phát triển bằng nhật ký, trạng thái và hình ảnh theo từng thời điểm.
-- Tìm kiếm, lọc và phân trang dữ liệu cây.
-- Cung cấp nền tảng API để Frontend có thể trao đổi dữ liệu với Backend.
-- Định hướng phân quyền giữa người dùng và quản trị viên.
+---
 
-## 2. Người dùng và vai trò
+## 2. Chức năng chính và trạng thái phát triển
 
-### Người dùng — `ROLE_USER`
+Bảng ma trận đối soát hiện trạng triển khai giữa Frontend, Backend và Database:
 
-Người trồng cây hoặc người yêu thích thực vật, có nhu cầu:
+| Phân hệ nghiệp vụ | Chức năng trong thiết kế | Trạng thái Frontend | Trạng thái Backend & Database |
+|:---|:---|:---:|:---:|
+| **Chào mừng (Welcome)** | Giới thiệu app, điều hướng bắt đầu | Đã hoàn thành UI (`WelcomeScreen.tsx`) | Không yêu cầu API |
+| **Xác thực tài khoản** | Đăng ký, đăng nhập | Đã có UI (`AuthScreens.tsx`); dùng Mock Auth (`mockAuth.ts`) | Chưa có API; chưa triển khai JWT / BCrypt |
+| **Trang chủ (Dashboard)** | Xem tổng quan vườn, việc cần làm, thời tiết | Đã có UI (`HomeScreen.tsx`); dữ liệu mô phỏng | Chưa có API tổng hợp |
+| **Khám phá cây** | Danh mục loài cây, tìm kiếm, lọc đa tiêu chí | Đã có UI (`SearchScreens.tsx`); danh mục mẫu tĩnh | Chưa có API (`/api/v1/species`) |
+| **Chi tiết loài cây** | Thông tin sinh học, đặc điểm, nhu cầu chăm sóc | Đã có UI (`PlantDetailScreen.tsx`) | Chưa có API |
+| **Quản lý khu vườn** | Tạo mới, xem chi tiết, sửa, xóa khu vườn | Đã có UI (`GardenScreens.tsx`); lưu tạm trong state | Chưa có API (`/api/v1/gardens`) |
+| **Quản lý cây sở hữu** | Thêm cây vào vườn, sửa vị trí, ghi chú, xóa | Đã có UI; lưu trong React Context (`PlantDataStore.tsx`) | Chưa có API (`/api/v1/plants`) |
+| **Lập lịch chăm sóc** | Tạo lịch tưới/bón/tỉa, chu kỳ lặp, xem lịch | Đã có UI (`ScheduleScreens.tsx`); giao diện mẫu | Chưa có API (`/api/v1/schedules`) |
+| **Nhật ký chăm sóc** | Đánh dấu hoàn thành việc, lưu lịch sử chăm sóc | Đã có UI (`JournalScreens.tsx`); giao diện mẫu | Chưa có API (`/api/v1/care-logs`) |
+| **Nhật ký phát triển** | Ghi nhận tiến trình lớn lên, tình trạng sức khỏe | Đã có UI (`JournalDetailScreen.tsx`); giao diện mẫu | Chưa có API (`/api/v1/journals`) |
+| **Chỉ số sinh trưởng** | Biểu đồ môi trường, độ ẩm đất, nhiệt độ | Đã có UI (`MonitoringDetailScreen.tsx`); chỉ số mô phỏng | Chưa có API |
+| **Mã định danh (QR)** | Sinh mã `plantCode` mở nhanh hồ sơ cây | Đang trong kế hoạch mở rộng (Backlog) | Chưa có API |
+| **Camera giám sát** | Xem ảnh chụp thực tế vị trí trồng cây | Nút bấm placeholder UI; chưa kích hoạt camera | Chưa có API |
 
-- Đăng ký, đăng nhập và quản lý hồ sơ cá nhân.
-- Tạo vườn; thêm, xem, sửa và xóa cây thuộc quyền sở hữu.
-- Khám phá, tìm kiếm và xem chi tiết thông tin các loại cây.
-- Tạo lịch chăm sóc và theo dõi việc sắp đến hạn/quá hạn.
-- Ghi nhận hoạt động chăm sóc và theo dõi nhật ký phát triển.
-- Xem hình ảnh hoặc thông tin giám sát từ camera khi chức năng này được tích hợp.
+---
 
-### Quản trị viên — `ROLE_ADMIN`
+## 3. Công nghệ sử dụng
 
-Định hướng chức năng quản trị gồm:
+### 3.1. Phía Frontend Di động (`frontend/`)
 
-- Quản lý tài khoản người dùng và trạng thái tài khoản.
-- Quản lý danh mục cây chuẩn và các danh mục nghiệp vụ.
-- Quản lý thông tin khu vực trồng và thiết bị camera.
-- Theo dõi log/vận hành hệ thống.
+- **Nền tảng:** React Native `0.86.3` kết hợp **Expo SDK `57.0.31`** (Managed Workflow).
+- **Điều hướng:** Expo Router `~57.0.29` (File-based Routing trong `src/app/`).
+- **Ngôn ngữ:** TypeScript `~6.0.3`, React `19.2.3`.
+- **Giao diện & Đồ họa:** Vector Icons qua `react-native-svg` (`15.15.4`) và `react-native-svg-transformer`, Animations qua `react-native-reanimated` (`4.5.1`).
+- **Font chữ:** `@expo-google-fonts/plus-jakarta-sans`.
+- **Quản lý gói:** npm (sử dụng `frontend/package-lock.json`).
 
-> Các vai trò và nghiệp vụ trên mô tả phạm vi thiết kế. Chúng chỉ được xem là hoạt động thực tế sau khi phần API, bảo mật và giao diện tương ứng đã được triển khai và kiểm thử.
+### 3.2. Phía Backend Dịch vụ (`backend/`)
 
-## 3. Phạm vi chức năng
+- **Ngôn ngữ & Nền tảng:** Java 21, Spring Boot `4.1.1`.
+- **Công cụ build:** Maven Wrapper (`mvnw`, `mvnw.cmd`).
+- **Mô đun Spring:** Spring Web MVC, Spring Data JPA, Spring Security, Spring Validation.
+- **Cơ sở dữ liệu hỗ trợ:**
+  - H2 Database Engine (chạy in-memory kiểm thử nhanh nội bộ).
+  - PostgreSQL JDBC Driver (kết nối Supabase PostgreSQL).
 
-| Phân hệ | Chức năng trong phạm vi thiết kế |
-|---|---|
-| Tài khoản | Đăng ký, đăng nhập, xem/cập nhật hồ sơ, đăng xuất; xác thực và phân quyền |
-| Khám phá cây | Xem danh mục cây; tìm theo từ khóa; lọc theo loại cây, độ khó chăm sóc, nhu cầu ánh sáng/nước và môi trường sống; xem chi tiết |
-| Quản lý vườn | Tạo, xem, cập nhật và xóa vườn; lưu tên, loại khu vực, vị trí, diện tích và mô tả |
-| Quản lý cây cá nhân | Thêm cây vào vườn; sửa thông tin; theo dõi vị trí, sức khỏe và giai đoạn phát triển; xóa cây khi không còn sở hữu |
-| Mã nhận diện cây | Định hướng tạo `plantCode`/QR để mở nhanh hồ sơ cây |
-| Lịch chăm sóc | Tạo và chỉnh sửa lịch; thiết lập chu kỳ lặp; theo dõi trạng thái `PENDING`, `COMPLETED`, `OVERDUE`, `SKIPPED` |
-| Nhật ký chăm sóc | Ghi nhận tưới nước, bón phân, cắt tỉa, thay đất; lưu thời điểm, ghi chú, người thực hiện và ảnh nếu có |
-| Nhật ký phát triển | Ghi nhận tình trạng, chiều cao/số lá hoặc chỉ số phù hợp, giai đoạn phát triển và ảnh theo thời gian |
-| Camera | Quản lý thông tin camera và hiển thị luồng/hình ảnh nếu được tích hợp; không thực hiện chẩn đoán bệnh bằng AI |
-| Quản trị | Quản lý tài khoản, danh mục cây, loại hoạt động chăm sóc, thiết bị và log hệ thống |
+---
 
-### Phạm vi triển khai hiện tại trên repository
-
-Repo đang có **bộ khung Spring Boot** với lớp khởi động ứng dụng, Maven Wrapper và cấu hình H2. Khi cập nhật README này, chưa thấy `frontend/package.json`, source React Native hoặc thư mục `frontend/android/` được commit; Backend cũng chưa có các Controller/Service/Repository và endpoint nghiệp vụ hoàn chỉnh. Vì vậy, chưa thể build ứng dụng Android hoặc xem toàn bộ chức năng trong bảng là đã triển khai/kiểm thử xong. Cần bổ sung Frontend React Native, hoàn thiện Backend và database trước khi kiểm thử tích hợp toàn hệ thống.
-
-## 4. Thiết kế giao diện và luồng sử dụng
-
-Thiết kế tham khảo hướng đến giao diện sáng, nhấn màu xanh lá, các thẻ nội dung và hình ảnh cây. Các màn hình/chức năng đã được mô tả trong tài liệu thiết kế gồm:
-
-1. **Chào mừng (Welcome):** giới thiệu mục đích ứng dụng và điều hướng bắt đầu.
-2. **Đăng ký/Đăng nhập:** tạo tài khoản hoặc truy cập tài khoản hiện có.
-3. **Trang chủ:** điểm vào các khu vực chính, tóm tắt vườn/cây và các công việc cần chú ý.
-4. **Khám phá cây:** tìm kiếm, lọc, xem danh sách và mở trang chi tiết cây.
-5. **Quản lý vườn:** tạo vườn, xem danh sách và thông tin chi tiết.
-6. **Quản lý cây:** xem cây trong vườn, mở chi tiết, thêm mới hoặc chỉnh sửa.
-7. **Lịch chăm sóc:** xem công việc, tạo lịch và theo dõi trạng thái.
-8. **Theo dõi/ghi nhận chăm sóc:** đánh dấu hoàn thành và thêm ghi chú hoặc hình ảnh.
-9. **Nhật ký phát triển:** lưu và xem lại thay đổi của cây theo thời gian.
-10. **Camera/giám sát:** khu vực dành cho ảnh hoặc luồng giám sát khi tính năng được tích hợp.
-11. **Khu vực quản trị:** quản lý tài khoản và dữ liệu danh mục theo quyền được cấp.
-
-### Luồng điều hướng khái quát
-
-```mermaid
-flowchart TD
-    A[Welcome] --> B[Đăng ký / Đăng nhập]
-    B --> C[Trang chủ]
-    C --> D[Khám phá cây]
-    D --> E[Chi tiết cây mẫu]
-    E --> F[Thêm cây vào vườn]
-    C --> G[Quản lý vườn]
-    G --> H[Chi tiết vườn]
-    H --> I[Chi tiết cây cá nhân]
-    I --> J[Lịch chăm sóc]
-    I --> K[Nhật ký chăm sóc]
-    I --> L[Nhật ký phát triển]
-    G --> M[Camera / Giám sát]
-    C --> N[Khu vực quản trị]
-```
-
-Đây là luồng tham chiếu để phát triển, không phải bằng chứng rằng toàn bộ màn hình/điều hướng đã có trong source code.
-
-### Lưu ý về hình ảnh trong Figma
-
-- Hình cây, ảnh minh họa hoặc ảnh nền trong mockup chỉ dùng để mô tả bố cục và trải nghiệm dự kiến.
-- Khi phát triển dữ liệu thật, ảnh nên lấy từ dữ liệu/API hoặc kho tài nguyên được quản lý riêng; không coi ảnh mockup là dữ liệu cây chuẩn.
-- File SVG xuất từ thiết kế có kích thước lớn. Nên lưu file gốc ngoài repository hoặc cung cấp đường dẫn Figma; nếu cần lưu trong repo, nên thêm bản preview đã tối ưu trong `docs/design/` thay vì mặc định commit file export lớn.
-
-## 5. Kiến trúc hệ thống
-
-Kiến trúc mục tiêu được thống nhất theo hướng ứng dụng di động Android bằng React Native:
+## 4. Kiến trúc tổng thể hệ thống
 
 ```mermaid
 flowchart LR
-    APP[Ứng dụng Android: React Native] <-->|HTTPS/HTTP + JSON| API[Spring Boot REST API]
-    API --> C[Controller]
-    C --> S[Service / nghiệp vụ]
-    S --> R[Repository]
-    R --> J[Spring Data JPA / Hibernate]
-    J --> DB[(Supabase PostgreSQL: dữ liệu dùng chung; H2: chạy local nhanh)]
-    AS[Android Studio + Android SDK/Emulator] -. build, chạy thử .-> APP
+    subgraph Client["Ứng dụng Di động (Frontend)"]
+        EXPO["React Native + Expo SDK 57\n(Android / Web)"]
+        STORE["Local State / PlantDataStore\n(Hiện tại: Mock & In-Memory)"]
+        EXPO <--> STORE
+    end
+
+    subgraph Server["Máy chủ Dịch vụ (Backend)"]
+        SEC["Spring Security Filter\n(JWT Authentication)"]
+        CTRL["Controller Layer\n(@RestController: /api/v1/...)"]
+        SRV["Service Layer\n(Business Logic & @Transactional)"]
+        REPO["Repository Layer\n(Spring Data JPA)"]
+
+        SEC --> CTRL --> SRV --> REPO
+    end
+
+    subgraph Database["Cơ sở Dữ liệu"]
+        H2[("H2 Database\n(In-Memory Local)")]
+        SUPA[("Supabase PostgreSQL\n(Cloud Database)")]
+    end
+
+    EXPO <== "HTTP / JSON REST API" ==> SEC
+    REPO -. "spring.profiles.active=default" .-> H2
+    REPO -. "spring.profiles.active=supabase" .-> SUPA
 ```
 
-**Nguyên tắc tích hợp:** ứng dụng Android gọi Backend qua REST API; Backend mới là thành phần kết nối database. Không nhúng thông tin đăng nhập PostgreSQL vào ứng dụng và không để ứng dụng Android truy cập thẳng vào database. Với React Native, mã giao diện trong `frontend/` chính là mã nguồn ứng dụng di động; Android Studio dùng để quản lý môi trường Android, mở phần native project và build/chạy ứng dụng.
+**Quy tắc tích hợp bắt buộc:**
+1. Ứng dụng di động **chỉ trao đổi với Backend qua giao thức REST API JSON**; tuyệt đối không kết nối trực tiếp hoặc chứa thông tin đăng nhập PostgreSQL/Supabase bên trong code di động.
+2. Backend là nơi tập trung xác thực, phân quyền người dùng, thực thi quy tắc toàn vẹn dữ liệu và điều phối truy vấn cơ sở dữ liệu.
 
-### Vai trò các lớp Backend
+---
 
-- **Controller:** tiếp nhận HTTP request, kiểm tra dữ liệu đầu vào và trả HTTP response.
-- **Service:** chứa quy tắc nghiệp vụ, xử lý lịch chăm sóc và phối hợp các thao tác dữ liệu.
-- **Repository:** truy vấn và cập nhật dữ liệu thông qua Spring Data JPA.
-- **Entity:** biểu diễn các đối tượng miền nghiệp vụ và ánh xạ cơ sở dữ liệu.
-- **DTO:** định nghĩa dữ liệu đầu vào/đầu ra, tách API khỏi cấu trúc entity khi cần.
-- **Cấu hình bảo mật:** định hướng sử dụng Spring Security, BCrypt và JWT cho xác thực/phân quyền sau khi được triển khai.
-- **Validation và xử lý lỗi:** kiểm tra dữ liệu và trả lỗi có cấu trúc.
-- **Logging/AOP:** định hướng ghi nhận hoạt động và thời gian thực thi.
-
-## 6. Công nghệ và môi trường
-
-### Thành phần đã được tìm thấy trong source Backend trên GitHub
-
-| Công nghệ | Vai trò |
-|---|---|
-| Java 21 | Phiên bản Java mục tiêu được cấu hình trong `backend/pom.xml` |
-| Spring Boot 4.1.1 | Khung ứng dụng Backend trong `backend/pom.xml` hiện tại |
-| Maven Wrapper | Build/chạy ứng dụng bằng `mvnw` hoặc `mvnw.cmd`, không bắt buộc cài Maven toàn hệ thống |
-| Spring Web MVC | Nền tảng web/API |
-| Spring Data JPA | Tích hợp truy cập dữ liệu |
-| Spring Security | Thư viện bảo mật hiện có trong dependency; cấu hình nghiệp vụ riêng vẫn cần triển khai |
-| Spring Validation | Thư viện kiểm tra dữ liệu đầu vào |
-| H2 Database | CSDL in-memory dùng cho chạy nhanh cục bộ; dữ liệu bị mất khi ứng dụng dừng |
-| PostgreSQL JDBC Driver | Driver JDBC để Backend kết nối PostgreSQL trên Supabase |
-
-### Công nghệ định hướng cho toàn hệ thống
-
-| Công nghệ | Vai trò/trạng thái |
-|---|---|
-| React Native + JavaScript/JSX | Frontend di động, xây dựng màn hình, component, navigation, gọi API và lưu cục bộ khi cần; cần bổ sung vào `frontend/` |
-| React Native Community CLI | Hướng triển khai được README này giả định để có dự án native Android trong `frontend/android/`; nếu nhóm chọn Expo thì cần điều chỉnh lệnh build theo cấu hình Expo thực tế |
-| Android Studio + Android SDK | Cài SDK/Build Tools, tạo emulator, mở dự án native Android và kiểm tra/build ứng dụng |
-| Gradle | Build phần native Android do React Native khởi tạo |
-| REST API, HTTP/HTTPS, JSON | Giao tiếp giữa ứng dụng Android với Backend |
-| Supabase PostgreSQL | Database cloud dùng chung cho các thành viên; H2 giữ vai trò chạy thử cục bộ |
-| Postman hoặc công cụ HTTP tương đương | Kiểm thử API |
-| Git, GitHub, GitHub Actions | Quản lý source; có thể bổ sung pipeline build/test sau khi cấu hình |
-
-**Lưu ý về Java:** Backend hiện cấu hình Java 21. Bộ công cụ React Native/Gradle có yêu cầu JDK riêng theo phiên bản; tài liệu React Native hiện khuyến nghị JDK 17 cho thiết lập Android. Không mặc định rằng JDK dùng chạy Backend phải là JDK dùng build Android. Kiểm tra phiên bản tương thích trong [hướng dẫn môi trường React Native chính thức](https://reactnative.dev/docs/set-up-your-environment) và chọn Gradle JDK trong Android Studio nếu cần.
-
-## 7. Cấu trúc repository
-
-### Cấu trúc hiện đang có trên GitHub
+## 5. Cấu trúc repository hiện tại
 
 ```text
-GoPlant/
-├── .gitignore
-└── backend/
-    ├── .gitignore
-    ├── .gitattributes
-    ├── .mvn/
-    │   └── wrapper/
-    ├── mvnw
-    ├── mvnw.cmd
-    ├── pom.xml
-    └── src/
-        ├── main/
-        │   ├── java/
-        │   │   └── com/cmc/plant_care_backend/
-        │   │       └── PlantCareBackendApplication.java
-        │   └── resources/
-        │       └── application.properties
-        └── test/
-            └── java/
-```
-
-### Cấu trúc mục tiêu khi bổ sung React Native, Backend và database
-
-```text
-GoPlant/
-├── README.md
-├── .gitignore
-├── frontend/                         # Ứng dụng di động React Native (cần bổ sung)
-│   ├── package.json
-│   ├── package-lock.json
-│   ├── index.js
+E:\GoPlant/
+├── .github/
+│   └── workflows/
+│       ├── maven.yml               # CI build & test Backend Spring Boot (Java 21)
+│       └── frontend.yml            # CI kiểm tra TypeScript, Expo config & dependencies (Node 22)
+├── backend/                        # Nguồn Backend Spring Boot
+│   ├── .mvn/wrapper/
 │   ├── src/
-│   │   ├── components/               # Component giao diện tái sử dụng
-│   │   ├── screens/                  # Welcome, Auth, Home, Garden, Plant...
-│   │   ├── navigation/               # Stack/Tab và luồng màn hình
-│   │   ├── services/                 # Gọi REST API
-│   │   ├── storage/                  # Lưu cục bộ nếu cần
-│   │   └── config/                   # API base URL theo môi trường
-│   ├── assets/                       # Icon và tài nguyên giao diện
-│   └── android/                      # Native Android project; mở thư mục này bằng Android Studio
-│       ├── app/
-│       │   ├── build.gradle
-│       │   └── src/main/             # AndroidManifest.xml, native resources...
-│       ├── gradle/
-│       └── gradlew.bat
-├── backend/
-│   ├── pom.xml
+│   │   ├── main/
+│   │   │   ├── java/com/cmc/plant_care_backend/
+│   │   │   │   └── PlantCareBackendApplication.java
+│   │   │   └── resources/
+│   │   │       ├── application.properties           # Cấu hình mặc định H2 in-memory
+│   │   │       └── application-supabase.properties  # Cấu hình PostgreSQL Supabase qua biến môi trường
+│   │   └── test/
+│   │       └── java/com/cmc/plant_care_backend/
+│   │           └── PlantCareBackendApplicationTests.java
 │   ├── mvnw
 │   ├── mvnw.cmd
-│   └── src/
-│       ├── main/java/com/cmc/plant_care_backend/
-│       │   ├── controller/
-│       │   ├── service/
-│       │   ├── repository/
-│       │   ├── entity/
-│       │   ├── dto/
-│       │   ├── config/
-│       │   └── exception/
-│       └── main/resources/application.properties
-├── database/                         # Tuỳ chọn: migration/seed SQL và tài liệu schema
-└── docs/
-    ├── design/                       # Preview/đường dẫn thiết kế Figma
-    ├── api/                          # API contract, ví dụ request/response
-    └── database/                     # ERD, schema và migration notes
+│   └── pom.xml
+├── frontend/                       # Ứng dụng Di động React Native + Expo SDK 57
+│   ├── assets/                     # Icons, hình ảnh minh họa, logo, vector SVG
+│   ├── design-reference/           # Ảnh chụp màn hình mẫu tham chiếu thiết kế
+│   ├── scripts/                    # Scripts tiện ích
+│   ├── src/
+│   │   ├── app/                    # Định tuyến file-based của Expo Router
+│   │   │   ├── _layout.tsx         # Root layout nạp fonts, theme và DataProvider
+│   │   │   ├── index.tsx           # Điểm vào ứng dụng (dẫn đến WelcomeScreen)
+│   │   │   ├── home.tsx            # Trang chủ Dashboard
+│   │   │   ├── explore.tsx         # Khám phá loài cây
+│   │   │   ├── filter.tsx          # Bộ lọc tìm kiếm
+│   │   │   ├── gardens.tsx         # Quản lý vườn
+│   │   │   ├── plants.tsx          # Danh sách cây cá nhân
+│   │   │   ├── auth/               # Tuyến đường đăng nhập / đăng ký
+│   │   │   ├── garden/             # Tuyến đường thêm vườn, thêm cây vào vườn
+│   │   │   ├── journal/            # Tuyến đường ghi chép nhật ký
+│   │   │   ├── monitoring/         # Tuyến đường theo dõi chỉ số
+│   │   │   └── schedule/           # Tuyến đường lịch chăm sóc
+│   │   ├── components/             # Components UI tái sử dụng
+│   │   ├── constants/              # Bảng màu, typography, kích thước theme
+│   │   ├── features/               # Code màn hình nghiệp vụ (Auth, Home, Garden, Plant...)
+│   │   ├── hooks/                  # Custom hooks (color scheme, theme)
+│   │   ├── services/               # Mock authentication service
+│   │   └── types/                  # Ambient declarations (css.d.ts, svg.d.ts)
+│   ├── app.json                    # Cấu hình Expo application
+│   ├── metro.config.js             # Cấu hình Metro bundler (hỗ trợ SVG Transformer)
+│   ├── package.json                # Dependencies Expo SDK 57 và npm scripts
+│   ├── package-lock.json           # Khóa phiên bản dependencies
+│   └── tsconfig.json               # Cấu hình TypeScript và path alias (@/*)
+├── docs/
+│   └── GEMINI_MASTER_PROMPT.md     # Chỉ thị gốc về quy chuẩn kiến trúc và lộ trình
+├── .gitignore                      # Loại trừ node_modules, target, .expo, secrets
+└── README.md                       # Tài liệu hướng dẫn dự án chuẩn hóa
 ```
 
-Đây là cấu trúc mục tiêu, không phải danh sách file đã có trong repository. Cấu trúc con của `frontend/android/` phụ thuộc template React Native/Gradle được sử dụng. Không commit các thư mục sinh tự động như `node_modules/`, `.gradle/`, `build/` hoặc thông tin signing secret. Thư mục `database/` chỉ chứa schema/migration/tài liệu nếu nhóm cần quản lý chúng trong Git; dữ liệu PostgreSQL thật vẫn chạy riêng, không nằm bên trong Android app.
+---
 
-## 8. Chạy Backend trên máy cá nhân
+## 6. Yêu cầu môi trường phát triển (Windows 10/11 & VS Code)
 
-### 8.1. Yêu cầu
+Để cài đặt và chạy dự án trơn tru trên Windows, hãy chuẩn bị các công cụ sau:
 
-- Git.
-- JDK 21 đã cài và cấu hình trong `PATH`/`JAVA_HOME`.
-- Kết nối Internet lần đầu để Maven Wrapper tải Maven và các thư viện phụ thuộc.
-- Windows PowerShell cho các lệnh Windows bên dưới. macOS/Linux dùng `./mvnw`.
+1. **Git:** Phiên bản `>= 2.40`.
+2. **Java Development Kit (JDK):** **JDK 21** (khuyến nghị [Eclipse Temurin 21](https://adoptium.net/temurin/releases/?version=21)). Đảm bảo biến môi trường `JAVA_HOME` trỏ tới thư mục JDK 21.
+3. **Node.js:** Phiên bản `>= 22.13.0` (phù hợp với baseline của Expo SDK 57; máy phát triển local có thể dùng Node 22.x - 26.x).
+4. **Trình biên tập:** [Visual Studio Code](https://code.visualstudio.com/) với các Extension hữu ích:
+   - *Extension Pack for Java* (Microsoft)
+   - *Spring Boot Extension Pack* (VMware)
+   - *Expo Tools* (by Expo)
+   - *ESLint* / *Prettier*
+5. **Android Studio:** Bản mới nhất để quản lý Android SDK và Android Emulator.
 
-Kiểm tra Java trước:
+### Lệnh kiểm tra môi trường trên PowerShell
+
+Mở PowerShell và kiểm tra các công cụ:
 
 ```powershell
 java -version
-javac -version
+node --version
+npm.cmd --version
 ```
 
-Cả hai nên hiển thị phiên bản 21.
+> **Lưu ý đặc biệt cho Windows PowerShell:**
+> Trên Windows, PowerShell có thể chặn việc thực thi các file script `.ps1` chưa được ký số (`PSSecurityException`). Để đảm bảo an toàn tuyệt đối và **không cần hạ thấp Execution Policy hệ thống**, hãy luôn sử dụng lệnh với đuôi `.cmd`:
+> - Sử dụng `npm.cmd` thay vì `npm`
+> - Sử dụng `npx.cmd` thay vì `npx`
+> - Sử dụng `.\mvnw.cmd` thay vì `mvnw`
 
-### 8.2. Clone repository
+---
 
-Mở PowerShell/Terminal tại thư mục muốn lưu source:
+## 7. Cài đặt và chạy Backend
+
+Mã nguồn Backend nằm tại thư mục `backend/`. Dự án đã tích hợp sẵn Maven Wrapper nên không bắt buộc phải cài Maven toàn cục.
+
+### 7.1. Di chuyển vào thư mục Backend
 
 ```powershell
-git clone https://github.com/vuduc6002/GoPlant.git
-cd GoPlant\backend
+cd E:\GoPlant\backend
 ```
 
-### 8.3. Kiểm tra Maven Wrapper và build
+### 7.2. Kiểm tra Maven Wrapper và biên dịch thử
 
 ```powershell
 .\mvnw.cmd -v
-.\mvnw.cmd clean verify
+.\mvnw.cmd test
 ```
 
-Nếu lệnh `clean verify` hoàn tất với `BUILD SUCCESS`, bước build đã thành công.
+Nếu lệnh báo `BUILD SUCCESS`, môi trường Java 21 đã sẵn sàng.
 
-### 8.4. Khởi động Backend
+### 7.3. Khởi động Backend
 
 ```powershell
 .\mvnw.cmd spring-boot:run
 ```
 
-Khi log có dòng tương tự `Started PlantCareBackendApplication`, ứng dụng đã khởi động. Mặc định chạy không bật profile sẽ dùng H2 cục bộ. Để kết nối database dùng chung trên Supabase, xem mục 9 và kích hoạt profile `supabase`. Mặc định Spring Boot sử dụng cổng `8080`, vì vậy địa chỉ gốc là:
-
-- `http://localhost:8080`
-
-> **Giới hạn hiện tại:** source được kiểm tra mới có lớp khởi động, chưa có endpoint nghiệp vụ/health endpoint được xác nhận. Vì thế, truy cập địa chỉ gốc có thể trả về 404 hoặc màn hình đăng nhập mặc định do dependency Spring Security; điều đó không tự động có nghĩa là tiến trình Spring Boot không chạy. Không gọi các API trong phần thiết kế như thể chúng đã hoạt động nếu chưa có Controller tương ứng.
-
-### 8.5. Dừng ứng dụng
-
-Trong Terminal đang chạy ứng dụng, nhấn `Ctrl + C`.
-
-### 8.6. Chạy trên macOS/Linux
-
-Từ thư mục `GoPlant/backend`:
-
-```bash
-./mvnw -v
-./mvnw clean verify
-./mvnw spring-boot:run
-```
-
-Nếu quyền thực thi chưa được cấp, chạy `chmod +x mvnw` một lần rồi thử lại.
-
-## 9. Cấu hình cơ sở dữ liệu
-
-GoPlant giữ hai cách chạy Backend:
-
-- **Mặc định (H2):** dùng để khởi động và kiểm tra nhanh trên máy cá nhân; dữ liệu in-memory thường mất khi ứng dụng dừng.
-- **Profile `supabase` (PostgreSQL):** dùng database cloud chung để mọi thành viên truy cập cùng bộ dữ liệu. Không cần cài PostgreSQL Server trên từng máy.
-
-### 9.1. Tạo project Supabase
-
-1. Mở [Supabase](https://supabase.com/) và đăng nhập.
-2. Tạo project mới, đặt tên ví dụ `goplant-dev`, chọn mật khẩu database mạnh và lưu ở nơi an toàn.
-3. Chờ database sẵn sàng.
-4. Mở **Connect** ở dashboard của project và chọn **Session pooler**. Với môi trường mạng IPv4 phổ biến, đây là lựa chọn dễ tương thích hơn kết nối direct vốn cần IPv6 hoặc cấu hình IPv4 bổ sung.
-5. Lưu lại host, port, database, username và password do dashboard cung cấp. Không tự đoán pooler host hoặc username vì chúng phụ thuộc project.
-
-Tài liệu chính thức: [Connect to your database](https://supabase.com/docs/guides/database/connecting-to-postgres).
-
-### 9.2. Cấu hình Backend
-
-File profile dùng chung đã được thêm vào:
-
-`backend/src/main/resources/application-supabase.properties`
-
-Profile đọc các biến môi trường sau:
-
-| Biến | Giá trị |
-|---|---|
-| `SUPABASE_DB_URL` | JDBC URL của Session pooler, dùng cổng theo dashboard và có `?sslmode=require` |
-| `SUPABASE_DB_USERNAME` | Username trong chuỗi kết nối; Session pooler thường có dạng `postgres.<project-ref>` |
-| `SUPABASE_DB_PASSWORD` | Password database đã tạo cho project |
-| `DB_POOL_MAX_SIZE` | Tuỳ chọn; mặc định 5 connection |
-| `DB_POOL_MIN_IDLE` | Tuỳ chọn; mặc định 0 |
-| `DB_SHOW_SQL` | Tuỳ chọn; mặc định `false` |
-
-Ví dụ định dạng URL (chỉ là placeholder, không phải thông tin kết nối thật):
-
+Khi Terminal xuất hiện dòng thông báo tương tự:
 ```text
-jdbc:postgresql://<POOLER_HOST>:5432/postgres?sslmode=require
+Started PlantCareBackendApplication in ... seconds
 ```
+Backend đã khởi động thành công trên cổng mặc định `8080` (`http://localhost:8080`).
 
-Dùng host, port, database và username đúng như **Connect → Session pooler** hiển thị. Cần thay toàn bộ placeholder bằng thông tin thực tế của bạn. Nếu password chứa ký tự đặc biệt, đặt password trực tiếp trong biến riêng `SUPABASE_DB_PASSWORD`; không ghép password vào URL.
+> **Lưu ý về trạng thái Backend:**
+> Hiện tại Backend đang ở giai đoạn bộ khung ứng dụng. Khi truy cập vào `http://localhost:8080` qua trình duyệt, bạn có thể nhận phản hồi `404 Not Found` hoặc màn hình đăng nhập mặc định do Spring Security tự sinh. Điều này là hoàn toàn bình thường vì các Controller nghiệp vụ chưa được cài đặt.
 
-PostgreSQL JDBC driver đã được khai báo trong `backend/pom.xml`. H2 vẫn được giữ để chạy cục bộ khi chưa kích hoạt profile. Dự án đã chuyển hướng database dùng chung sang Supabase PostgreSQL; không cần cài MySQL Server và không được commit password vào GitHub.
+Để dừng Backend: Nhấn tổ hợp phím `Ctrl + C` trong cửa sổ Terminal.
 
-### 9.3. Chạy Backend bằng Supabase trên Windows
+---
 
-Mở PowerShell tại thư mục repository gốc `GoPlant`, sau đó:
+## 8. Cấu hình cơ sở dữ liệu H2 local
+
+Khi khởi động Backend bình thường (không kích hoạt profile), ứng dụng sẽ tự động sử dụng cấu hình H2 in-memory từ file [application.properties](file:///E:/GoPlant/backend/src/main/resources/application.properties):
+
+- **JDBC URL:** `jdbc:h2:mem:plantcaredb`
+- **Username:** `sa`
+- **Password:** *(để trống)*
+- **H2 Console:** Bật tại `http://localhost:8080/h2-console`
+
+**Đặc điểm:** Thích hợp để lập trình viên kiểm tra nhanh logic mà không cần kết nối mạng. Toàn bộ dữ liệu trong bộ nhớ sẽ được reset lại trạng thái ban đầu khi dừng tiến trình Spring Boot.
+
+---
+
+## 9. Cấu hình cơ sở dữ liệu Supabase PostgreSQL
+
+Để dữ liệu được đồng bộ dùng chung giữa các thành viên, Backend hỗ trợ profile `supabase` qua file [application-supabase.properties](file:///E:/GoPlant/backend/src/main/resources/application-supabase.properties).
+
+### 9.1. Lấy thông tin kết nối từ Supabase
+
+1. Đăng nhập vào [Supabase Dashboard](https://supabase.com/dashboard) và tạo project.
+2. Vào mục **Project Settings → Database** hoặc nút **Connect** ở thanh công cụ trên cùng.
+3. Chọn thẻ **Session pooler** (cổng `5432` hoặc `6543`, phù hợp với mạng IPv4).
+4. Sao chép Host, Port, Database name, Username (thường có dạng `postgres.<project-ref>`) và Password.
+
+### 9.2. Kích hoạt profile và khởi động bằng PowerShell
+
+Truyền các thông số dưới dạng biến môi trường tạm thời trong phiên làm việc PowerShell (thay thế các placeholder `<...>` bằng giá trị thực tế):
 
 ```powershell
+cd E:\GoPlant\backend
+
 $env:SUPABASE_DB_URL = "jdbc:postgresql://<POOLER_HOST>:5432/postgres?sslmode=require"
 $env:SUPABASE_DB_USERNAME = "postgres.<PROJECT_REF>"
 $env:SUPABASE_DB_PASSWORD = "<DATABASE_PASSWORD>"
 $env:SPRING_PROFILES_ACTIVE = "supabase"
 
-cd backend
 .\mvnw.cmd spring-boot:run
 ```
 
-Thay các giá trị placeholder bằng thông tin thật lấy từ dashboard. Các biến môi trường trên chỉ áp dụng cho cửa sổ PowerShell hiện tại; mỗi thành viên cần cấu hình trên máy của mình. Có thể đặt `SPRING_PROFILES_ACTIVE=supabase` nếu muốn bật profile qua biến môi trường, nhưng không đồng thời chạy backend bằng cấu hình H2 mặc định.
+**Nguyên tắc an toàn bảo mật:**
+- Tuyệt đối **không** dán password database trực tiếp vào file cấu hình `application-supabase.properties` hoặc file README.
+- Không commit các file chứa mật khẩu lên Git.
+- Cấu hình JPA `ddl-auto=update` chỉ dùng trong giai đoạn phát triển ban đầu. Khi bước vào môi trường hoàn thiện, dự án sẽ áp dụng công cụ quản lý migration phiên bản (Flyway).
 
-Sau khi chạy, kiểm tra log để xác nhận Spring Boot khởi động thành công. Khi profile Supabase hoạt động, các Entity JPA sẽ được ánh xạ vào PostgreSQL theo cấu hình hiện tại. `spring.jpa.hibernate.ddl-auto=update` phù hợp cho giai đoạn phát triển ban đầu; trước khi dùng dữ liệu quan trọng hoặc triển khai chính thức, nên quản lý thay đổi schema bằng migration như Flyway và sao lưu dữ liệu.
+---
 
-### 9.4. Chạy Backend mặc định bằng H2
+## 10. Cài đặt và chạy Frontend Expo
 
-Không đặt profile `supabase` thì Backend tiếp tục dùng H2 in-memory từ `application.properties`. Đây là cách tiện để thử khởi động source mà chưa cần tài khoản Supabase, nhưng dữ liệu không được chia sẻ giữa các thành viên và thường bị mất sau khi dừng ứng dụng.
+Ứng dụng di động nằm trong thư mục `frontend/`, chạy hoàn toàn trên quy trình **Expo Managed Workflow**.
 
-### 9.5. Bảo mật database
+### 10.1. Cài đặt dependencies theo lockfile chuẩn
 
-- Không commit `SUPABASE_DB_PASSWORD`, URL có chứa credential, file `.env` thực tế hoặc token vào GitHub.
-- Không đặt thông tin database trong frontend React Native; chỉ Backend được phép kết nối PostgreSQL bằng credential máy chủ.
-- Dùng Supabase **Session pooler** cho phát triển nhóm nếu mạng không bảo đảm IPv6; lấy nguyên host, port và username từ dashboard.
-- `sslmode=require` mã hóa kết nối nhưng không xác minh đầy đủ danh tính chứng chỉ máy chủ. Với môi trường production, hãy làm theo hướng dẫn SSL của Supabase/JDBC và cân nhắc xác minh chứng chỉ.
-- Chỉ dùng database dùng chung cho dữ liệu thử nghiệm của nhóm; tránh lưu thông tin cá nhân thật. Giới hạn quyền thành viên, đặt mật khẩu mạnh và không chia sẻ tài khoản quản trị nếu có thể tránh.
-
-## 10. Frontend React Native: chuẩn bị và chạy
-
-README này định hướng `frontend/` là ứng dụng di động **React Native**. Đây không phải một website được tự động chuyển thành ứng dụng Android: nếu giao diện hiện có được viết bằng HTML/React Web hoặc framework chỉ chạy trên trình duyệt, cần xây dựng/chuyển đổi giao diện sang React Native trước khi build APK/AAB.
-
-Tại thời điểm cập nhật README, repository chưa có `frontend/package.json` và source Frontend nên các lệnh dưới đây chỉ dùng sau khi nhóm đã tạo và commit ứng dụng React Native.
-
-### 10.1. Cài dependencies
-
-Từ Terminal:
+Mở PowerShell tại thư mục `frontend`:
 
 ```powershell
-cd GoPlantrontend
-npm ci
+cd E:\GoPlant\frontend
+npm.cmd ci
 ```
 
-Dùng `npm ci` khi `package-lock.json` đã được commit. Nếu đây là lần đầu cài đặt và chưa có lockfile, dùng `npm install`, kiểm tra ứng dụng rồi commit cả `package.json` và `package-lock.json`.
+Lệnh `npm.cmd ci` đảm bảo cài đặt chính xác 100% các phiên bản package được chỉ định trong `package-lock.json` mà không làm xáo trộn phiên bản.
 
-### 10.2. Chạy Metro và ứng dụng
-
-Với React Native Community CLI, mở Android Emulator trước rồi chạy từ thư mục `frontend`:
+### 10.2. Kiểm tra tính toàn vẹn kiểu dữ liệu (TypeScript)
 
 ```powershell
-npm start
+npm.cmd run typecheck
 ```
+Lệnh thực thi `tsc --noEmit`. Kết quả không được có bất kỳ lỗi nào (`Exit Code: 0`).
 
-Mở Terminal thứ hai, vẫn tại `frontend`, chạy:
+### 10.3. Xác thực cấu hình Expo
 
 ```powershell
-npm run android
+npx.cmd expo config
+```
+Lệnh đọc cấu hình `app.json` và in ra schema SDK 57 hợp lệ.
+
+### 10.4. Khởi động ứng dụng
+
+```powershell
+npm.cmd start
 ```
 
-Lệnh phải tồn tại trong `scripts` của `package.json`. Nếu project dùng template/phiên bản khác, hãy làm theo script thật trong file đó và [hướng dẫn chạy trên thiết bị Android của React Native](https://reactnative.dev/docs/running-on-device).
+Menu điều khiển của Expo CLI sẽ xuất hiện:
+- Nhấn `a` để mở trên **Android Emulator**.
+- Nhấn `w` để mở thử nghiệm trên **Trình duyệt Web** (`http://localhost:8081`).
+- Quét mã QR hiển thị trên Terminal bằng camera điện thoại qua ứng dụng **Expo Go** (Android).
+- Nhấn `r` để tải lại (reload) ứng dụng.
 
-### 10.3. Cấu hình kết nối Frontend tới Backend
+### 10.5. Giải thích các scripts có sẵn trong `package.json`
 
-- **Backend chạy trên cùng máy tính:** `http://localhost:8080` dùng được từ Terminal trên máy tính, nhưng không dùng như địa chỉ API bên trong Android Emulator.
-- **Android Studio Emulator:** thường truy cập máy tính host qua `http://10.0.2.2:8080`.
-- **Điện thoại Android thật:** dùng địa chỉ IP LAN của máy tính chạy Backend, ví dụ `http://192.168.1.10:8080` (địa chỉ ví dụ; thay bằng IP thực tế). Hai thiết bị cần cùng mạng và firewall của máy tính phải cho phép kết nối.
-- **Bản phát hành:** dùng URL Backend đã triển khai trên máy chủ, ưu tiên HTTPS. Không dùng `localhost`, `10.0.2.2` hoặc IP LAN làm URL API của bản phát hành cho người dùng.
-- Đặt `API base URL` tập trung trong cấu hình, ví dụ `frontend/src/config/`, không rải URL trực tiếp trong từng màn hình.
-- Ứng dụng gửi/nhận JSON qua API. Mỗi màn hình cần xử lý loading, success, empty, lỗi mạng và phản hồi API thất bại.
+| Script | Lệnh thực thi | Ý nghĩa / Hành vi |
+|:---|:---|:---|
+| `start` | `expo start` | Khởi động Metro bundler và máy chủ phát triển Expo |
+| `android` | `expo start --android` | Khởi động Expo và tự động kết nối mở ứng dụng trên Android Emulator |
+| `ios` | `expo start --ios` | Khởi động Expo cho iOS Simulator (chỉ hỗ trợ trên macOS) |
+| `web` | `expo start --web` | Chạy ứng dụng trên nền tảng Web |
+| `typecheck` | `tsc --noEmit` | Kiểm tra tĩnh toàn bộ mã TypeScript theo cấu hình `tsconfig.json` |
+| `lint` | `expo lint` | Chạy bộ kiểm tra quy chuẩn mã nguồn ESLint (khi đã cấu hình) |
+| `reset-project` | `node ./scripts/reset-project.js` | Script dọn dẹp đưa template về trạng thái ban đầu (không dùng khi dev) |
 
-**Lưu ý:** ứng dụng Android không kết nối trực tiếp tới PostgreSQL/Supabase. Mọi thao tác đọc/ghi dữ liệu phải đi qua Backend để kiểm soát xác thực, quyền truy cập và quy tắc nghiệp vụ.
+---
 
+## 11. Thiết lập Android Studio, Android SDK và Android Emulator
 
-## 11. Android Studio: chạy thử và build ứng dụng Android
+### 11.1. Cài đặt Android SDK qua Android Studio
 
-Phần này giả định Frontend dùng **React Native Community CLI** và đã có thư mục `frontend/android/`. Android Studio không thay thế React Native; công cụ này cung cấp Android SDK, trình giả lập và môi trường mở/build phần native Android. Khi Frontend, Backend và database đã tích hợp, có thể kiểm thử toàn hệ thống trên Android Emulator/điện thoại rồi tạo APK/AAB.
+1. Tải và cài đặt [Android Studio](https://developer.android.com/studio).
+2. Mở Android Studio, vào **Settings (Preferences) → Languages & Frameworks → Android SDK**.
+3. Tại tab **SDK Platforms**, cài đặt phiên bản Android SDK tương thích (khuyến nghị Android 14 / API Level 34 trở lên).
+4. Tại tab **SDK Tools**, tích chọn cài đặt:
+   - *Android SDK Build-Tools*
+   - *Android SDK Platform-Tools*
+   - *Android Emulator*
+5. Thiết lập biến môi trường trên Windows:
+   - Thêm biến hệ thống `ANDROID_HOME` trỏ tới đường dẫn SDK (thường là `C:\Users\<Tên_User>\AppData\Local\Android\Sdk`).
+   - Thêm `%ANDROID_HOME%\platform-tools` vào biến môi trường `Path`.
 
-### 11.1. Cài đặt Android Studio và Android SDK
+Mở PowerShell kiểm tra:
+```powershell
+adb --version
+```
 
-1. Cài [Android Studio](https://developer.android.com/studio).
-2. Trong Setup Wizard hoặc **Tools/More Actions → SDK Manager**, cài Android SDK, Android SDK Platform, Android SDK Build-Tools, Android SDK Platform-Tools, Android Emulator và phiên bản SDK được template React Native đang dùng yêu cầu. Không cố định một API level nếu template của project yêu cầu phiên bản khác.
-3. Trong **Device Manager**, chọn **Create Device**, chọn một thiết bị điện thoại và system image tương thích, sau đó khởi động emulator. Xem [tài liệu tạo Android Virtual Device](https://developer.android.com/studio/run/managing-avds).
-4. Kiểm tra SDK Location trong Android Studio. Trên Windows, vị trí mặc định thường là `%LOCALAPPDATA%\Android\Sdk`, nhưng phải dùng đúng đường dẫn hiển thị trên máy.
-5. Nếu lệnh `adb` chưa được nhận diện, thêm thư mục `platform-tools` trong SDK vào biến môi trường `Path`; kiểm tra bằng:
+### 11.2. Tạo và khởi chạy Android Emulator
 
+1. Trong Android Studio, mở **Virtual Device Manager** (Device Manager).
+2. Chọn **Create Virtual Device**, chọn thiết bị (ví dụ: *Pixel 7* hoặc *Pixel 8*).
+3. Chọn System Image có hỗ trợ Google Play APIs, tải về và nhấn **Finish**.
+4. Khởi chạy máy ảo bằng nút Play (Start). Kiểm tra máy ảo đã kết nối:
    ```powershell
-   adb --version
    adb devices
    ```
 
-### 11.2. Kiểm tra JDK và môi trường React Native
+### 11.3. Phân biệt các chế độ chạy ứng dụng với Expo
 
-- Cài Node.js phiên bản tương thích với React Native đang dùng; xem yêu cầu hiện hành trong [React Native environment setup](https://reactnative.dev/docs/set-up-your-environment).
-- Backend GoPlant hiện cần Java 21 theo cấu hình Maven. Android/React Native lại cần JDK tương thích với phiên bản React Native và Gradle Plugin. Tài liệu React Native hiện khuyến nghị JDK 17 cho thiết lập Android, vì vậy có thể cần cài thêm JDK phù hợp thay vì đổi/xoá JDK 21 của Backend.
-- Trong Android Studio, chọn JDK dùng cho Gradle tại **Settings → Build, Execution, Deployment → Build Tools → Gradle → Gradle JDK**. Tránh thay đổi hàng loạt biến môi trường Windows nếu chưa kiểm tra ứng dụng nào đang phụ thuộc chúng.
-- Sau khi cài đặt, mở Terminal mới và kiểm tra:
+- **Expo Go (Khuyến nghị cho phát triển hiện tại):** Chạy lệnh `npm.cmd start`, sau đó nhấn phím `a` trên Terminal. Expo CLI sẽ tự động cài ứng dụng Expo Go lên máy ảo và nạp bundle mã JavaScript/TypeScript nhanh chóng mà không cần build mã nguồn native C++/Java.
+- **Expo Prebuild & Run Native:** Khi dự án cần thêm các thư viện native ngoài danh mục Expo SDK, có thể sử dụng `npx.cmd expo run:android`. Lệnh này sẽ tự động sinh thư mục `android/` và build bằng Gradle. *Ở giai đoạn hiện tại, dự án tuân thủ Managed Workflow thuần túy, tuyệt đối không tự ý commit thư mục `android/` lên Git.*
+- **Build APK/AAB phát hành:** Sẽ được thực hiện ở Giai đoạn hoàn thiện thông qua dịch vụ EAS Build (Expo Application Services) hoặc quy trình build tự động.
 
-  ```powershell
-  node -v
-  npm -v
-  java -version
-  adb devices
-  ```
+### 11.4. Lưu ý địa chỉ IP kết nối Backend từ Android
 
-### 11.3. Chạy ứng dụng sau khi hoàn thiện Backend và database
+Khi chạy đồng thời Frontend và Backend trên máy tính cá nhân:
+- **Địa chỉ gọi API từ Android Emulator:** Sử dụng `http://10.0.2.2:8080` (đây là địa chỉ alias mặc định để máy ảo Android truy cập vào `localhost` của máy host tính).
+- **Địa chỉ gọi API từ điện thoại thật (cùng Wi-Fi):** Sử dụng địa chỉ IP mạng nội bộ của máy tính chạy Backend, ví dụ `http://192.168.1.x:8080`.
+- Tuyệt đối **không** dùng `http://localhost:8080` bên trong ứng dụng Android vì `localhost` trong ngữ cảnh Android trỏ vào chính chiếc điện thoại.
 
-Thực hiện theo thứ tự sau để tránh nhầm lỗi giao diện với lỗi kết nối dữ liệu:
+---
 
-1. **Khởi động database:** nếu dùng Supabase, đảm bảo project đang sẵn sàng và các biến môi trường đã được đặt; không cần cài PostgreSQL Server cục bộ. Nếu Backend chạy bằng cấu hình H2 mặc định, dữ liệu chỉ phục vụ kiểm tra cục bộ và thường mất khi ứng dụng dừng.
-2. **Khởi động Backend:** mở Terminal tại `GoPlant/backend` và chạy:
+## 12. Kiểm thử Frontend và Backend
 
-   ```powershell
-   .\mvnw.cmd spring-boot:run
-   ```
+### 12.1. Kiểm thử tĩnh Frontend
 
-   Kiểm tra log khởi động và xác nhận các endpoint thực tế đã được triển khai. `http://localhost:8080` là địa chỉ phía máy tính; không có nghĩa toàn bộ API đã hoàn chỉnh.
-3. **Khởi động Android Emulator:** mở Android Studio → Device Manager và chạy emulator.
-4. **Chạy Frontend:** mở Terminal tại `GoPlant/frontend`, cài dependencies rồi chạy `npm start`. Ở Terminal khác, chạy `npm run android` để build debug và cài app lên emulator.
-5. **Mở bằng Android Studio khi cần:** chọn **Open** và mở thư mục `GoPlant/frontend/android` (không mở riêng thư mục `backend`). Chờ Gradle Sync hoàn tất; chọn emulator làm thiết bị đích và nhấn **Run**. Khi chạy cấu hình debug từ Android Studio, Metro bundler thường cần được khởi động riêng bằng `npm start` tại thư mục `frontend`.
-6. **Kiểm thử xuyên suốt:** đăng nhập, xem danh sách cây, xem chi tiết, tạo/quản lý vườn, cập nhật lịch và nhật ký chăm sóc; kiểm tra cả loading, dữ liệu rỗng, API lỗi và mất mạng. Chỉ xác nhận tính năng hoàn tất sau khi đã chạy thử với API và database thật của môi trường phát triển.
-
-### 11.4. Tạo APK để cài thử
-
-Sau khi cấu hình môi trường Android và đảm bảo project React Native đã được tạo:
+Từ thư mục `E:\GoPlant\frontend`, thực hiện các lệnh:
 
 ```powershell
-cd GoPlant\frontend\android
-.\gradlew.bat assembleDebug
+# 1. Kiểm tra typecheck TypeScript
+npm.cmd run typecheck
+
+# 2. Kiểm tra cấu hình Expo
+npx.cmd expo config --json
+
+# 3. Kiểm tra tính tương thích của dependencies
+npx.cmd expo install --check
 ```
+Tất cả các lệnh trên đều phải vượt qua thành công với mã thoát `0`.
 
-Với cấu hình React Native/Gradle tương thích, APK debug thường được tạo tại:
+### 12.2. Kiểm thử Backend
 
-```text
-frontend/android/app/build/outputs/apk/debug/app-debug.apk
-```
-
-Có thể chép APK này sang thiết bị Android để cài thử; đây là bản debug, không phải bản phát hành chính thức. Nếu build thất bại, kiểm tra JDK, SDK Platform/Build Tools, Gradle Sync và log lỗi gốc trước khi xoá cache hoặc thay đổi phiên bản thư viện.
-
-### 11.5. Tạo bản phát hành AAB/APK
-
-Khi app đã tích hợp và kiểm thử đầy đủ, có thể tạo Android App Bundle theo hướng dẫn React Native hiện hành:
-
-```powershell
-cd GoPlant\frontend
-npx react-native build-android --mode=release
-```
-
-Lệnh và đường dẫn đầu ra phụ thuộc phiên bản React Native. Theo hướng dẫn hiện hành, file AAB được tạo tại `android/app/build/outputs/bundle/release/app-release.aab` sau khi cấu hình signing phù hợp. Xem [hướng dẫn phát hành Android của React Native](https://reactnative.dev/docs/signed-apk-android) trước khi sử dụng.
-
-- Không commit keystore, mật khẩu signing, token hoặc secret vào GitHub; quản lý chúng bên ngoài source code.
-- **APK** phù hợp khi cần cài đặt trực tiếp lên thiết bị; **AAB** là định dạng thường dùng để phát hành qua Google Play.
-- Build thành công chưa chứng minh hệ thống hoạt động đúng: cần kiểm thử app release, kết nối Backend và các chức năng chính trên thiết bị thật.
-
-### 11.6. Điều kiện trước khi đưa app ra ngoài máy phát triển
-
-- Deploy Backend lên môi trường máy chủ có thể truy cập từ điện thoại; giữ Supabase PostgreSQL làm database cloud và cấu hình URL API chính thức qua HTTPS.
-- Không dùng URL emulator `10.0.2.2` hoặc IP LAN của máy phát triển trong bản phát hành.
-- Bật xác thực/phân quyền ở Backend, kiểm tra quyền sở hữu dữ liệu và không để lộ thông tin database.
-- Kiểm thử đăng nhập, đọc/ghi dữ liệu, xử lý mất mạng và lỗi server từ Android app.
-- Cấu hình app name, package/application ID, icon, version và signing trước khi tạo bản phát hành cuối cùng.
-
-## 12. API và hợp đồng tích hợp dự kiến
-
-Các đường dẫn dưới đây xuất phát từ luồng nghiệp vụ và thiết kế API trong tài liệu. **Đây là API contract dự kiến, không phải cam kết rằng endpoint đã có trong source hiện tại.** Endpoint chỉ dùng được sau khi Controller, Service và cơ chế bảo mật tương ứng được cài đặt.
-
-| Phân hệ | Endpoint tham chiếu | Ý nghĩa |
-|---|---|---|
-| Auth | `POST /api/v1/auth/register` | Đăng ký tài khoản |
-| Auth | `POST /api/v1/auth/login` | Đăng nhập và dự kiến cấp access token |
-| Tài khoản | `GET /api/v1/users/me` | Lấy hồ sơ người dùng hiện tại sau xác thực |
-| Danh mục cây | `GET /api/v1/species` | Danh sách cây, tìm kiếm/lọc/phân trang |
-| Danh mục cây | `GET /api/v1/species/{id}` | Chi tiết một loại cây |
-| Vườn | `/api/v1/gardens` | Nhóm API quản lý vườn |
-| Cây cá nhân | Chưa chốt trong source | API quản lý cây thuộc vườn/người dùng |
-| Lịch chăm sóc | Chưa chốt trong source | API tạo lịch, chu kỳ và trạng thái công việc |
-| Nhật ký chăm sóc/phát triển | Chưa chốt trong source | API ghi nhận và truy xuất lịch sử |
-| Camera | Chưa chốt trong source | API quản lý thiết bị và metadata ảnh/luồng giám sát |
-
-### Quy ước API nên thống nhất khi triển khai
-
-- Request/Response dùng JSON và mã HTTP có ý nghĩa.
-- Dữ liệu đầu vào cần được validate; phản hồi lỗi nên có cấu trúc thống nhất.
-- Các danh sách lớn nên hỗ trợ phân trang và sắp xếp.
-- API yêu cầu xác thực cần gửi `Authorization: Bearer <token>` sau khi JWT được triển khai.
-- Người dùng chỉ được đọc/thay đổi dữ liệu thuộc quyền sở hữu; endpoint quản trị yêu cầu vai trò tương ứng.
-- Không lưu password dạng văn bản thuần; khi triển khai xác thực, dùng BCrypt hoặc cơ chế băm mật khẩu phù hợp của Spring Security.
-
-## 13. Kiểm thử
-
-### Build/test Backend
-
-Từ thư mục `GoPlant/backend`:
+Từ thư mục `E:\GoPlant\backend`, thực hiện:
 
 ```powershell
 .\mvnw.cmd clean verify
 ```
-
-Hoặc chỉ chạy unit test:
-
-```powershell
-.\mvnw.cmd test
-```
-
-Lệnh build kiểm tra biên dịch và chạy các test hiện có. Khi chưa có test nghiệp vụ, `BUILD SUCCESS` chỉ xác nhận build thành công, không chứng minh mọi chức năng quản lý cây đã hoạt động.
-
-### Kiểm thử API khi endpoint đã được triển khai
-
-Dùng Postman hoặc công cụ HTTP tương đương để kiểm tra:
-
-- Đường đi thành công và các mã HTTP.
-- Dữ liệu thiếu/sai định dạng.
-- Dữ liệu không tồn tại.
-- Tìm kiếm, lọc và phân trang.
-- Xác thực token, vai trò và quyền sở hữu dữ liệu.
-- Các trường hợp lịch chăm sóc đến hạn/quá hạn và cập nhật nhật ký.
-
-### Kiểm thử giao diện và Android
-
-Kiểm tra các luồng chính: đăng nhập → trang chủ → khám phá cây → xem chi tiết → thêm vào vườn; và quản lý vườn → cây → lịch chăm sóc → ghi nhận chăm sóc → xem nhật ký phát triển. Cần kiểm tra trạng thái loading, empty, lỗi mạng và dữ liệu không hợp lệ.
-
-Trên Android Emulator và ít nhất một điện thoại thật khi có thể, kiểm tra kích thước màn hình, bàn phím/nhập liệu, điều hướng Back, quyền truy cập ảnh/camera nếu tính năng đã có, kết nối API, resume app sau khi đưa xuống nền, và cài đặt APK release. Không coi việc app mở được hoặc build thành công là bằng chứng toàn bộ chức năng đã hoàn tất.
-
-## 14. Quy trình đóng góp và Git
-
-Nên làm việc theo nhánh tính năng để tránh ghi đè code của thành viên khác:
-
-```bash
-git switch -c feature/ten-chuc-nang
-# chỉnh sửa và kiểm thử code
-
-git status
-git add .
-git commit -m "feat: mô tả thay đổi"
-git push -u origin feature/ten-chuc-nang
-```
-
-Sau đó tạo Pull Request để nhóm rà soát trước khi gộp vào `main`.
-
-Trước khi commit:
-
-- Kiểm tra `git status` để không đưa `target/`, `node_modules/`, log hoặc file build lên GitHub.
-- Không commit `.env`, mật khẩu database, JWT secret, token hoặc dữ liệu cá nhân thật.
-- Giữ `backend/mvnw`, `backend/mvnw.cmd`, `backend/.mvn/` và `backend/pom.xml` để người khác có thể build bằng Maven Wrapper.
-- Không sao chép thư mục `.git` của repo Frontend/Backend cũ vào repo GoPlant; repo này nên có một `.git` ở thư mục gốc.
-- Thống nhất tên branch, format code, API contract và kiểu dữ liệu với cả nhóm.
-
-## 15. Xử lý lỗi thường gặp
-
-### `release version 25 not supported`
-
-Project đang đặt Java target cao hơn JDK được Maven sử dụng. Kiểm tra:
-
-```powershell
-java -version
-cd backend
-.\mvnw.cmd -v
-```
-
-Nếu dự án dùng Java 21, đặt `<java.version>21</java.version>` trong `pom.xml` và bảo đảm Maven thực sự chạy bằng JDK 21. Kiểm tra cả cấu hình `maven.compiler.release` nếu có.
-
-### `mvnw.cmd is not recognized`
-
-Chạy lệnh trong đúng thư mục `GoPlant/backend`, nơi có `mvnw.cmd`:
-
-```powershell
-cd E:\GoPlant\backend
-.\mvnw.cmd -v
-```
-
-### `Failed to configure a DataSource`
-
-Khi chạy mặc định, kiểm tra dependency H2 và URL `jdbc:h2:mem:plantcaredb` trong `application.properties`. Khi dùng Supabase, xác nhận đã bật profile `supabase`, ba biến `SUPABASE_DB_URL`, `SUPABASE_DB_USERNAME`, `SUPABASE_DB_PASSWORD` có giá trị đúng; kiểm tra pooler host/port và `sslmode=require` trong URL.
-
-### Port `8080` đã được sử dụng
-
-Đóng tiến trình đang chiếm cổng hoặc đổi cổng phát triển bằng cách thêm vào `application.properties`:
-
-```properties
-server.port=8081
-```
-
-Sau đó truy cập `http://localhost:8081`.
-
-### Ứng dụng chạy nhưng endpoint trả về `404` hoặc trang đăng nhập
-
-Source hiện tại chưa có các API nghiệp vụ được xác nhận và dependency Spring Security có thể áp dụng bảo vệ mặc định. Kiểm tra log khởi động trước; sau đó triển khai Controller và SecurityConfig phù hợp thay vì giả định endpoint đã tồn tại.
-
-### Frontend không tìm thấy `package.json`
-
-Frontend source React Native chưa được commit vào repository hoặc đang mở sai thư mục. Kiểm tra `GoPlant/frontend/package.json`; nếu file chưa có, cần tạo và commit project React Native trước khi chạy lệnh npm.
-
-### Android Studio không tìm thấy SDK hoặc `adb` không được nhận diện
-
-Mở Android Studio → SDK Manager để xem chính xác SDK Location. Kiểm tra biến `ANDROID_HOME` và bổ sung `<SDK path>\platform-tools` vào `Path`, sau đó mở Terminal mới và chạy `adb devices`.
-
-### Android Emulator không gọi được Backend
-
-Không dùng `localhost` làm API host bên trong emulator. Dùng `http://10.0.2.2:8080` khi Backend chạy trên máy host; dùng IP LAN của máy phát triển khi chạy trên điện thoại thật. Kiểm tra Backend đang chạy, cổng, firewall và API URL trong cấu hình Frontend. Với bản phát hành, dùng URL máy chủ đã triển khai qua HTTPS.
-
-### `npm run android` hoặc Gradle build thất bại
-
-Kiểm tra phiên bản Node, JDK/Gradle tương thích với phiên bản React Native, Android SDK Platform/Build Tools và kết quả Gradle Sync. Đối chiếu lỗi gốc với tài liệu [thiết lập môi trường React Native](https://reactnative.dev/docs/set-up-your-environment); không nâng/hạ đồng thời nhiều phiên bản khi chưa xác định nguyên nhân.
-
-### App mở nhưng báo lỗi không tải được JavaScript/Metro
-
-Với cấu hình debug, chạy `npm start` trong thư mục `frontend` để khởi động Metro, sau đó reload app. Bản release phải được bundle đúng khi build và không phụ thuộc Metro đang chạy trên máy phát triển.
-
-## 16. Lộ trình phát triển
-
-- [ ] Chốt mô hình dữ liệu, quan hệ Entity, ERD và chiến lược lưu trữ bền vững bằng Supabase PostgreSQL.
-- [ ] Hoàn thiện Backend: CRUD cho vườn, cây cá nhân, danh mục cây, lịch chăm sóc và nhật ký.
-- [ ] Triển khai tìm kiếm, lọc, sắp xếp, phân trang, xác thực/phân quyền và kiểm soát quyền sở hữu dữ liệu.
-- [ ] Chuẩn hóa response/error, Bean Validation, logging và API contract/OpenAPI; bổ sung test nghiệp vụ.
-- [ ] Xây dựng Frontend bằng React Native theo màn hình và luồng đã thiết kế; hoàn thiện Component, Props/State, danh sách, Navigation, API và lưu cục bộ khi cần.
-- [ ] Cấu hình môi trường API để Frontend kết nối Backend; kiểm thử các luồng đầu-cuối với database.
-- [ ] Cài Android Studio/SDK, tạo Android Emulator và xác nhận `frontend/android/` build được.
-- [ ] Chạy thử app trên Emulator và điện thoại Android thật; kiểm tra lỗi mạng, kích thước màn hình, quyền thiết bị và trạng thái ứng dụng.
-- [ ] Tạo APK debug để cài thử; cấu hình signing và tạo APK/AAB release khi sẵn sàng.
-- [ ] Deploy Backend lên máy chủ và cấu hình Supabase PostgreSQL trước khi chia sẻ bản Android ngoài mạng phát triển; cấu hình HTTPS và URL API chính thức.
-- [ ] Tích hợp camera trong phạm vi giám sát/hình ảnh nếu đáp ứng được môi trường thử nghiệm; không đưa AI chẩn đoán bệnh vào phạm vi mặc định.
-- [ ] Thêm GitHub Actions cho build/test và cập nhật hướng dẫn triển khai.
-
-## 17. Nhóm phát triển
-
-- Vũ Tuấn Đạt
-- Vũ Minh Đức
-- Hoàng Phúc Vinh
-- Nguyễn Ngọc Tuấn Linh
+Maven sẽ dọn dẹp, tải các dependency cần thiết, biên dịch Java 21, thực thi các test case trong `src/test/java/` và tạo gói JAR tại `target/`. Kết quả đạt `BUILD SUCCESS`.
 
 ---
 
-**Repository:** https://github.com/vuduc6002/GoPlant
+## 13. GitHub Actions và Continuous Integration (CI)
 
-**Tài liệu chính thức tham khảo:** [React Native - Set Up Your Environment](https://reactnative.dev/docs/set-up-your-environment), [React Native - Running on Device](https://reactnative.dev/docs/running-on-device), [React Native - Publishing to Google Play](https://reactnative.dev/docs/signed-apk-android), [Android Studio - Create and Manage Virtual Devices](https://developer.android.com/studio/run/managing-avds).
+Dự án thiết lập hệ thống tích hợp liên tục (CI) tự động với hai pipeline độc lập đặt trong `.github/workflows/`:
 
-**Lưu ý về trạng thái:** README cần được cập nhật cùng source code. Khi một chức năng hoàn tất, hãy bổ sung endpoint thực tế, hướng dẫn cấu hình, test case và bằng chứng chạy thử; chỉ đánh dấu hoàn thành sau khi đã kiểm tra trên mã nguồn và môi trường Android.
+### 13.1. Backend Pipeline ([.github/workflows/maven.yml](file:///E:/GoPlant/.github/workflows/maven.yml))
+
+- **Kích hoạt (Triggers):**
+  - Push lên nhánh `main` và nhánh tính năng `feature/integrate-frontend-report`.
+  - Tạo Pull Request hướng tới nhánh `main`.
+- **Môi trường runner:** `ubuntu-latest`.
+- **Nhiệm vụ:**
+  - Cài đặt Java 21 (Temurin).
+  - Tự động cache Maven dependencies theo file `backend/pom.xml`.
+  - Cấp quyền thực thi và chạy `./mvnw --batch-mode clean verify` trong thư mục `backend/`.
+
+### 13.2. Frontend Pipeline ([.github/workflows/frontend.yml](file:///E:/GoPlant/.github/workflows/frontend.yml))
+
+- **Kích hoạt (Triggers):**
+  - Push lên nhánh `main` và nhánh tính năng `feature/integrate-frontend-report`.
+  - Tạo Pull Request hướng tới nhánh `main`.
+- **Môi trường runner:** `ubuntu-latest`.
+- **Nhiệm vụ:**
+  - Cài đặt Node.js 22.x (phiên bản chuẩn baseline của Expo SDK 57).
+  - Tự động cache npm dependencies theo file `frontend/package-lock.json`.
+  - Cài đặt gói sạch bằng `npm ci`.
+  - Chạy `npm run typecheck` (`tsc --noEmit`).
+  - Kiểm tra tính hợp lệ của cấu hình ứng dụng bằng `npx expo config --json`.
+  - Kiểm tra độ tương thích của các dependencies bằng `CI=1 npx expo install --check`.
+
+*Cả hai pipeline CI đều không yêu cầu các thông tin bí mật (secrets) về cơ sở dữ liệu cloud, đảm bảo tính an toàn và khả năng chạy độc lập.*
+
+---
+
+## 14. Hướng dẫn xử lý lỗi thường gặp
+
+### 1. PowerShell chặn chạy npm/npx (`PSSecurityException`)
+- **Triệu chứng:** Khi gõ `npm` hoặc `npx`, PowerShell báo lỗi `File npm.ps1 cannot be loaded because running scripts is disabled on this system`.
+- **Khắc phục:** Sử dụng cú pháp có đuôi `.cmd` trên PowerShell: `npm.cmd` và `npx.cmd`.
+
+### 2. TypeScript báo lỗi `Cannot find module './animated-icon.module.css'` hoặc `'@/global.css'`
+- **Triệu chứng:** Trình biên dịch TypeScript không nhận dạng được các file CSS.
+- **Khắc phục:** Đảm bảo file [frontend/src/types/css.d.ts](file:///E:/GoPlant/frontend/src/types/css.d.ts) đã tồn tại trong dự án để khai báo ambient module cho `*.css` và `*.module.css`.
+
+### 3. Backend báo lỗi `release version 25 not supported` hoặc lỗi phiên bản JDK
+- **Triệu chứng:** Maven báo không hỗ trợ phiên bản Java đích.
+- **Khắc phục:** Kiểm tra phiên bản Java máy tính đang trỏ tới bằng `java -version`. Đảm bảo `JAVA_HOME` đang cấu hình tới JDK 21.
+
+### 4. Cổng mạng `8080` bị chiếm dụng
+- **Triệu chứng:** `Web server failed to start. Port 8080 was already in use`.
+- **Khắc phục:** Đóng ứng dụng đang dùng cổng 8080 hoặc bổ sung `server.port=8081` vào `backend/src/main/resources/application.properties`.
+
+### 5. Android Emulator không kết nối được Backend
+- **Triệu chứng:** Ứng dụng di động báo lỗi `Network request failed` hoặc không nạp được dữ liệu từ máy tính host.
+- **Khắc phục:** Đảm bảo Backend đang chạy. Trong code gọi API từ Android Emulator, dùng địa chỉ `http://10.0.2.2:8080` thay vì `http://localhost:8080`.
+
+---
+
+## 15. Lộ trình phát triển và các chức năng kế tiếp
+
+Lộ trình chuẩn hóa theo 10 giai đoạn của dự án GoPlant:
+
+- [x] **Giai đoạn 0:** Audit chỉ đọc hiện trạng repository và đối chiếu 2 báo cáo kỹ thuật.
+- [x] **Giai đoạn 1:** Tích hợp Frontend React Native + Expo SDK 57 vào nhánh `feature/integrate-frontend-report`; sửa lỗi TypeScript CSS declarations.
+- [x] **Giai đoạn 2:** Chuẩn hóa README, tài liệu môi trường phát triển Windows/VS Code và thiết lập GitHub Actions CI cho cả Frontend lẫn Backend.
+- [ ] **Giai đoạn 3:** Thiết kế mô hình dữ liệu (ERD 10 bảng), migration cơ sở dữ liệu PostgreSQL (Flyway) và đặc tả hợp đồng RESTful API / OpenAPI.
+- [ ] **Giai đoạn 4:** Xây dựng tầng Backend (Entity, Repository, Service, Controller) cho các phân hệ: Loài cây, Khu vườn, Cây cá nhân, Lịch chăm sóc và Nhật ký.
+- [ ] **Giai đoạn 5:** Cài đặt bảo mật Spring Security, mã hóa BCrypt, cơ chế JWT Token và kiểm soát quyền sở hữu dữ liệu cá nhân.
+- [ ] **Giai đoạn 6:** Kết nối Frontend Expo với Backend REST API; thay thế toàn bộ Mock Data bằng dữ liệu thực tế.
+- [ ] **Giai đoạn 7:** Kiểm thử tích hợp toàn diện trên Android Studio / Emulator và thiết bị thật.
+- [ ] **Giai đoạn 8:** Triển khai các tính năng mở rộng theo mức ưu tiên: Giám sát Camera, Mã QR (`plantCode`), Lưu trữ ảnh đám mây.
+- [ ] **Giai đoạn 9:** Hoàn thiện tổng kết, kiểm toán bảo mật, đóng gói bản phát hành và chuẩn bị báo cáo dự án.
+
+---
+
+## 16. Nhóm phát triển
+
+Dự án được thực hiện bởi nhóm sinh viên Khoa Công nghệ Thông tin — Trường Đại học CMC:
+
+1. **Vũ Minh Đức** (Nhóm trưởng) — Mã SV: BIT240066 — Lớp: 24IT-GM
+2. **Vũ Tuấn Đạt** — Mã SV: BIT240055 — Lớp: 24IT-GM
+3. **Hoàng Phúc Vinh** — Mã SV: BIT240255 — Lớp: 24IT-GM
+4. **Nguyễn Ngọc Tuấn Linh** — Mã SV: BIT240140 — Lớp: 24IT-GM
+
+**Giảng viên hướng dẫn:** ThS. Vũ Văn Tiệp
