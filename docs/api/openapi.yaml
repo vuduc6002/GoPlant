@@ -1,0 +1,2624 @@
+openapi: 3.0.3
+info:
+  title: GoPlant REST API Contract
+  version: 1.0.0
+  description: >
+    Tài liệu đặc tả RESTful API cho hệ thống Quản lý và Chăm sóc cây trồng GoPlant.
+    Phục vụ giao tiếp chuẩn hóa giữa Frontend React Native + Expo và Backend Spring Boot.
+servers:
+  - url: https://api.goplant.vn/api/v1
+    description: Production Server (Dự kiến)
+  - url: http://localhost:8080/api/v1
+    description: Local Development Server
+
+tags:
+  - name: Authentication
+    description: Đăng ký, đăng nhập và cấp phát JWT token
+  - name: Users
+    description: Quản lý hồ sơ và đổi mật khẩu người dùng hiện tại
+  - name: Species
+    description: Danh mục giống cây trồng chuẩn và danh sách yêu thích
+  - name: Gardens
+    description: Quản lý không gian vườn cá nhân
+  - name: Plants
+    description: Quản lý hồ sơ cây trồng cá nhân trong vườn
+  - name: Schedules
+    description: Lập lịch và cập nhật chu kỳ chăm sóc
+  - name: Care Logs
+    description: Nhật ký thực hiện công việc chăm sóc cây
+  - name: Growth Journals
+    description: Nhật ký theo dõi quá trình sinh trưởng và hình ảnh
+  - name: Admin Species
+    description: Quản trị danh mục giống cây (ROLE_ADMIN)
+  - name: Admin Users
+    description: Quản trị tài khoản người dùng (ROLE_ADMIN)
+  - name: Cameras
+    description: Thông tin thiết bị giám sát camera (Backlog)
+
+paths:
+  /auth/register:
+    post:
+      tags:
+        - Authentication
+      summary: Đăng ký tài khoản người dùng mới
+      operationId: registerUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Đăng ký thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterResponseWrapper'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+
+  /auth/login:
+    post:
+      tags:
+        - Authentication
+      summary: Đăng nhập hệ thống bằng email/SĐT và mật khẩu
+      operationId: loginUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Đăng nhập thành công, trả về JWT Access Token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponseWrapper'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+
+  /users/me:
+    get:
+      tags:
+        - Users
+      summary: Lấy thông tin hồ sơ của người dùng hiện tại
+      operationId: getCurrentUserProfile
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Lấy thông tin hồ sơ thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfileWrapper'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+    put:
+      tags:
+        - Users
+      summary: Cập nhật thông tin cá nhân
+      operationId: updateCurrentUserProfile
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProfileRequest'
+      responses:
+        '200':
+          description: Cập nhật hồ sơ thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfileWrapper'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+
+  /users/me/password:
+    put:
+      tags:
+        - Users
+      summary: Đổi mật khẩu tài khoản
+      operationId: changePassword
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        '200':
+          description: Đổi mật khẩu thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimpleMessageWrapper'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+
+  /species:
+    get:
+      tags:
+        - Species
+      summary: Tra cứu danh mục giống cây trồng (tìm kiếm, phân trang, lọc)
+      operationId: searchSpecies
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: keyword
+          in: query
+          description: Từ khóa tìm kiếm theo tên cây hoặc tên khoa học
+          required: false
+          schema:
+            type: string
+        - name: category
+          in: query
+          description: Lọc theo danh mục cây trồng (VD: Cây cảnh, Rau củ)
+          required: false
+          schema:
+            type: string
+        - name: page
+          in: query
+          description: Chỉ số trang (bắt đầu từ 0)
+          required: false
+          schema:
+            type: integer
+            default: 0
+        - name: size
+          in: query
+          description: Kích thước trang
+          required: false
+          schema:
+            type: integer
+            default: 20
+        - name: sort
+          in: query
+          description: Sắp xếp theo cột (VD: common_name,asc)
+          required: false
+          schema:
+            type: string
+            default: common_name,asc
+      responses:
+        '200':
+          description: Danh sách giống cây phân trang
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpeciesPageWrapper'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+
+  /species/{speciesId}:
+    get:
+      tags:
+        - Species
+      summary: Lấy chi tiết thông tin sinh học của một giống cây
+      operationId: getSpeciesDetail
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: speciesId
+          in: path
+          required: true
+          description: Định danh UUID của giống cây
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Chi tiết giống cây
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpeciesDetailWrapper'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /species/{speciesId}/favorite:
+    post:
+      tags:
+        - Species
+      summary: Đánh dấu yêu thích giống cây trồng
+      operationId: addFavoriteSpecies
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: speciesId
+          in: path
+          required: true
+          description: UUID giống cây cần yêu thích
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '201':
+          description: Đã thêm vào danh sách yêu thích
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimpleMessageWrapper'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+    delete:
+      tags:
+        - Species
+      summary: Bỏ đánh dấu yêu thích giống cây
+      operationId: removeFavoriteSpecies
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: speciesId
+          in: path
+          required: true
+          description: UUID giống cây cần bỏ yêu thích
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Đã bỏ khỏi danh sách yêu thích
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimpleMessageWrapper'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /species/favorites:
+    get:
+      tags:
+        - Species
+      summary: Lấy danh sách giống cây yêu thích của người dùng hiện tại
+      operationId: getFavoriteSpecies
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Danh sách phân trang giống cây yêu thích
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpeciesPageWrapper'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+
+  /gardens:
+    get:
+      tags:
+        - Gardens
+      summary: Lấy danh sách các khu vườn của người dùng
+      operationId: getMyGardens
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Danh sách khu vườn
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GardenListWrapper'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+    post:
+      tags:
+        - Gardens
+      summary: Tạo khu vườn mới
+      operationId: createGarden
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateGardenRequest'
+      responses:
+        '201':
+          description: Tạo khu vườn thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GardenDetailWrapper'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+
+  /gardens/{gardenId}:
+    get:
+      tags:
+        - Gardens
+      summary: Chi tiết khu vườn kèm danh sách cây trồng
+      operationId: getGardenDetail
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: gardenId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Chi tiết khu vườn
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GardenDetailWrapper'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    put:
+      tags:
+        - Gardens
+      summary: Cập nhật thông tin khu vườn
+      operationId: updateGarden
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: gardenId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateGardenRequest'
+      responses:
+        '200':
+          description: Cập nhật khu vườn thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GardenDetailWrapper'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    delete:
+      tags:
+        - Gardens
+      summary: Xóa khu vườn
+      operationId: deleteGarden
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: gardenId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Xóa khu vườn thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimpleMessageWrapper'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /gardens/{gardenId}/plants:
+    post:
+      tags:
+        - Plants
+      summary: Thêm cây trồng mới vào khu vườn
+      operationId: addPlantToGarden
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: gardenId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserPlantRequest'
+      responses:
+        '201':
+          description: Thêm cây thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPlantDetailWrapper'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /plants:
+    get:
+      tags:
+        - Plants
+      summary: Danh sách tất cả cây trồng của người dùng hiện tại
+      operationId: getMyPlants
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: keyword
+          in: query
+          schema:
+            type: string
+        - name: gardenId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: healthStatus
+          in: query
+          schema:
+            type: string
+            enum: [HEALTHY, NEEDS_ATTENTION, CRITICAL, UNKNOWN]
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Danh sách cây trồng phân trang
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPlantPageWrapper'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+
+  /plants/{plantId}:
+    get:
+      tags:
+        - Plants
+      summary: Lấy chi tiết một cây trồng cụ thể
+      operationId: getPlantDetail
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: plantId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Chi tiết cây trồng
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPlantDetailWrapper'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    put:
+      tags:
+        - Plants
+      summary: Cập nhật thông tin cây trồng
+      operationId: updatePlant
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: plantId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserPlantRequest'
+      responses:
+        '200':
+          description: Cập nhật thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPlantDetailWrapper'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    delete:
+      tags:
+        - Plants
+      summary: Xóa một cây trồng khỏi khu vườn
+      operationId: deletePlant
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: plantId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Xóa cây trồng thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimpleMessageWrapper'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /plants/{plantId}/schedules:
+    get:
+      tags:
+        - Schedules
+      summary: Danh sách lịch chăm sóc của một cây trồng
+      operationId: getPlantSchedules
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: plantId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [PENDING, COMPLETED, SKIPPED, PAUSED, CANCELLED]
+      responses:
+        '200':
+          description: Danh sách lịch chăm sóc
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CareScheduleListWrapper'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /plants/{plantId}/care-logs:
+    get:
+      tags:
+        - Care Logs
+      summary: Lịch sử hoạt động chăm sóc của một cây
+      operationId: getPlantCareLogs
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: plantId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Lịch sử chăm sóc phân trang
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CareLogPageWrapper'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /plants/{plantId}/journals:
+    get:
+      tags:
+        - Growth Journals
+      summary: Danh sách nhật ký phát triển của một cây
+      operationId: getPlantJournals
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: plantId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: size
+          in: query
+          schema:
+            type: integer
+            default: 10
+      responses:
+        '200':
+          description: Nhật ký phát triển phân trang
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GrowthJournalPageWrapper'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /schedules:
+    post:
+      tags:
+        - Schedules
+      summary: Tạo mới lịch chăm sóc cho cây
+      operationId: createSchedule
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateScheduleRequest'
+      responses:
+        '201':
+          description: Tạo lịch chăm sóc thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CareScheduleWrapper'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /schedules/today:
+    get:
+      tags:
+        - Schedules
+      summary: Danh sách lịch chăm sóc cần thực hiện trong ngày hôm nay
+      operationId: getTodaySchedules
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Danh sách lịch trong ngày
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TodayScheduleListWrapper'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+
+  /schedules/{scheduleId}:
+    put:
+      tags:
+        - Schedules
+      summary: Cập nhật thông tin lịch chăm sóc
+      operationId: updateSchedule
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: scheduleId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateScheduleRequest'
+      responses:
+        '200':
+          description: Cập nhật lịch thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CareScheduleWrapper'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    delete:
+      tags:
+        - Schedules
+      summary: Xóa lịch chăm sóc
+      operationId: deleteSchedule
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: scheduleId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Xóa lịch thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimpleMessageWrapper'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /schedules/{scheduleId}/complete:
+    post:
+      tags:
+        - Schedules
+      summary: Đánh dấu đã hoàn thành một lượt chăm sóc theo lịch
+      description: Ghi nhận care_log với trạng thái COMPLETED và tự động tính toán lượt chăm sóc kế tiếp.
+      operationId: completeSchedule
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: scheduleId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompleteCareRequest'
+      responses:
+        '201':
+          description: Ghi nhận hoàn thành thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompleteScheduleResponseWrapper'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /schedules/{scheduleId}/skip:
+    post:
+      tags:
+        - Schedules
+      summary: Đánh dấu bỏ qua một lượt chăm sóc theo lịch
+      operationId: skipSchedule
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: scheduleId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SkipCareRequest'
+      responses:
+        '201':
+          description: Bỏ qua thành công và chuyển sang chu kỳ kế tiếp
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompleteScheduleResponseWrapper'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /care-logs:
+    post:
+      tags:
+        - Care Logs
+      summary: Ghi nhận công việc chăm sóc thủ công (ad-hoc không theo lịch)
+      operationId: createCareLog
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCareLogRequest'
+      responses:
+        '201':
+          description: Tạo nhật ký chăm sóc thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CareLogDetailWrapper'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /journals:
+    post:
+      tags:
+        - Growth Journals
+      summary: Thêm một ghi nhận nhật ký phát triển cho cây
+      operationId: createGrowthJournal
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateGrowthJournalRequest'
+      responses:
+        '201':
+          description: Thêm ghi nhận nhật ký thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GrowthJournalDetailWrapper'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /journals/{journalId}:
+    put:
+      tags:
+        - Growth Journals
+      summary: Cập nhật nội dung ghi nhận nhật ký
+      operationId: updateGrowthJournal
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: journalId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateGrowthJournalRequest'
+      responses:
+        '200':
+          description: Cập nhật nhật ký thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GrowthJournalDetailWrapper'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    delete:
+      tags:
+        - Growth Journals
+      summary: Xóa một ghi nhận nhật ký
+      operationId: deleteGrowthJournal
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: journalId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Xóa nhật ký thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimpleMessageWrapper'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /admin/species:
+    get:
+      tags:
+        - Admin Species
+      summary: Xem toàn bộ danh mục giống cây (kể cả giống đang ẩn)
+      operationId: adminListSpecies
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Danh sách quản trị giống cây phân trang
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpeciesPageWrapper'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+    post:
+      tags:
+        - Admin Species
+      summary: Thêm mới một giống cây chuẩn vào hệ thống
+      operationId: adminCreateSpecies
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminCreateSpeciesRequest'
+      responses:
+        '201':
+          description: Thêm giống cây thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpeciesDetailWrapper'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+
+  /admin/species/{speciesId}:
+    put:
+      tags:
+        - Admin Species
+      summary: Cập nhật thông tin chi tiết một giống cây
+      operationId: adminUpdateSpecies
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: speciesId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminCreateSpeciesRequest'
+      responses:
+        '200':
+          description: Cập nhật giống cây thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpeciesDetailWrapper'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    delete:
+      tags:
+        - Admin Species
+      summary: Xóa một giống cây chuẩn khỏi hệ thống
+      operationId: adminDeleteSpecies
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: speciesId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Xóa giống cây thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimpleMessageWrapper'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+
+  /admin/users:
+    get:
+      tags:
+        - Admin Users
+      summary: Danh sách tài khoản người dùng
+      operationId: adminListUsers
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: keyword
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [ACTIVE, INACTIVE, BANNED]
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Danh sách người dùng phân trang
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminUserPageWrapper'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+
+  /admin/users/{userId}:
+    get:
+      tags:
+        - Admin Users
+      summary: Xem hồ sơ chi tiết một người dùng
+      operationId: adminGetUserDetail
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Chi tiết người dùng
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminUserDetailWrapper'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /admin/users/{userId}/status:
+    patch:
+      tags:
+        - Admin Users
+      summary: Cập nhật trạng thái tài khoản (Kích hoạt / Khóa / Mở khóa)
+      operationId: adminUpdateUserStatus
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserStatusRequest'
+      responses:
+        '200':
+          description: Cập nhật trạng thái người dùng thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimpleMessageWrapper'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /gardens/{gardenId}/cameras:
+    get:
+      tags:
+        - Cameras
+      summary: Lấy danh sách camera giám sát trong khu vườn (Backlog)
+      operationId: getGardenCameras
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: gardenId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Danh sách camera
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CameraListWrapper'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    post:
+      tags:
+        - Cameras
+      summary: Thêm thông tin camera vào khu vườn (Backlog)
+      operationId: addCameraToGarden
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: gardenId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCameraRequest'
+      responses:
+        '201':
+          description: Thêm camera thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CameraDetailWrapper'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+
+  /cameras/{cameraId}:
+    put:
+      tags:
+        - Cameras
+      summary: Cập nhật thông tin camera (Backlog)
+      operationId: updateCamera
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: cameraId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCameraRequest'
+      responses:
+        '200':
+          description: Cập nhật thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CameraDetailWrapper'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    delete:
+      tags:
+        - Cameras
+      summary: Xóa camera (Backlog)
+      operationId: deleteCamera
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: cameraId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Xóa thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimpleMessageWrapper'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Gửi kèm JWT token dưới dạng `Bearer <token>` trong header `Authorization`
+
+  responses:
+    400BadRequest:
+      description: Dữ liệu gửi lên không hợp lệ hoặc thiếu trường bắt buộc
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error:
+              code: VALIDATION_ERROR
+              message: Dữ liệu đầu vào không hợp lệ
+              field: email
+            timestamp: '2026-10-31T09:00:00Z'
+
+    401Unauthorized:
+      description: Chưa đăng nhập hoặc token đã hết hạn
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error:
+              code: UNAUTHORIZED
+              message: Phiên đăng nhập đã hết hạn hoặc token không hợp lệ
+            timestamp: '2026-10-31T09:00:00Z'
+
+    403Forbidden:
+      description: Người dùng không có quyền truy cập tài nguyên này
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error:
+              code: FORBIDDEN
+              message: Bạn không có quyền thao tác trên tài nguyên này
+            timestamp: '2026-10-31T09:00:00Z'
+
+    404NotFound:
+      description: Không tìm thấy tài nguyên theo ID yêu cầu
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error:
+              code: RESOURCE_NOT_FOUND
+              message: Không tìm thấy tài nguyên với định danh đã cung cấp
+            timestamp: '2026-10-31T09:00:00Z'
+
+    409Conflict:
+      description: Xung đột tài nguyên (VD email đã tồn tại, tên trùng lặp)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error:
+              code: CONFLICT
+              message: Email hoặc số điện thoại đã tồn tại trong hệ thống
+            timestamp: '2026-10-31T09:00:00Z'
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required:
+        - success
+        - error
+        - timestamp
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: object
+          required:
+            - code
+            - message
+          properties:
+            code:
+              type: string
+              example: VALIDATION_ERROR
+            message:
+              type: string
+              example: Trường họ và tên không được để trống
+            field:
+              type: string
+              nullable: true
+              example: fullName
+        timestamp:
+          type: string
+          format: date-time
+          example: '2026-10-31T09:00:00Z'
+
+    SimpleMessageWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            message:
+              type: string
+              example: Thao tác thực hiện thành công.
+
+    RegisterRequest:
+      type: object
+      required:
+        - fullName
+        - account
+        - password
+      properties:
+        fullName:
+          type: string
+          example: Nguyễn Văn An
+        account:
+          type: string
+          description: Địa chỉ email hoặc số điện thoại đăng nhập
+          example: nguyenvanan@gmail.com
+        recoveryEmail:
+          type: string
+          format: email
+          nullable: true
+          example: recovery@gmail.com
+        password:
+          type: string
+          format: password
+          minLength: 8
+          example: SecretPass123!
+        preferredDevice:
+          type: string
+          enum: [MOBILE, PC]
+          default: MOBILE
+
+    RegisterResponseWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            userId:
+              type: string
+              format: uuid
+              example: 550e8400-e29b-41d4-a716-446655440000
+            fullName:
+              type: string
+              example: Nguyễn Văn An
+            message:
+              type: string
+              example: Tài khoản đã được tạo thành công.
+
+    LoginRequest:
+      type: object
+      required:
+        - account
+        - password
+      properties:
+        account:
+          type: string
+          example: nguyenvanan@gmail.com
+        password:
+          type: string
+          format: password
+          example: SecretPass123!
+
+    LoginResponseWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            accessToken:
+              type: string
+              example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+            tokenType:
+              type: string
+              example: Bearer
+            expiresIn:
+              type: integer
+              example: 86400
+            user:
+              type: object
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                fullName:
+                  type: string
+                email:
+                  type: string
+                roles:
+                  type: array
+                  items:
+                    type: string
+                  example: [ROLE_USER]
+
+    UpdateProfileRequest:
+      type: object
+      properties:
+        fullName:
+          type: string
+          example: Nguyễn Văn An
+        recoveryEmail:
+          type: string
+          format: email
+          example: recovery@gmail.com
+        preferredDevice:
+          type: string
+          enum: [MOBILE, PC]
+        avatarUrl:
+          type: string
+          nullable: true
+
+    ChangePasswordRequest:
+      type: object
+      required:
+        - currentPassword
+        - newPassword
+        - confirmPassword
+      properties:
+        currentPassword:
+          type: string
+          format: password
+        newPassword:
+          type: string
+          format: password
+          minLength: 8
+        confirmPassword:
+          type: string
+          format: password
+
+    UserProfileWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/UserProfile'
+
+    UserProfile:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        fullName:
+          type: string
+        email:
+          type: string
+          nullable: true
+        phoneNumber:
+          type: string
+          nullable: true
+        recoveryEmail:
+          type: string
+          nullable: true
+        preferredDevice:
+          type: string
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE, BANNED]
+        avatarUrl:
+          type: string
+          nullable: true
+        roles:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    SpeciesSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        commonName:
+          type: string
+          example: Trầu bà lá xẻ
+        scientificName:
+          type: string
+          example: Monstera deliciosa
+        category:
+          type: string
+          example: Cây cảnh
+        difficulty:
+          type: string
+          example: Dễ
+        thumbnailUrl:
+          type: string
+          nullable: true
+        isFavorited:
+          type: boolean
+          example: false
+
+    SpeciesDetail:
+      allOf:
+        - $ref: '#/components/schemas/SpeciesSummary'
+        - type: object
+          properties:
+            lightRequirement:
+              type: string
+            waterRequirement:
+              type: string
+            environment:
+              type: string
+            spaceRequirement:
+              type: string
+            matureSize:
+              type: string
+            temperatureRange:
+              type: string
+            humidityRange:
+              type: string
+            growingMedium:
+              type: string
+            drainage:
+              type: string
+            soilPh:
+              type: string
+            sunTolerance:
+              type: string
+            origin:
+              type: string
+            overview:
+              type: string
+            morphology:
+              type: string
+            lifespan:
+              type: string
+            floweringSeason:
+              type: string
+            usageAndCaution:
+              type: string
+            growthRate:
+              type: string
+            wateringFrequency:
+              type: string
+            nutrition:
+              type: string
+            isActive:
+              type: boolean
+
+    SpeciesDetailWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/SpeciesDetail'
+
+    SpeciesPageWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            content:
+              type: array
+              items:
+                $ref: '#/components/schemas/SpeciesSummary'
+            page:
+              type: integer
+            size:
+              type: integer
+            totalElements:
+              type: integer
+            totalPages:
+              type: integer
+            last:
+              type: boolean
+
+    CreateGardenRequest:
+      type: object
+      required:
+        - name
+        - location
+      properties:
+        name:
+          type: string
+          example: Ban Công Tầng 3
+        location:
+          type: string
+          example: Căn hộ 302, Tòa Thảo Mộc
+        spaceType:
+          type: string
+          enum: [BAN_CONG, SAN_THUONG, TRONG_NHA, SAN_VUON, KHAC]
+          default: BAN_CONG
+        description:
+          type: string
+          nullable: true
+        coverImageUrl:
+          type: string
+          nullable: true
+
+    UpdateGardenRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        location:
+          type: string
+        spaceType:
+          type: string
+          enum: [BAN_CONG, SAN_THUONG, TRONG_NHA, SAN_VUON, KHAC]
+        description:
+          type: string
+        coverImageUrl:
+          type: string
+
+    GardenSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        location:
+          type: string
+        spaceType:
+          type: string
+        coverImageUrl:
+          type: string
+          nullable: true
+        plantCount:
+          type: integer
+          example: 4
+        createdAt:
+          type: string
+          format: date-time
+
+    GardenDetail:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        location:
+          type: string
+        spaceType:
+          type: string
+        description:
+          type: string
+          nullable: true
+        coverImageUrl:
+          type: string
+          nullable: true
+        plants:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserPlantSummary'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    GardenListWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/GardenSummary'
+
+    GardenDetailWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/GardenDetail'
+
+    CreateUserPlantRequest:
+      type: object
+      required:
+        - speciesId
+        - displayName
+      properties:
+        speciesId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+          example: Cà Chua Cherry của tôi
+        location:
+          type: string
+          example: Ban công
+        plantedAt:
+          type: string
+          format: date
+          example: '2026-09-01'
+        note:
+          type: string
+          nullable: true
+        imageUrl:
+          type: string
+          nullable: true
+
+    UpdateUserPlantRequest:
+      type: object
+      properties:
+        displayName:
+          type: string
+        location:
+          type: string
+        plantedAt:
+          type: string
+          format: date
+        note:
+          type: string
+        healthStatus:
+          type: string
+          enum: [HEALTHY, NEEDS_ATTENTION, CRITICAL, UNKNOWN]
+        imageUrl:
+          type: string
+
+    UserPlantSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+        speciesName:
+          type: string
+        scientificName:
+          type: string
+        category:
+          type: string
+        healthStatus:
+          type: string
+          enum: [HEALTHY, NEEDS_ATTENTION, CRITICAL, UNKNOWN]
+        imageUrl:
+          type: string
+          nullable: true
+
+    UserPlantDetail:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+        location:
+          type: string
+          nullable: true
+        plantedAt:
+          type: string
+          format: date
+          nullable: true
+        note:
+          type: string
+          nullable: true
+        healthStatus:
+          type: string
+          enum: [HEALTHY, NEEDS_ATTENTION, CRITICAL, UNKNOWN]
+        plantCode:
+          type: string
+          nullable: true
+        imageUrl:
+          type: string
+          nullable: true
+        species:
+          $ref: '#/components/schemas/SpeciesSummary'
+        garden:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    UserPlantDetailWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/UserPlantDetail'
+
+    UserPlantPageWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            content:
+              type: array
+              items:
+                $ref: '#/components/schemas/UserPlantSummary'
+            page:
+              type: integer
+            size:
+              type: integer
+            totalElements:
+              type: integer
+            totalPages:
+              type: integer
+            last:
+              type: boolean
+
+    CreateScheduleRequest:
+      type: object
+      required:
+        - userPlantId
+        - taskType
+        - frequency
+        - startDate
+      properties:
+        userPlantId:
+          type: string
+          format: uuid
+        taskType:
+          type: string
+          enum: [WATERING, FERTILIZING, PRUNING, PEST_CHECK, MISTING, JOURNAL]
+        taskLabel:
+          type: string
+          nullable: true
+        frequency:
+          type: string
+          enum: [ONCE, DAILY, EVERY_OTHER_DAY, WEEKLY, CUSTOM]
+        intervalDays:
+          type: integer
+          nullable: true
+        reminderTime:
+          type: string
+          example: '08:00:00'
+        startDate:
+          type: string
+          format: date
+          example: '2026-10-31'
+        endDate:
+          type: string
+          format: date
+          nullable: true
+
+    UpdateScheduleRequest:
+      type: object
+      properties:
+        taskType:
+          type: string
+          enum: [WATERING, FERTILIZING, PRUNING, PEST_CHECK, MISTING, JOURNAL]
+        taskLabel:
+          type: string
+        frequency:
+          type: string
+          enum: [ONCE, DAILY, EVERY_OTHER_DAY, WEEKLY, CUSTOM]
+        intervalDays:
+          type: integer
+        reminderTime:
+          type: string
+        startDate:
+          type: string
+          format: date
+        endDate:
+          type: string
+          format: date
+        status:
+          type: string
+          enum: [PENDING, COMPLETED, SKIPPED, PAUSED, CANCELLED]
+
+    CareSchedule:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        userPlantId:
+          type: string
+          format: uuid
+        plantName:
+          type: string
+        taskType:
+          type: string
+        taskLabel:
+          type: string
+          nullable: true
+        frequency:
+          type: string
+        intervalDays:
+          type: integer
+          nullable: true
+        reminderTime:
+          type: string
+          nullable: true
+        startDate:
+          type: string
+          format: date
+        endDate:
+          type: string
+          format: date
+          nullable: true
+        nextScheduledAt:
+          type: string
+          format: date-time
+        isOverdue:
+          type: boolean
+          example: false
+        status:
+          type: string
+          enum: [PENDING, COMPLETED, SKIPPED, PAUSED, CANCELLED]
+
+    CareScheduleWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/CareSchedule'
+
+    CareScheduleListWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/CareSchedule'
+
+    TodayScheduleItem:
+      type: object
+      properties:
+        scheduleId:
+          type: string
+          format: uuid
+        plantId:
+          type: string
+          format: uuid
+        plantName:
+          type: string
+        gardenName:
+          type: string
+        taskType:
+          type: string
+        taskLabel:
+          type: string
+          nullable: true
+        nextScheduledAt:
+          type: string
+          format: date-time
+        isOverdue:
+          type: boolean
+        status:
+          type: string
+
+    TodayScheduleListWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/TodayScheduleItem'
+
+    CompleteCareRequest:
+      type: object
+      properties:
+        note:
+          type: string
+          example: Đã tưới ẩm đều đất quanh gốc.
+        imageUrls:
+          type: array
+          items:
+            type: string
+
+    SkipCareRequest:
+      type: object
+      properties:
+        note:
+          type: string
+          example: Đất còn ẩm do trời mưa.
+
+    CompleteScheduleResponseWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            careLogId:
+              type: string
+              format: uuid
+            scheduleStatus:
+              type: string
+            nextScheduledAt:
+              type: string
+              format: date-time
+
+    CreateCareLogRequest:
+      type: object
+      required:
+        - userPlantId
+        - taskType
+      properties:
+        userPlantId:
+          type: string
+          format: uuid
+        taskType:
+          type: string
+        note:
+          type: string
+        imageUrls:
+          type: array
+          items:
+            type: string
+        performedAt:
+          type: string
+          format: date-time
+
+    CareLog:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        userPlantId:
+          type: string
+          format: uuid
+        taskType:
+          type: string
+        status:
+          type: string
+          enum: [COMPLETED, SKIPPED]
+        note:
+          type: string
+          nullable: true
+        imageUrls:
+          type: array
+          items:
+            type: string
+        performedAt:
+          type: string
+          format: date-time
+
+    CareLogDetailWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/CareLog'
+
+    CareLogPageWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            content:
+              type: array
+              items:
+                $ref: '#/components/schemas/CareLog'
+            page:
+              type: integer
+            size:
+              type: integer
+            totalElements:
+              type: integer
+            totalPages:
+              type: integer
+            last:
+              type: boolean
+
+    CreateGrowthJournalRequest:
+      type: object
+      required:
+        - userPlantId
+        - note
+      properties:
+        userPlantId:
+          type: string
+          format: uuid
+        entryType:
+          type: string
+          enum: [GROWTH, WATERING, FERTILIZING, PEST, OTHER]
+          default: GROWTH
+        healthStatus:
+          type: string
+          enum: [HEALTHY, NEEDS_ATTENTION, CRITICAL]
+          default: HEALTHY
+        note:
+          type: string
+          example: Cây ra chồi mới khỏe khoắn, không có sâu bệnh.
+        imageUrls:
+          type: array
+          items:
+            type: string
+        recordedAt:
+          type: string
+          format: date-time
+
+    UpdateGrowthJournalRequest:
+      type: object
+      properties:
+        entryType:
+          type: string
+          enum: [GROWTH, WATERING, FERTILIZING, PEST, OTHER]
+        healthStatus:
+          type: string
+          enum: [HEALTHY, NEEDS_ATTENTION, CRITICAL]
+        note:
+          type: string
+        imageUrls:
+          type: array
+          items:
+            type: string
+
+    GrowthJournal:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        userPlantId:
+          type: string
+          format: uuid
+        entryType:
+          type: string
+        healthStatus:
+          type: string
+        note:
+          type: string
+        imageUrls:
+          type: array
+          items:
+            type: string
+        recordedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+
+    GrowthJournalDetailWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/GrowthJournal'
+
+    GrowthJournalPageWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            content:
+              type: array
+              items:
+                $ref: '#/components/schemas/GrowthJournal'
+            page:
+              type: integer
+            size:
+              type: integer
+            totalElements:
+              type: integer
+            totalPages:
+              type: integer
+            last:
+              type: boolean
+
+    AdminCreateSpeciesRequest:
+      type: object
+      required:
+        - commonName
+        - scientificName
+        - category
+      properties:
+        commonName:
+          type: string
+        scientificName:
+          type: string
+        category:
+          type: string
+        difficulty:
+          type: string
+        lightRequirement:
+          type: string
+        waterRequirement:
+          type: string
+        environment:
+          type: string
+        spaceRequirement:
+          type: string
+        matureSize:
+          type: string
+        temperatureRange:
+          type: string
+        humidityRange:
+          type: string
+        growingMedium:
+          type: string
+        drainage:
+          type: string
+        soilPh:
+          type: string
+        sunTolerance:
+          type: string
+        origin:
+          type: string
+        overview:
+          type: string
+        morphology:
+          type: string
+        lifespan:
+          type: string
+        floweringSeason:
+          type: string
+        usageAndCaution:
+          type: string
+        growthRate:
+          type: string
+        wateringFrequency:
+          type: string
+        nutrition:
+          type: string
+        thumbnailUrl:
+          type: string
+        isActive:
+          type: boolean
+          default: true
+
+    AdminUserItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        fullName:
+          type: string
+        email:
+          type: string
+          nullable: true
+        phoneNumber:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE, BANNED]
+        roles:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    AdminUserPageWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            content:
+              type: array
+              items:
+                $ref: '#/components/schemas/AdminUserItem'
+            page:
+              type: integer
+            size:
+              type: integer
+            totalElements:
+              type: integer
+            totalPages:
+              type: integer
+            last:
+              type: boolean
+
+    AdminUserDetailWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/UserProfile'
+
+    UpdateUserStatusRequest:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE, BANNED]
+        reason:
+          type: string
+          nullable: true
+
+    CreateCameraRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          example: Camera Ban Công Đông
+        locationDesc:
+          type: string
+          example: Góc tường hướng Tây Nam nhìn toàn cảnh ban công
+        connectionNote:
+          type: string
+          nullable: true
+
+    UpdateCameraRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        locationDesc:
+          type: string
+        status:
+          type: string
+          enum: [ONLINE, OFFLINE, ERROR]
+        connectionNote:
+          type: string
+
+    CameraItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        gardenId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        locationDesc:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [ONLINE, OFFLINE, ERROR]
+        createdAt:
+          type: string
+          format: date-time
+
+    CameraListWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/CameraItem'
+
+    CameraDetailWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/CameraItem'
