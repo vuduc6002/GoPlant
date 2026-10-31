@@ -1,0 +1,162 @@
+erDiagram
+    users {
+        UUID id PK
+        VARCHAR full_name
+        VARCHAR email
+        VARCHAR phone_number
+        VARCHAR recovery_email
+        VARCHAR password_hash
+        VARCHAR preferred_device
+        VARCHAR status
+        TEXT avatar_url
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+    }
+
+    roles {
+        UUID id PK
+        VARCHAR name
+    }
+
+    user_roles {
+        UUID user_id FK
+        UUID role_id FK
+    }
+
+    plant_species {
+        UUID id PK
+        VARCHAR common_name
+        VARCHAR scientific_name
+        VARCHAR category
+        VARCHAR difficulty
+        TEXT light_requirement
+        TEXT water_requirement
+        TEXT environment
+        TEXT space_requirement
+        VARCHAR mature_size
+        VARCHAR temperature_range
+        VARCHAR humidity_range
+        TEXT growing_medium
+        VARCHAR drainage
+        VARCHAR soil_ph
+        VARCHAR sun_tolerance
+        TEXT origin
+        TEXT overview
+        TEXT morphology
+        VARCHAR lifespan
+        VARCHAR flowering_season
+        TEXT usage_and_caution
+        VARCHAR growth_rate
+        VARCHAR watering_frequency
+        TEXT nutrition
+        TEXT thumbnail_url
+        BOOLEAN is_active
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+    }
+
+    user_favorite_species {
+        UUID user_id FK
+        UUID species_id FK
+        TIMESTAMPTZ created_at
+    }
+
+    gardens {
+        UUID id PK
+        UUID owner_id FK
+        VARCHAR name
+        TEXT location
+        VARCHAR space_type
+        TEXT description
+        TEXT cover_image_url
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+    }
+
+    user_plants {
+        UUID id PK
+        UUID owner_id FK
+        UUID garden_id FK
+        UUID species_id FK
+        VARCHAR display_name
+        VARCHAR location
+        DATE planted_at
+        TEXT note
+        VARCHAR health_status
+        VARCHAR plant_code
+        TEXT image_url
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+    }
+
+    care_schedules {
+        UUID id PK
+        UUID user_plant_id FK
+        UUID owner_id FK
+        VARCHAR task_type
+        VARCHAR task_label
+        VARCHAR frequency
+        INTEGER interval_days
+        TIME reminder_time
+        DATE start_date
+        DATE end_date
+        TIMESTAMPTZ next_scheduled_at
+        VARCHAR status
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+    }
+
+    care_logs {
+        UUID id PK
+        UUID user_plant_id FK
+        UUID schedule_id FK
+        UUID performed_by FK
+        VARCHAR task_type
+        VARCHAR status
+        TEXT note
+        TEXT_ARRAY image_urls
+        TIMESTAMPTZ performed_at
+        TIMESTAMPTZ created_at
+    }
+
+    growth_journals {
+        UUID id PK
+        UUID user_plant_id FK
+        UUID author_id FK
+        VARCHAR entry_type
+        VARCHAR health_status
+        TEXT note
+        TEXT_ARRAY image_urls
+        TIMESTAMPTZ recorded_at
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+    }
+
+    cameras {
+        UUID id PK
+        UUID garden_id FK
+        UUID owner_id FK
+        VARCHAR name
+        TEXT location_desc
+        VARCHAR status
+        TEXT connection_note
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+    }
+
+    users ||--o{ user_roles : "có vai trò"
+    roles ||--o{ user_roles : "được gán cho"
+    users ||--o{ gardens : "sở hữu"
+    users ||--o{ user_plants : "sở hữu"
+    users ||--o{ user_favorite_species : "yêu thích"
+    plant_species ||--o{ user_favorite_species : "được yêu thích"
+    gardens ||--o{ user_plants : "chứa"
+    gardens ||--o{ cameras : "có camera (Backlog)"
+    plant_species ||--o{ user_plants : "thuộc giống"
+    user_plants ||--o{ care_schedules : "có lịch chăm sóc"
+    user_plants ||--o{ care_logs : "có nhật ký chăm sóc"
+    user_plants ||--o{ growth_journals : "có nhật ký phát triển"
+    care_schedules ||--o{ care_logs : "tạo ra (nullable)"
+    users ||--o{ care_logs : "thực hiện bởi"
+    users ||--o{ growth_journals : "viết bởi"
+    users ||--o{ cameras : "quản lý (Backlog)"
