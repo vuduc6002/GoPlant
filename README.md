@@ -4,10 +4,11 @@ GoPlant là giải pháp ứng dụng di động hỗ trợ người dùng số 
 
 Kiến trúc mục tiêu của dự án là **Ứng dụng di động React Native + Expo (Android) kết nối qua RESTful API với Backend Spring Boot và cơ sở dữ liệu Supabase PostgreSQL**.
 
-> **Trạng thái phát triển hiện tại (Giai đoạn 2):**
-> - **Frontend:** Đã tích hợp hoàn chỉnh mã nguồn giao diện trong thư mục `frontend/` sử dụng **React Native (v0.86.3) + Expo SDK 57 (Managed Workflow) + Expo Router**. Toàn bộ 11 phân hệ màn hình và điều hướng đã sẵn sàng. Dữ liệu tài khoản hiện dùng mock (`mockAuth.ts`) và dữ liệu cây/vườn được quản lý in-memory (`PlantDataStore.tsx`).
-> - **Backend:** Khung ứng dụng Java 21 + Spring Boot 4.1.1 nằm trong `backend/` đang chạy với cấu hình H2 in-memory cục bộ; đã chuẩn bị sẵn profile kết nối Supabase PostgreSQL qua biến môi trường. Các Entity, Repository, Service và Controller REST API nghiệp vụ sẽ được xây dựng ở các giai đoạn tiếp theo.
-> - **Camera & AI:** Camera trong thiết kế phục vụ chụp ảnh nhật ký và giám sát; dự án **không** triển khai AI tự chẩn đoán bệnh cây.
+> **Trạng thái phát triển hiện tại (Giai đoạn 4):**
+> - **Frontend:** Đã tích hợp hoàn chỉnh mã nguồn giao diện trong thư mục `frontend/` sử dụng **React Native (v0.86.3) + Expo SDK 57 (Managed Workflow) + Expo Router**. Toàn bộ 11 phân hệ màn hình và điều hướng đã sẵn sàng.
+> - **Backend:** Đã hoàn thành triển khai Backend Java 21 + Spring Boot 4.1.1 trong `backend/` với **19 RESTful API ưu tiên** (Auth, Users, Species, Favorites, Gardens, Admin Species), bảo mật JWT + BCrypt, phân quyền `ROLE_USER`/`ROLE_ADMIN`, bảo vệ toàn vẹn sở hữu dữ liệu (Data Ownership Security) và tích hợp Flyway Database Migration. 28/28 Unit & Integration Tests đạt 100% Pass.
+> - **Cơ sở dữ liệu:** Thiết kế chuẩn hóa 11 bảng, sơ đồ ERD, Migration PostgreSQL V1 tích hợp trong `backend/src/main/resources/db/migration/`. Hỗ trợ H2 local in-memory, PostgreSQL local và Supabase PostgreSQL.
+> - **Hướng dẫn chi tiết:** Xem thêm tại [docs/backend/backend-setup-guide.md](docs/backend/backend-setup-guide.md).
 
 ---
 
@@ -51,18 +52,21 @@ Bảng ma trận đối soát hiện trạng triển khai giữa Frontend, Backe
 | Phân hệ nghiệp vụ | Chức năng trong thiết kế | Trạng thái Frontend | Trạng thái Backend & Database |
 |:---|:---|:---:|:---:|
 | **Chào mừng (Welcome)** | Giới thiệu app, điều hướng bắt đầu | Đã hoàn thành UI (`WelcomeScreen.tsx`) | Không yêu cầu API |
-| **Xác thực tài khoản** | Đăng ký, đăng nhập | Đã có UI (`AuthScreens.tsx`); dùng Mock Auth (`mockAuth.ts`) | Chưa có API; chưa triển khai JWT / BCrypt |
+| **Xác thực tài khoản** | Đăng ký, đăng nhập | Đã có UI (`AuthScreens.tsx`); dùng Mock Auth (`mockAuth.ts`) | **Hoàn thành API:** `POST /api/v1/auth/register`, `POST /api/v1/auth/login` (JWT, BCrypt) |
+| **Hồ sơ người dùng** | Xem hồ sơ, sửa thông tin, đổi mật khẩu | Đã có UI Profile | **Hoàn thành API:** `GET/PUT /api/v1/users/me`, `PUT /api/v1/users/me/password` |
 | **Trang chủ (Dashboard)** | Xem tổng quan vườn, việc cần làm, thời tiết | Đã có UI (`HomeScreen.tsx`); dữ liệu mô phỏng | Chưa có API tổng hợp |
-| **Khám phá cây** | Danh mục loài cây, tìm kiếm, lọc đa tiêu chí | Đã có UI (`SearchScreens.tsx`); danh mục mẫu tĩnh | Chưa có API (`/api/v1/species`) |
-| **Chi tiết loài cây** | Thông tin sinh học, đặc điểm, nhu cầu chăm sóc | Đã có UI (`PlantDetailScreen.tsx`) | Chưa có API |
-| **Quản lý khu vườn** | Tạo mới, xem chi tiết, sửa, xóa khu vườn | Đã có UI (`GardenScreens.tsx`); lưu tạm trong state | Chưa có API (`/api/v1/gardens`) |
-| **Quản lý cây sở hữu** | Thêm cây vào vườn, sửa vị trí, ghi chú, xóa | Đã có UI; lưu trong React Context (`PlantDataStore.tsx`) | Chưa có API (`/api/v1/plants`) |
-| **Lập lịch chăm sóc** | Tạo lịch tưới/bón/tỉa, chu kỳ lặp, xem lịch | Đã có UI (`ScheduleScreens.tsx`); giao diện mẫu | Chưa có API (`/api/v1/schedules`) |
-| **Nhật ký chăm sóc** | Đánh dấu hoàn thành việc, lưu lịch sử chăm sóc | Đã có UI (`JournalScreens.tsx`); giao diện mẫu | Chưa có API (`/api/v1/care-logs`) |
-| **Nhật ký phát triển** | Ghi nhận tiến trình lớn lên, tình trạng sức khỏe | Đã có UI (`JournalDetailScreen.tsx`); giao diện mẫu | Chưa có API (`/api/v1/journals`) |
-| **Chỉ số sinh trưởng** | Biểu đồ môi trường, độ ẩm đất, nhiệt độ | Đã có UI (`MonitoringDetailScreen.tsx`); chỉ số mô phỏng | Chưa có API |
-| **Mã định danh (QR)** | Sinh mã `plantCode` mở nhanh hồ sơ cây | Đang trong kế hoạch mở rộng (Backlog) | Chưa có API |
-| **Camera giám sát** | Xem ảnh chụp thực tế vị trí trồng cây | Nút bấm placeholder UI; chưa kích hoạt camera | Chưa có API |
+| **Khám phá cây** | Danh mục loài cây, tìm kiếm, lọc đa tiêu chí | Đã có UI (`SearchScreens.tsx`) | **Hoàn thành API:** `GET /api/v1/species` (tìm kiếm, lọc, phân trang) |
+| **Chi tiết loài cây** | Thông tin sinh học, đặc điểm, nhu cầu chăm sóc | Đã có UI (`PlantDetailScreen.tsx`) | **Hoàn thành API:** `GET /api/v1/species/{id}` |
+| **Cây yêu thích** | Thêm, bỏ, xem danh sách giống yêu thích | Đã có UI | **Hoàn thành API:** `POST/DELETE /api/v1/species/{id}/favorite`, `GET /api/v1/species/favorites` |
+| **Quản lý khu vườn** | Tạo mới, xem chi tiết, sửa, xóa khu vườn | Đã có UI (`GardenScreens.tsx`) | **Hoàn thành API:** `GET/POST /api/v1/gardens`, `GET/PUT/DELETE /api/v1/gardens/{id}` |
+| **Quản lý cây sở hữu** | Thêm cây vào vườn, sửa vị trí, ghi chú, xóa | Đã có UI; lưu trong React Context (`PlantDataStore.tsx`) | Entity & Repository đã sẵn sàng (API Giai đoạn 5) |
+| **Lập lịch chăm sóc** | Tạo lịch tưới/bón/tỉa, chu kỳ lặp, xem lịch | Đã có UI (`ScheduleScreens.tsx`); giao diện mẫu | Entity & Repository đã sẵn sàng (API Giai đoạn 5) |
+| **Nhật ký chăm sóc** | Đánh dấu hoàn thành việc, lưu lịch sử chăm sóc | Đã có UI (`JournalScreens.tsx`); giao diện mẫu | Entity & Repository đã sẵn sàng (API Giai đoạn 5) |
+| **Nhật ký phát triển** | Ghi nhận tiến trình lớn lên, tình trạng sức khỏe | Đã có UI (`JournalDetailScreen.tsx`); giao diện mẫu | Entity & Repository đã sẵn sàng (API Giai đoạn 5) |
+| **Admin Quản trị cây** | Thêm, sửa, xóa giống cây trong danh mục | UI quản trị Backlog | **Hoàn thành API:** `GET/POST /api/v1/admin/species`, `PUT/DELETE /api/v1/admin/species/{id}` |
+| **Chỉ số sinh trưởng** | Biểu đồ môi trường, độ ẩm đất, nhiệt độ | Đã có UI (`MonitoringDetailScreen.tsx`) | Chưa có API |
+| **Mã định danh (QR)** | Sinh mã `plantCode` mở nhanh hồ sơ cây | Đang trong kế hoạch mở rộng (Backlog) | Schema đã hỗ trợ |
+| **Camera giám sát** | Xem ảnh chụp thực tế vị trí trồng cây | Nút bấm placeholder UI (Backlog) | Schema bảng `cameras` đã thiết kế |
 
 ---
 
