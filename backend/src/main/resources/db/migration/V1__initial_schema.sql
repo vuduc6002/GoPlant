@@ -2,11 +2,8 @@
 -- GoPlant - Database Migration V1: Initial Schema (PostgreSQL)
 -- File: V1__initial_schema.sql
 -- Compatibility: PostgreSQL 14+, Supabase PostgreSQL, Flyway 10+
--- 
--- CAUTION / CẢNH BÁO:
--- BẢN THẢO THIẾT KẾ (DRAFT) - ĐẶC TẢ GIAI ĐOẠN 3.1.
--- KHÔNG ĐƯỢC TỰ ĐỘNG CHẠY FILE NÀY TRỰC TIẾP TRÊN CƠ SỞ DỮ LIỆU SUPABASE PRODUCTION
--- HOẶC DATABASE THẬT KHI CHƯA CÓ SỰ PHÊ DUYỆT CỦA ARCHITECT VÀ TEAM LEADER.
+-- Status: Official Initial Schema (Giai đoạn 4)
+-- Description: Khởi tạo 11 bảng, khóa ngoại, indexes và seed data chuẩn.
 -- ==============================================================================
 
 -- 1. EXTENSIONS

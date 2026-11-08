@@ -33,7 +33,7 @@ public class GrowthJournal {
     @Column(name = "note", nullable = false, columnDefinition = "TEXT")
     private String note;
 
-    @Column(name = "image_urls", columnDefinition = "text[]")
+    @Column(name = "image_urls")
     private String[] imageUrls;
 
     @Column(name = "recorded_at", nullable = false)

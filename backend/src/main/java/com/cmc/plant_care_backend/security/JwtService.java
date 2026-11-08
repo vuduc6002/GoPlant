@@ -14,7 +14,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.stereotype.Service;
 
-import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -22,9 +21,7 @@ import java.util.stream.Collectors;
 public class JwtService {
 
     private static final Logger log = LoggerFactory.getLogger(JwtService.class);
-
-    // Fallback secret for local dev/testing: 256-bit key
-    private static final String DEFAULT_DEV_SECRET = "goplant-secure-jwt-signing-secret-key-must-be-at-least-256-bits-long-2026!";
+    private static final int MIN_KEY_BYTES = 32; // 256 bits minimum for HMAC-SHA256
 
     private final byte[] secretKeyBytes;
     private final long expirationMs;
@@ -33,26 +30,30 @@ public class JwtService {
         @Value("${jwt.secret-base64:}") String secretBase64,
         @Value("${jwt.expiration-ms:86400000}") long expirationMs
     ) {
-        this.expirationMs = expirationMs;
-        if (secretBase64 != null && !secretBase64.trim().isEmpty()) {
-            byte[] decoded;
-            try {
-                decoded = Base64.getDecoder().decode(secretBase64.trim());
-                if (decoded.length < 32) {
-                    log.warn("JWT secret is shorter than 256 bits, padding for HMAC-SHA256.");
-                    decoded = Arrays.copyOf(decoded, 32);
-                }
-            } catch (IllegalArgumentException e) {
-                log.warn("Invalid Base64 in jwt.secret-base64, using raw bytes.");
-                decoded = secretBase64.getBytes(StandardCharsets.UTF_8);
-                if (decoded.length < 32) {
-                    decoded = Arrays.copyOf(decoded, 32);
-                }
-            }
-            this.secretKeyBytes = decoded;
-        } else {
-            this.secretKeyBytes = DEFAULT_DEV_SECRET.getBytes(StandardCharsets.UTF_8);
+        if (expirationMs <= 0) {
+            throw new IllegalArgumentException("JWT expiration-ms must be a positive integer greater than 0. Provided: " + expirationMs);
         }
+        this.expirationMs = expirationMs;
+
+        if (secretBase64 == null || secretBase64.trim().isEmpty()) {
+            throw new IllegalStateException("JWT secret is not configured. Please set the JWT_SECRET_BASE64 environment variable.");
+        }
+
+        byte[] decoded;
+        try {
+            decoded = Base64.getDecoder().decode(secretBase64.trim());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("JWT secret must be a valid Base64 encoded string: " + e.getMessage(), e);
+        }
+
+        if (decoded.length < MIN_KEY_BYTES) {
+            throw new IllegalArgumentException(String.format(
+                "JWT secret key must be at least 256 bits (%d bytes). Current key is %d bits (%d bytes).",
+                MIN_KEY_BYTES, decoded.length * 8, decoded.length
+            ));
+        }
+
+        this.secretKeyBytes = decoded;
     }
 
     public String generateToken(UserPrincipal principal) {
@@ -86,6 +87,9 @@ public class JwtService {
     }
 
     public boolean validateToken(String token) {
+        if (token == null || token.trim().isEmpty()) {
+            return false;
+        }
         try {
             SignedJWT signedJWT = SignedJWT.parse(token);
             JWSVerifier verifier = new MACVerifier(secretKeyBytes);

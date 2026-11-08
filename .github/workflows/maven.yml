@@ -13,6 +13,21 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: goplant_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgrespassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -27,6 +42,12 @@ jobs:
 
       - name: Build and test
         working-directory: backend
+        env:
+          SPRING_PROFILES_ACTIVE: postgres
+          POSTGRES_URL: jdbc:postgresql://localhost:5432/goplant_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgrespassword
+          JWT_SECRET_BASE64: dGVzdC1zZWNyZXQta2V5LWZvci1nb3BsYW50LWp3dC10b2tlbi1zaWduaW5nLW11c3QtYmUtMzItYnl0ZXM=
         run: |
           chmod +x mvnw
           ./mvnw --batch-mode --no-transfer-progress clean verify

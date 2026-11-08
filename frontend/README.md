@@ -12,11 +12,11 @@ Phiên bản khai báo lấy từ `package.json`; phiên bản cài đặt đư�
 
 | Công nghệ | Khai báo | Đã cài | Vai trò |
 |---|---:|---:|---|
-| Expo | `~57.0.31` | `57.0.31` | Nền tảng và công cụ phát triển ứng dụng |
+| Expo | `~57.0.32` | `57.0.32` | Nền tảng và công cụ phát triển ứng dụng |
 | React | `19.2.3` | `19.2.3` | Xây dựng giao diện theo component |
 | React Native | `0.86.3` | `0.86.3` | Giao diện di động đa nền tảng |
 | TypeScript | `~6.0.3` | `6.0.3` | Kiểu tĩnh cho mã JavaScript |
-| Expo Router | `~57.0.29` | `57.0.29` | Điều hướng theo file trong `src/app/` |
+| Expo Router | `~57.0.30` | `57.0.30` | Điều hướng theo file trong `src/app/` |
 | npm | — | `11.19.1` trên môi trường kiểm tra | Quản lý package; đây không phải phiên bản khóa cho mọi máy |
 
 Các package khác được khai báo trong `package.json`, gồm Expo modules, `react-native-reanimated`, `react-native-svg`, `react-native-safe-area-context` và font Plus Jakarta Sans.
@@ -169,7 +169,7 @@ npx.cmd expo-doctor
 
 Kết quả được xác minh khi cập nhật README:
 
-- `npm.cmd ls expo react-native expo-router typescript --depth=0`: các package chính hiện diện với Expo `57.0.31`, React `19.2.3`, React Native `0.86.3`, Expo Router `57.0.29` và TypeScript `6.0.3`.
+- `npm.cmd ls expo react-native expo-router typescript --depth=0`: các package chính hiện diện với Expo `57.0.32`, React `19.2.3`, React Native `0.86.3`, Expo Router `57.0.30` và TypeScript `6.0.3`.
 - `npx.cmd tsc --noEmit`: hoàn tất thành công.
 - `npm.cmd run lint`: chưa chạy được. Script `expo lint` của project cố tự tạo cấu hình ESLint; lệnh đã được dừng để tránh sửa cấu hình ngoài phạm vi README.
 - `expo install --check` và Expo Doctor 21/21: kết quả đã được báo cáo ở lần kiểm tra Phase 3 trước đó, không chạy lại trong nhiệm vụ README này.

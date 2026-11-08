@@ -6,7 +6,7 @@ Kiến trúc mục tiêu của dự án là **Ứng dụng di động React Nati
 
 > **Trạng thái phát triển hiện tại (Giai đoạn 4):**
 > - **Frontend:** Đã tích hợp hoàn chỉnh mã nguồn giao diện trong thư mục `frontend/` sử dụng **React Native (v0.86.3) + Expo SDK 57 (Managed Workflow) + Expo Router**. Toàn bộ 11 phân hệ màn hình và điều hướng đã sẵn sàng.
-> - **Backend:** Đã hoàn thành triển khai Backend Java 21 + Spring Boot 4.1.1 trong `backend/` với **19 RESTful API ưu tiên** (Auth, Users, Species, Favorites, Gardens, Admin Species), bảo mật JWT + BCrypt, phân quyền `ROLE_USER`/`ROLE_ADMIN`, bảo vệ toàn vẹn sở hữu dữ liệu (Data Ownership Security) và tích hợp Flyway Database Migration. 28/28 Unit & Integration Tests đạt 100% Pass.
+> - **Backend:** Đã hoàn thành triển khai Backend Java 21 + Spring Boot 4.1.1 trong `backend/` với **19 RESTful API ưu tiên** (Auth, Users, Species, Favorites, Gardens, Admin Species), bảo mật JWT + BCrypt, phân quyền `ROLE_USER`/`ROLE_ADMIN`, bảo vệ toàn vẹn sở hữu dữ liệu (Data Ownership Security) và tích hợp Flyway Database Migration. 39/39 Unit & Integration Tests đạt 100% Pass.
 > - **Cơ sở dữ liệu:** Thiết kế chuẩn hóa 11 bảng, sơ đồ ERD, Migration PostgreSQL V1 tích hợp trong `backend/src/main/resources/db/migration/`. Hỗ trợ H2 local in-memory, PostgreSQL local và Supabase PostgreSQL.
 > - **Hướng dẫn chi tiết:** Xem thêm tại [docs/backend/backend-setup-guide.md](docs/backend/backend-setup-guide.md).
 
@@ -74,8 +74,8 @@ Bảng ma trận đối soát hiện trạng triển khai giữa Frontend, Backe
 
 ### 3.1. Phía Frontend Di động (`frontend/`)
 
-- **Nền tảng:** React Native `0.86.3` kết hợp **Expo SDK `57.0.31`** (Managed Workflow).
-- **Điều hướng:** Expo Router `~57.0.29` (File-based Routing trong `src/app/`).
+- **Nền tảng:** React Native `0.86.3` kết hợp **Expo SDK `57.0.32`** (Managed Workflow).
+- **Điều hướng:** Expo Router `~57.0.30` (File-based Routing trong `src/app/`).
 - **Ngôn ngữ:** TypeScript `~6.0.3`, React `19.2.3`.
 - **Giao diện & Đồ họa:** Vector Icons qua `react-native-svg` (`15.15.4`) và `react-native-svg-transformer`, Animations qua `react-native-reanimated` (`4.5.1`).
 - **Font chữ:** `@expo-google-fonts/plus-jakarta-sans`.
@@ -445,7 +445,8 @@ Dự án thiết lập hệ thống tích hợp liên tục (CI) tự động v�
 - **Nhiệm vụ:**
   - Cài đặt Java 21 (Temurin).
   - Tự động cache Maven dependencies theo file `backend/pom.xml`.
-  - Cấp quyền thực thi và chạy `./mvnw --batch-mode clean verify` trong thư mục `backend/`.
+  - Khởi chạy dịch vụ container `services.postgres` (PostgreSQL 16 Alpine) để kiểm thử Flyway migration thực tế và xác thực toàn vẹn schema với Hibernate (`ddl-auto=validate`).
+  - Cấp quyền thực thi và chạy `./mvnw --batch-mode clean verify` trong thư mục `backend/` với `SPRING_PROFILES_ACTIVE=postgres`.
 
 ### 13.2. Frontend Pipeline ([.github/workflows/frontend.yml](file:///E:/GoPlant/.github/workflows/frontend.yml))
 

@@ -35,7 +35,7 @@ public class CareLog {
     @Column(name = "note", columnDefinition = "TEXT")
     private String note;
 
-    @Column(name = "image_urls", columnDefinition = "text[]")
+    @Column(name = "image_urls")
     private String[] imageUrls;
 
     @Column(name = "performed_at", nullable = false)
