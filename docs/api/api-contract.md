@@ -619,6 +619,12 @@ Bỏ qua lượt thực hiện này.
 
 Ghi nhận chăm sóc thủ công (không cần lịch trước — ad-hoc).
 
+**Quy tắc nghiệp vụ kiểm soát quyền sở hữu và lịch tham chiếu:**
+- `userPlantId`: Cây được chăm sóc bắt buộc phải thuộc quyền sở hữu của người dùng hiện tại (được bảo vệ tự động ở tầng CSDL qua Composite Foreign Key `(user_plant_id, performed_by)`).
+- `schedule_id = NULL`: Lượt chăm sóc thủ công ad-hoc (ngoài lịch).
+- `schedule_id != NULL`: Nếu có liên kết với lịch, lịch được tham chiếu bắt buộc phải thuộc cùng cây trồng (`user_plant_id`) và cùng chủ sở hữu. Quy tắc xác thực này được kiểm tra chặt chẽ tại tầng Service (Spring Boot) ở Giai đoạn 4 nhằm đảm bảo tính đơn giản và tương thích PostgreSQL 14+.
+- Khi xóa lịch: Bản ghi nhật ký `care_logs` vẫn được bảo toàn với `schedule_id = NULL` (`ON DELETE SET NULL`) làm lịch sử nhật ký.
+
 **Request Body:**
 ```json
 {

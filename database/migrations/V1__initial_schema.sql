@@ -127,7 +127,7 @@ CREATE TABLE IF NOT EXISTS care_schedules (
     task_type VARCHAR(100) NOT NULL CHECK (task_type IN ('WATERING', 'FERTILIZING', 'PRUNING', 'PEST_CHECK', 'MISTING', 'JOURNAL')),
     task_label VARCHAR(200) NULL,
     frequency VARCHAR(30) NOT NULL DEFAULT 'ONCE' CHECK (frequency IN ('ONCE', 'DAILY', 'EVERY_OTHER_DAY', 'WEEKLY', 'CUSTOM')),
-    interval_days INTEGER NULL CHECK (interval_days IS NULL OR interval_days > 0),
+    interval_days INTEGER NULL,
     reminder_time TIME NULL,
     start_date DATE NOT NULL DEFAULT CURRENT_DATE,
     end_date DATE NULL,
@@ -135,27 +135,40 @@ CREATE TABLE IF NOT EXISTS care_schedules (
     status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'PAUSED', 'COMPLETED', 'CANCELLED')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT fk_care_schedules_plant_owner FOREIGN KEY (user_plant_id, owner_id) REFERENCES user_plants(id, owner_id) ON DELETE CASCADE
+    CONSTRAINT fk_care_schedules_plant_owner FOREIGN KEY (user_plant_id, owner_id) REFERENCES user_plants(id, owner_id) ON DELETE CASCADE,
+    CONSTRAINT chk_care_schedules_interval CHECK (
+        (
+            frequency = 'CUSTOM'
+            AND interval_days IS NOT NULL
+            AND interval_days > 0
+        )
+        OR
+        (
+            frequency <> 'CUSTOM'
+            AND interval_days IS NULL
+        )
+    )
 );
 
 -- 2.9. CARE_LOGS (Nhật ký thực hiện chăm sóc cây - Lưu kết quả từng lần thực hiện: COMPLETED hoặc SKIPPED)
 CREATE TABLE IF NOT EXISTS care_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_plant_id UUID NOT NULL REFERENCES user_plants(id) ON DELETE CASCADE,
-    schedule_id UUID NULL REFERENCES care_schedules(id) ON DELETE SET NULL,
+    user_plant_id UUID NOT NULL,
     performed_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    schedule_id UUID NULL REFERENCES care_schedules(id) ON DELETE SET NULL,
     task_type VARCHAR(100) NOT NULL,
     status VARCHAR(20) NOT NULL CHECK (status IN ('COMPLETED', 'SKIPPED')),
     note TEXT NULL,
     image_urls TEXT[] NULL,
     performed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT fk_care_logs_plant_performed_by FOREIGN KEY (user_plant_id, performed_by) REFERENCES user_plants(id, owner_id) ON DELETE CASCADE
 );
 
 -- 2.10. GROWTH_JOURNALS (Nhật ký theo dõi sinh trưởng và hình thái cây)
 CREATE TABLE IF NOT EXISTS growth_journals (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_plant_id UUID NOT NULL REFERENCES user_plants(id) ON DELETE CASCADE,
+    user_plant_id UUID NOT NULL,
     author_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     entry_type VARCHAR(50) NOT NULL DEFAULT 'GROWTH' CHECK (entry_type IN ('GROWTH', 'WATERING', 'FERTILIZING', 'PEST', 'OTHER')),
     health_status VARCHAR(50) NOT NULL DEFAULT 'HEALTHY' CHECK (health_status IN ('HEALTHY', 'NEEDS_ATTENTION', 'CRITICAL')),
@@ -163,7 +176,8 @@ CREATE TABLE IF NOT EXISTS growth_journals (
     image_urls TEXT[] NULL,
     recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT fk_growth_journals_plant_author FOREIGN KEY (user_plant_id, author_id) REFERENCES user_plants(id, owner_id) ON DELETE CASCADE
 );
 
 -- 2.11. CAMERAS (Thiết bị camera giám sát vườn - BACKLOG)

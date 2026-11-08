@@ -239,7 +239,7 @@ CREATE INDEX idx_user_plants_species_id ON user_plants (species_id);
 | `task_type` | VARCHAR(100) | NOT NULL | — | CHECK IN ('WATERING','FERTILIZING','PRUNING','PEST_CHECK','MISTING','JOURNAL') | Loại công việc |
 | `task_label` | VARCHAR(200) | NULL | NULL | — | Nhãn tùy chỉnh |
 | `frequency` | VARCHAR(30) | NOT NULL | 'ONCE' | CHECK IN ('ONCE','DAILY','EVERY_OTHER_DAY','WEEKLY','CUSTOM') | Tần suất lặp lại |
-| `interval_days` | INTEGER | NULL | NULL | CHECK > 0 (khi CUSTOM) | Số ngày giữa 2 lần |
+| `interval_days` | INTEGER | NULL | NULL | CHECK chk_care_schedules_interval | Số ngày lặp (chỉ áp dụng khi CUSTOM) |
 | `reminder_time` | TIME | NULL | NULL | — | Giờ nhắc nhở trong ngày |
 | `start_date` | DATE | NOT NULL | CURRENT_DATE | NOT NULL | Ngày bắt đầu |
 | `end_date` | DATE | NULL | NULL | — | Ngày kết thúc |
@@ -251,6 +251,18 @@ CREATE INDEX idx_user_plants_species_id ON user_plants (species_id);
 **Ràng buộc bảo vệ dữ liệu:**
 ```sql
 CONSTRAINT fk_care_schedules_plant_owner FOREIGN KEY (user_plant_id, owner_id) REFERENCES user_plants(id, owner_id) ON DELETE CASCADE;
+CONSTRAINT chk_care_schedules_interval CHECK (
+    (
+        frequency = 'CUSTOM'
+        AND interval_days IS NOT NULL
+        AND interval_days > 0
+    )
+    OR
+    (
+        frequency <> 'CUSTOM'
+        AND interval_days IS NULL
+    )
+);
 ```
 
 **Quy chuẩn vòng đời lịch chăm sóc (`care_schedules`) và kết quả thực hiện (`care_logs`):**
@@ -278,14 +290,14 @@ CREATE INDEX idx_care_schedules_active ON care_schedules (next_scheduled_at) WHE
 
 ### 3.9. Bảng `care_logs`
 
-**Mô tả:** Ghi nhận kết quả của từng lần thực hiện công việc chăm sóc cây (`COMPLETED` hoặc `SKIPPED`). Hỗ trợ cả công việc thực hiện theo lịch (`schedule_id` có giá trị) và công việc thủ công ad-hoc (`schedule_id = NULL`).
+**Mô tả:** Ghi nhận kết quả của từng lần thực hiện công việc chăm sóc cây (`COMPLETED` hoặc `SKIPPED`). Hỗ trợ cả công việc thực hiện theo lịch (`schedule_id` có giá trị) và công việc thủ công ad-hoc (`schedule_id = NULL`). Khóa ngoại kép `(user_plant_id, performed_by)` đảm bảo người thực hiện phải sở hữu cây được chăm sóc.
 
 | Cột | Kiểu dữ liệu | Nullable | Mặc định | Ràng buộc | Mô tả |
 |---|---|---|---|---|---|
 | `id` | UUID | NOT NULL | gen_random_uuid() | PRIMARY KEY | |
-| `user_plant_id` | UUID | NOT NULL | — | FK → user_plants.id ON DELETE CASCADE | Cây được chăm sóc |
-| `schedule_id` | UUID | NULL | NULL | FK → care_schedules.id ON DELETE SET NULL | Lịch tương ứng (NULL = ad-hoc) |
+| `user_plant_id` | UUID | NOT NULL | — | Composite FK → user_plants(id, owner_id) | Cây được chăm sóc |
 | `performed_by` | UUID | NOT NULL | — | FK → users.id ON DELETE CASCADE | Người thực hiện |
+| `schedule_id` | UUID | NULL | NULL | FK → care_schedules.id ON DELETE SET NULL | Lịch tương ứng (NULL = ad-hoc) |
 | `task_type` | VARCHAR(100) | NOT NULL | — | NOT NULL | Loại công việc |
 | `status` | VARCHAR(20) | NOT NULL | — | CHECK IN ('COMPLETED','SKIPPED') | Kết quả thực thi |
 | `note` | TEXT | NULL | NULL | — | Ghi chú sau khi chăm sóc |
@@ -293,7 +305,15 @@ CREATE INDEX idx_care_schedules_active ON care_schedules (next_scheduled_at) WHE
 | `performed_at` | TIMESTAMPTZ | NOT NULL | NOW() | NOT NULL | Thời điểm thực hiện |
 | `created_at` | TIMESTAMPTZ | NOT NULL | NOW() | — | |
 
-> **Bảo toàn lịch sử:** Khóa ngoại `schedule_id` thiết lập `ON DELETE SET NULL`. Khi người dùng xóa một lịch chăm sóc định kỳ, các nhật ký `care_logs` trước đó vẫn được bảo toàn nguyên vẹn với `schedule_id = NULL` để phục vụ theo dõi lịch sử sinh trưởng của cây.
+**Ràng buộc bảo vệ dữ liệu:**
+```sql
+CONSTRAINT fk_care_logs_plant_performed_by FOREIGN KEY (user_plant_id, performed_by) REFERENCES user_plants(id, owner_id) ON DELETE CASCADE;
+```
+
+**Quy tắc kiểm soát quan hệ giữa Care Logs và Schedules:**
+1. **Trường hợp `schedule_id = NULL`:** Đại diện cho lượt chăm sóc thủ công ad-hoc (ngoài lịch). Người dùng có thể ghi nhận hoạt động chăm sóc cây bất cứ lúc nào mà không cần thiết lập lịch trước.
+2. **Trường hợp `schedule_id != NULL`:** Lịch được tham chiếu bắt buộc phải thuộc cùng cây trồng (`user_plant_id`) và cùng chủ sở hữu. Quy tắc kiểm tra chéo này được xác thực chặt chẽ tại tầng Service (Spring Boot) trong Giai đoạn 4 trước khi lưu bản ghi.
+3. **Bảo toàn lịch sử chăm sóc:** Khóa ngoại `schedule_id` thiết lập `ON DELETE SET NULL`. Khi người dùng xóa một lịch chăm sóc định kỳ, các nhật ký `care_logs` trước đó vẫn được bảo toàn nguyên vẹn với `schedule_id = NULL` để phục vụ theo dõi lịch sử sinh trưởng của cây.
 
 **Chỉ mục:**
 ```sql
@@ -307,12 +327,12 @@ CREATE INDEX idx_care_logs_performed_at ON care_logs (performed_at DESC);
 
 ### 3.10. Bảng `growth_journals`
 
-**Mô tả:** Nhật ký phát triển — ghi nhận tình trạng cây theo thời gian, hỗ trợ mảng URL hình ảnh.
+**Mô tả:** Nhật ký phát triển — ghi nhận tình trạng cây theo thời gian, hỗ trợ mảng URL hình ảnh. Khóa ngoại kép `(user_plant_id, author_id)` đảm bảo người viết nhật ký phải sở hữu cây được ghi nhận.
 
 | Cột | Kiểu dữ liệu | Nullable | Mặc định | Ràng buộc | Mô tả |
 |---|---|---|---|---|---|
 | `id` | UUID | NOT NULL | gen_random_uuid() | PRIMARY KEY | |
-| `user_plant_id` | UUID | NOT NULL | — | FK → user_plants.id ON DELETE CASCADE | Cây được ghi nhận |
+| `user_plant_id` | UUID | NOT NULL | — | Composite FK → user_plants(id, owner_id) | Cây được ghi nhận |
 | `author_id` | UUID | NOT NULL | — | FK → users.id ON DELETE CASCADE | Người viết nhật ký |
 | `entry_type` | VARCHAR(50) | NOT NULL | 'GROWTH' | CHECK IN ('GROWTH','WATERING','FERTILIZING','PEST','OTHER') | Loại ghi nhận |
 | `health_status` | VARCHAR(50) | NOT NULL | 'HEALTHY' | CHECK IN ('HEALTHY','NEEDS_ATTENTION','CRITICAL') | Tình trạng cây |
@@ -321,6 +341,11 @@ CREATE INDEX idx_care_logs_performed_at ON care_logs (performed_at DESC);
 | `recorded_at` | TIMESTAMPTZ | NOT NULL | NOW() | NOT NULL | Thời điểm ghi nhận |
 | `created_at` | TIMESTAMPTZ | NOT NULL | NOW() | — | |
 | `updated_at` | TIMESTAMPTZ | NOT NULL | NOW() | — | |
+
+**Ràng buộc bảo vệ dữ liệu:**
+```sql
+CONSTRAINT fk_growth_journals_plant_author FOREIGN KEY (user_plant_id, author_id) REFERENCES user_plants(id, owner_id) ON DELETE CASCADE;
+```
 
 **Chỉ mục:**
 ```sql
@@ -369,8 +394,8 @@ gardens (1) ────────────── (n) user_plants (cùng ow
 gardens (1) ────────────── (n) cameras [Backlog] (cùng owner_id)
 plant_species (1) ───────── (n) user_plants
 user_plants (1) ─────────── (n) care_schedules (cùng owner_id)
-user_plants (1) ─────────── (n) care_logs
-user_plants (1) ─────────── (n) growth_journals
+user_plants (1) ─────────── (n) care_logs (cùng owner_id)
+user_plants (1) ─────────── (n) growth_journals (cùng owner_id)
 care_schedules (1) ──────── (n) care_logs (ON DELETE SET NULL)
 ```
 
@@ -384,7 +409,9 @@ care_schedules (1) ──────── (n) care_logs (ON DELETE SET NULL)
 |---|---|---|---|---|
 | `users` | `user_roles`, `gardens`, `user_plants`, `care_schedules`, `care_logs`, `growth_journals`, `cameras`, `user_favorite_species` | `user_id` / `owner_id` / `performed_by` / `author_id` | **CASCADE** | Xóa sạch toàn bộ dữ liệu thuộc sở hữu khi tài khoản bị xóa vĩnh viễn |
 | `gardens` | `user_plants`, `cameras` | Composite `(garden_id, owner_id)` | **CASCADE** | Khi xóa vườn, tất cả cây trồng và camera trong vườn bị xóa theo; ngăn tham chiếu chéo chủ sở hữu |
-| `user_plants` | `care_schedules`, `growth_journals`, `care_logs` | `(user_plant_id, owner_id)` / `user_plant_id` | **CASCADE** | Khi xóa một cây trồng, toàn bộ lịch, nhật ký chăm sóc và nhật ký phát triển của cây đó bị xóa |
+| `user_plants` | `care_schedules` | Composite `(user_plant_id, owner_id)` | **CASCADE** | Lịch chăm sóc tự động xóa khi cây bị xóa; bảo đảm đúng chủ sở hữu |
+| `user_plants` | `care_logs` | Composite `(user_plant_id, performed_by)` | **CASCADE** | Nhật ký chăm sóc tự động xóa khi cây bị xóa; bảo đảm người thực hiện sở hữu cây |
+| `user_plants` | `growth_journals` | Composite `(user_plant_id, author_id)` | **CASCADE** | Nhật ký phát triển tự động xóa khi cây bị xóa; bảo đảm tác giả sở hữu cây |
 | `care_schedules` | `care_logs` | `schedule_id` | **SET NULL** | Khi một lịch chăm sóc định kỳ bị xóa, các lượt ghi nhận chăm sóc quá khứ vẫn được giữ lại làm lịch sử |
 | `plant_species` | `user_plants` | `species_id` | **RESTRICT** | Ngăn chặn xóa một giống cây chuẩn nếu đang có cây trồng cá nhân liên kết tới |
 | `plant_species` | `user_favorite_species` | `species_id` | **CASCADE** | Khi giống cây bị xóa, danh sách yêu thích liên quan tự động được giải phóng |
