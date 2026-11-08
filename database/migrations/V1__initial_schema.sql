@@ -4,7 +4,7 @@
 -- Compatibility: PostgreSQL 14+, Supabase PostgreSQL, Flyway 10+
 -- 
 -- CAUTION / CẢNH BÁO:
--- BẢN THẢO THIẾT KẾ (DRAFT) - ĐẶC TẢ GIAI ĐOẠN 3.
+-- BẢN THẢO THIẾT KẾ (DRAFT) - ĐẶC TẢ GIAI ĐOẠN 3.1.
 -- KHÔNG ĐƯỢC TỰ ĐỘNG CHẠY FILE NÀY TRỰC TIẾP TRÊN CƠ SỞ DỮ LIỆU SUPABASE PRODUCTION
 -- HOẶC DATABASE THẬT KHI CHƯA CÓ SỰ PHÊ DUYỆT CỦA ARCHITECT VÀ TEAM LEADER.
 -- ==============================================================================
@@ -96,14 +96,15 @@ CREATE TABLE IF NOT EXISTS gardens (
     description TEXT NULL,
     cover_image_url TEXT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_gardens_id_owner UNIQUE (id, owner_id)
 );
 
 -- 2.7. USER_PLANTS (Hồ sơ cây trồng cá nhân trong vườn)
 CREATE TABLE IF NOT EXISTS user_plants (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    garden_id UUID NOT NULL REFERENCES gardens(id) ON DELETE CASCADE,
+    garden_id UUID NOT NULL,
     species_id UUID NOT NULL REFERENCES plant_species(id) ON DELETE RESTRICT,
     display_name VARCHAR(200) NOT NULL,
     location VARCHAR(200) NULL,
@@ -113,13 +114,15 @@ CREATE TABLE IF NOT EXISTS user_plants (
     plant_code VARCHAR(50) UNIQUE NULL,
     image_url TEXT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_user_plants_id_owner UNIQUE (id, owner_id),
+    CONSTRAINT fk_user_plants_garden_owner FOREIGN KEY (garden_id, owner_id) REFERENCES gardens(id, owner_id) ON DELETE CASCADE
 );
 
--- 2.8. CARE_SCHEDULES (Lịch chăm sóc định kỳ cho cây)
+-- 2.8. CARE_SCHEDULES (Lịch chăm sóc định kỳ cho cây - Quản lý định nghĩa và vòng đời lịch)
 CREATE TABLE IF NOT EXISTS care_schedules (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_plant_id UUID NOT NULL REFERENCES user_plants(id) ON DELETE CASCADE,
+    user_plant_id UUID NOT NULL,
     owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     task_type VARCHAR(100) NOT NULL CHECK (task_type IN ('WATERING', 'FERTILIZING', 'PRUNING', 'PEST_CHECK', 'MISTING', 'JOURNAL')),
     task_label VARCHAR(200) NULL,
@@ -129,12 +132,13 @@ CREATE TABLE IF NOT EXISTS care_schedules (
     start_date DATE NOT NULL DEFAULT CURRENT_DATE,
     end_date DATE NULL,
     next_scheduled_at TIMESTAMPTZ NOT NULL,
-    status VARCHAR(20) NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'COMPLETED', 'SKIPPED', 'PAUSED', 'CANCELLED')),
+    status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'PAUSED', 'COMPLETED', 'CANCELLED')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT fk_care_schedules_plant_owner FOREIGN KEY (user_plant_id, owner_id) REFERENCES user_plants(id, owner_id) ON DELETE CASCADE
 );
 
--- 2.9. CARE_LOGS (Nhật ký thực hiện chăm sóc cây)
+-- 2.9. CARE_LOGS (Nhật ký thực hiện chăm sóc cây - Lưu kết quả từng lần thực hiện: COMPLETED hoặc SKIPPED)
 CREATE TABLE IF NOT EXISTS care_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_plant_id UUID NOT NULL REFERENCES user_plants(id) ON DELETE CASCADE,
@@ -165,14 +169,15 @@ CREATE TABLE IF NOT EXISTS growth_journals (
 -- 2.11. CAMERAS (Thiết bị camera giám sát vườn - BACKLOG)
 CREATE TABLE IF NOT EXISTS cameras (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    garden_id UUID NOT NULL REFERENCES gardens(id) ON DELETE CASCADE,
+    garden_id UUID NOT NULL,
     owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name VARCHAR(200) NOT NULL,
     location_desc TEXT NULL,
     status VARCHAR(20) NOT NULL DEFAULT 'OFFLINE' CHECK (status IN ('ONLINE', 'OFFLINE', 'ERROR')),
     connection_note TEXT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT fk_cameras_garden_owner FOREIGN KEY (garden_id, owner_id) REFERENCES gardens(id, owner_id) ON DELETE CASCADE
 );
 
 -- ==============================================================================
@@ -186,6 +191,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone_unique ON users(phone_number) 
 -- 3.2. Plant Species
 CREATE INDEX IF NOT EXISTS idx_species_category ON plant_species(category);
 CREATE INDEX IF NOT EXISTS idx_species_active ON plant_species(is_active);
+CREATE INDEX IF NOT EXISTS idx_plant_species_search_gin ON plant_species USING gin (to_tsvector('simple', common_name || ' ' || scientific_name));
 
 -- 3.3. Gardens
 CREATE INDEX IF NOT EXISTS idx_gardens_owner_id ON gardens(owner_id);
@@ -198,7 +204,7 @@ CREATE INDEX IF NOT EXISTS idx_user_plants_species_id ON user_plants(species_id)
 -- 3.5. Care Schedules
 CREATE INDEX IF NOT EXISTS idx_care_schedules_plant_id ON care_schedules(user_plant_id);
 CREATE INDEX IF NOT EXISTS idx_care_schedules_owner_id ON care_schedules(owner_id);
-CREATE INDEX IF NOT EXISTS idx_care_schedules_pending ON care_schedules(next_scheduled_at) WHERE status = 'PENDING';
+CREATE INDEX IF NOT EXISTS idx_care_schedules_active ON care_schedules(next_scheduled_at) WHERE status = 'ACTIVE';
 
 -- 3.6. Care Logs
 CREATE INDEX IF NOT EXISTS idx_care_logs_plant_id ON care_logs(user_plant_id);

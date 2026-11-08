@@ -640,9 +640,10 @@ paths:
             format: uuid
         - name: status
           in: query
+          description: Lọc theo trạng thái vòng đời lịch
           schema:
             type: string
-            enum: [PENDING, COMPLETED, SKIPPED, PAUSED, CANCELLED]
+            enum: [ACTIVE, PAUSED, COMPLETED, CANCELLED]
       responses:
         '200':
           description: Danh sách lịch chăm sóc
@@ -2105,7 +2106,7 @@ components:
           format: date
         status:
           type: string
-          enum: [PENDING, COMPLETED, SKIPPED, PAUSED, CANCELLED]
+          enum: [ACTIVE, PAUSED, COMPLETED, CANCELLED]
 
     CareSchedule:
       type: object
@@ -2146,7 +2147,8 @@ components:
           example: false
         status:
           type: string
-          enum: [PENDING, COMPLETED, SKIPPED, PAUSED, CANCELLED]
+          enum: [ACTIVE, PAUSED, COMPLETED, CANCELLED]
+          default: ACTIVE
 
     CareScheduleWrapper:
       type: object

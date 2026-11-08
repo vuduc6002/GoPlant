@@ -476,7 +476,7 @@ Xóa cây và tất cả lịch, nhật ký liên quan.
 
 Danh sách lịch chăm sóc của 1 cây.
 
-**Query Parameters:** `status` (PENDING/COMPLETED/…), `page`, `size`
+**Query Parameters:** `status` (`ACTIVE`/`PAUSED`/`COMPLETED`/`CANCELLED`), `page`, `size`
 
 **Response 200:** Danh sách phân trang.
 
@@ -539,7 +539,7 @@ Danh sách lịch cần thực hiện hôm nay của tất cả cây (của ngư
       "taskLabel": null,
       "nextScheduledAt": "2026-10-31T08:00:00Z",
       "isOverdue": false,
-      "status": "PENDING"
+      "status": "ACTIVE"
     }
   ]
 }
@@ -549,7 +549,7 @@ Danh sách lịch cần thực hiện hôm nay của tất cả cây (của ngư
 
 ### PUT `/api/v1/schedules/{scheduleId}`
 
-Cập nhật lịch.
+Cập nhật lịch (loại việc, nhãn, chu kỳ, thời gian bắt đầu, kết thúc, trạng thái `ACTIVE`/`PAUSED`/`CANCELLED`).
 
 **Request Body:** Tương tự POST, trừ `userPlantId` (không đổi được).
 
@@ -559,7 +559,7 @@ Cập nhật lịch.
 
 ### DELETE `/api/v1/schedules/{scheduleId}`
 
-Xóa lịch chăm sóc.
+Xóa lịch chăm sóc. Các lượt `care_logs` trước đó được giữ nguyên với `schedule_id = NULL` để bảo toàn lịch sử.
 
 **Response 200:**
 ```json
@@ -570,7 +570,10 @@ Xóa lịch chăm sóc.
 
 ### POST `/api/v1/schedules/{scheduleId}/complete`
 
-Đánh dấu hoàn thành 1 lần thực hiện lịch. Tự động tính `next_scheduled_at` theo `frequency`. Tạo 1 bản ghi `care_logs`.
+Đánh dấu hoàn thành 1 lần thực hiện lịch.
+- Tạo 1 bản ghi `care_logs` với `status = 'COMPLETED'`.
+- Với lịch lặp (`DAILY`, `EVERY_OTHER_DAY`, `WEEKLY`, `CUSTOM`): tự động cộng chu kỳ tính `next_scheduled_at` cho lần tiếp theo, trạng thái lịch vẫn là `ACTIVE`.
+- Với lịch một lần (`ONCE`): trạng thái lịch chuyển sang `COMPLETED` (kết thúc vòng đời).
 
 **Request Body (tùy chọn):**
 ```json
@@ -586,7 +589,7 @@ Xóa lịch chăm sóc.
   "success": true,
   "data": {
     "careLogId": "uuid",
-    "scheduleStatus": "PENDING",
+    "scheduleStatus": "ACTIVE",
     "nextScheduledAt": "2026-11-01T08:00:00Z"
   }
 }
@@ -596,7 +599,10 @@ Xóa lịch chăm sóc.
 
 ### POST `/api/v1/schedules/{scheduleId}/skip`
 
-Bỏ qua lần thực hiện này. Tạo care_log với `status = SKIPPED`. Cũng tính lại `next_scheduled_at`.
+Bỏ qua lượt thực hiện này.
+- Tạo 1 bản ghi `care_logs` với `status = 'SKIPPED'`.
+- Với lịch lặp: tự động tính `next_scheduled_at` cho lần tiếp theo, trạng thái lịch vẫn là `ACTIVE` (không gán `SKIPPED` vào trạng thái lịch).
+- Với lịch một lần (`ONCE`): trạng thái lịch chuyển sang `COMPLETED` (kết thúc vòng đời).
 
 **Request Body (tùy chọn):**
 ```json
@@ -742,57 +748,76 @@ Kích hoạt hoặc khoá tài khoản.
 
 ---
 
-## 13. Tổng hợp endpoint
+## 13. Tổng hợp 44 endpoints chuẩn hóa
 
-| # | Method | Endpoint | Auth | Phân loại |
+### 13.1. Bảng phân bổ theo nhóm chức năng
+
+| Nhóm chức năng | Số endpoint MVP | Số endpoint Backlog | Tổng số endpoint |
+|---|:---:|:---:|:---:|
+| Authentication | 2 | 0 | 2 |
+| Users Profile | 3 | 0 | 3 |
+| Species & Favorites | 5 | 0 | 5 |
+| Gardens | 5 | 0 | 5 |
+| Plants | 8 | 0 | 8 |
+| Schedules | 6 | 0 | 6 |
+| Care Logs | 1 | 0 | 1 |
+| Growth Journals | 3 | 0 | 3 |
+| Admin Species | 4 | 0 | 4 |
+| Admin Users | 3 | 0 | 3 |
+| Cameras (Backlog) | 0 | 4 | 4 |
+| **Tổng cộng** | **40** | **4** | **44** |
+
+### 13.2. Danh sách chi tiết 44 endpoints (đồng bộ hoàn toàn với OpenAPI)
+
+| # | Method | Endpoint | Quyền truy cập | Phân loại |
 |---|---|---|---|---|
-| 1 | POST | `/auth/register` | Public | MVP |
-| 2 | POST | `/auth/login` | Public | MVP |
-| 3 | GET | `/users/me` | User | MVP |
-| 4 | PUT | `/users/me` | User | MVP |
-| 5 | PUT | `/users/me/password` | User | MVP |
-| 6 | GET | `/species` | User | MVP |
-| 7 | GET | `/species/{id}` | User | MVP |
-| 8 | POST | `/species/{id}/favorite` | User | MVP |
-| 9 | DELETE | `/species/{id}/favorite` | User | MVP |
-| 10 | GET | `/species/favorites` | User | MVP |
-| 11 | GET | `/gardens` | User | MVP |
-| 12 | POST | `/gardens` | User | MVP |
-| 13 | GET | `/gardens/{id}` | User | MVP |
-| 14 | PUT | `/gardens/{id}` | User | MVP |
-| 15 | DELETE | `/gardens/{id}` | User | MVP |
-| 16 | GET | `/plants` | User | MVP |
-| 17 | POST | `/gardens/{id}/plants` | User | MVP |
-| 18 | GET | `/plants/{id}` | User | MVP |
-| 19 | PUT | `/plants/{id}` | User | MVP |
-| 20 | DELETE | `/plants/{id}` | User | MVP |
-| 21 | GET | `/plants/{id}/schedules` | User | MVP |
-| 22 | GET | `/plants/{id}/care-logs` | User | MVP |
-| 23 | GET | `/plants/{id}/journals` | User | MVP |
-| 24 | POST | `/schedules` | User | MVP |
-| 25 | GET | `/schedules/today` | User | MVP |
-| 26 | PUT | `/schedules/{id}` | User | MVP |
-| 27 | DELETE | `/schedules/{id}` | User | MVP |
-| 28 | POST | `/schedules/{id}/complete` | User | MVP |
-| 29 | POST | `/schedules/{id}/skip` | User | MVP |
-| 30 | POST | `/care-logs` | User | MVP |
-| 31 | POST | `/journals` | User | MVP |
-| 32 | PUT | `/journals/{id}` | User | MVP |
-| 33 | DELETE | `/journals/{id}` | User | MVP |
-| 34 | GET | `/admin/species` | Admin | MVP |
-| 35 | POST | `/admin/species` | Admin | MVP |
-| 36 | PUT | `/admin/species/{id}` | Admin | MVP |
-| 37 | DELETE | `/admin/species/{id}` | Admin | MVP |
-| 38 | GET | `/admin/users` | Admin | MVP |
-| 39 | GET | `/admin/users/{id}` | Admin | MVP |
-| 40 | PATCH | `/admin/users/{id}/status` | Admin | MVP |
-| 41 | GET | `/gardens/{id}/cameras` | User | Backlog |
-| 42 | POST | `/gardens/{id}/cameras` | User | Backlog |
-| 43 | PUT | `/cameras/{id}` | User | Backlog |
-| 44 | DELETE | `/cameras/{id}` | User | Backlog |
+| 1 | POST | `/api/v1/auth/register` | Public | MVP |
+| 2 | POST | `/api/v1/auth/login` | Public | MVP |
+| 3 | GET | `/api/v1/users/me` | Authenticated | MVP |
+| 4 | PUT | `/api/v1/users/me` | Authenticated | MVP |
+| 5 | PUT | `/api/v1/users/me/password` | Authenticated | MVP |
+| 6 | GET | `/api/v1/species` | Authenticated | MVP |
+| 7 | GET | `/api/v1/species/{speciesId}` | Authenticated | MVP |
+| 8 | POST | `/api/v1/species/{speciesId}/favorite` | ROLE_USER | MVP |
+| 9 | DELETE | `/api/v1/species/{speciesId}/favorite` | ROLE_USER | MVP |
+| 10 | GET | `/api/v1/species/favorites` | ROLE_USER | MVP |
+| 11 | GET | `/api/v1/gardens` | ROLE_USER | MVP |
+| 12 | POST | `/api/v1/gardens` | ROLE_USER | MVP |
+| 13 | GET | `/api/v1/gardens/{gardenId}` | ROLE_USER (owner) | MVP |
+| 14 | PUT | `/api/v1/gardens/{gardenId}` | ROLE_USER (owner) | MVP |
+| 15 | DELETE | `/api/v1/gardens/{gardenId}` | ROLE_USER (owner) | MVP |
+| 16 | POST | `/api/v1/gardens/{gardenId}/plants` | ROLE_USER (owner) | MVP |
+| 17 | GET | `/api/v1/plants` | ROLE_USER | MVP |
+| 18 | GET | `/api/v1/plants/{plantId}` | ROLE_USER (owner) | MVP |
+| 19 | PUT | `/api/v1/plants/{plantId}` | ROLE_USER (owner) | MVP |
+| 20 | DELETE | `/api/v1/plants/{plantId}` | ROLE_USER (owner) | MVP |
+| 21 | GET | `/api/v1/plants/{plantId}/schedules` | ROLE_USER (owner) | MVP |
+| 22 | GET | `/api/v1/plants/{plantId}/care-logs` | ROLE_USER (owner) | MVP |
+| 23 | GET | `/api/v1/plants/{plantId}/journals` | ROLE_USER (owner) | MVP |
+| 24 | POST | `/api/v1/schedules` | ROLE_USER (owner) | MVP |
+| 25 | GET | `/api/v1/schedules/today` | ROLE_USER | MVP |
+| 26 | PUT | `/api/v1/schedules/{scheduleId}` | ROLE_USER (owner) | MVP |
+| 27 | DELETE | `/api/v1/schedules/{scheduleId}` | ROLE_USER (owner) | MVP |
+| 28 | POST | `/api/v1/schedules/{scheduleId}/complete` | ROLE_USER (owner) | MVP |
+| 29 | POST | `/api/v1/schedules/{scheduleId}/skip` | ROLE_USER (owner) | MVP |
+| 30 | POST | `/api/v1/care-logs` | ROLE_USER (owner) | MVP |
+| 31 | POST | `/api/v1/journals` | ROLE_USER (owner) | MVP |
+| 32 | PUT | `/api/v1/journals/{journalId}` | ROLE_USER (owner) | MVP |
+| 33 | DELETE | `/api/v1/journals/{journalId}` | ROLE_USER (owner) | MVP |
+| 34 | GET | `/api/v1/admin/species` | ROLE_ADMIN | MVP |
+| 35 | POST | `/api/v1/admin/species` | ROLE_ADMIN | MVP |
+| 36 | PUT | `/api/v1/admin/species/{speciesId}` | ROLE_ADMIN | MVP |
+| 37 | DELETE | `/api/v1/admin/species/{speciesId}` | ROLE_ADMIN | MVP |
+| 38 | GET | `/api/v1/admin/users` | ROLE_ADMIN | MVP |
+| 39 | GET | `/api/v1/admin/users/{userId}` | ROLE_ADMIN | MVP |
+| 40 | PATCH | `/api/v1/admin/users/{userId}/status` | ROLE_ADMIN | MVP |
+| 41 | GET | `/api/v1/gardens/{gardenId}/cameras` | ROLE_USER (owner) | Backlog |
+| 42 | POST | `/api/v1/gardens/{gardenId}/cameras` | ROLE_USER (owner) | Backlog |
+| 43 | PUT | `/api/v1/cameras/{cameraId}` | ROLE_USER (owner) | Backlog |
+| 44 | DELETE | `/api/v1/cameras/{cameraId}` | ROLE_USER (owner) | Backlog |
 
-**Tổng: 40 MVP + 4 Backlog = 44 endpoints**
+> **Phạm vi mở rộng (ngoài 44 endpoints chuẩn):** Các tính năng Quên mật khẩu qua email (`POST /auth/forgot-password`), Cấp mới token (`POST /auth/refresh`), Đăng nhập Google/Zalo OAuth và Mã QR (`GET /plants/{id}/qr`) được xác định là Backlog mở rộng, không thuộc danh sách 44 endpoints của giai đoạn này.
 
 ---
 
-*Tài liệu này là hợp đồng API Giai đoạn 3. Triển khai thực tế sẽ thực hiện ở Giai đoạn 4.*
+*Tài liệu này là hợp đồng API Giai đoạn 3.1. Triển khai thực tế sẽ thực hiện ở Giai đoạn 4.*
