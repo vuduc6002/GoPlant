@@ -83,6 +83,7 @@ class DatabaseSchemaIntegrationTest {
         boolean isUnique,
         int keyAttrCount,
         String partialPredicate,
+        String fullDef,
         List<IndexKeyInfo> keyExpressions
     ) {}
 
@@ -320,6 +321,7 @@ class DatabaseSchemaIntegrationTest {
                         i.indisunique AS is_unique,
                         i.indnkeyatts AS key_attr_count,
                         pg_get_expr(i.indpred, i.indrelid, true) AS partial_predicate,
+                        pg_get_indexdef(ic.oid, 0, true) AS full_def,
                         ic.oid AS index_oid
                     FROM pg_index i
                     JOIN pg_class ic ON ic.oid = i.indexrelid
@@ -346,6 +348,7 @@ class DatabaseSchemaIntegrationTest {
                         boolean isUnique = rs.getBoolean("is_unique");
                         int keyAttrCount = rs.getInt("key_attr_count");
                         String partialPredicate = rs.getString("partial_predicate");
+                        String fullDef = rs.getString("full_def");
                         long indexOid = rs.getLong("index_oid");
 
                         List<IndexKeyInfo> keys = new ArrayList<>();
@@ -366,7 +369,7 @@ class DatabaseSchemaIntegrationTest {
                         }
 
                         actualIndexes.put(indexName, new StrictIndexInfo(
-                            indexName, tableName, accessMethod, isUnique, keyAttrCount, partialPredicate, keys
+                            indexName, tableName, accessMethod, isUnique, keyAttrCount, partialPredicate, fullDef, keys
                         ));
                     }
                 }
@@ -509,9 +512,21 @@ class DatabaseSchemaIntegrationTest {
             assertEquals(expectedKey.isDesc(), actualKey.isDesc(),
                 "Index " + indexName + " column at position " + (i + 1) + " sort order mismatch: expected DESC=" + expectedKey.isDesc() + ", actual=" + actualKey.isDesc());
 
-            // Expression verification
+            if (expectedKey.isDesc()) {
+                assertTrue(idx.fullDef().toLowerCase().contains(expectedKey.rawExpression().toLowerCase()),
+                    "Index " + indexName + " full definition must declare sort direction [" + expectedKey.rawExpression() + "]: " + idx.fullDef());
+            }
+
+            // Expression verification (column/expression without trailing direction clause)
+            String expectedExprRaw = expectedKey.rawExpression();
+            if (expectedExprRaw.toUpperCase().endsWith(" DESC")) {
+                expectedExprRaw = expectedExprRaw.substring(0, expectedExprRaw.length() - 5).trim();
+            } else if (expectedExprRaw.toUpperCase().endsWith(" ASC")) {
+                expectedExprRaw = expectedExprRaw.substring(0, expectedExprRaw.length() - 4).trim();
+            }
+
             String actualClean = normalizeSqlExpression(actualKey.expression());
-            String expectedClean = normalizeSqlExpression(expectedKey.rawExpression());
+            String expectedClean = normalizeSqlExpression(expectedExprRaw);
 
             assertEquals(expectedClean, actualClean,
                 "Index " + indexName + " key expression at position " + (i + 1) + " mismatch: expected [" + expectedKey.rawExpression() + "] but was [" + actualKey.expression() + "]");
