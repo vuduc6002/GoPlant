@@ -6,7 +6,7 @@ Kiến trúc mục tiêu của dự án là **Ứng dụng di động React Nati
 
 > **Trạng thái phát triển hiện tại (Giai đoạn 4):**
 > - **Frontend:** Đã tích hợp hoàn chỉnh mã nguồn giao diện trong thư mục `frontend/` sử dụng **React Native (v0.86.3) + Expo SDK 57 (Managed Workflow) + Expo Router**. Toàn bộ 11 phân hệ màn hình và điều hướng đã sẵn sàng.
-> - **Backend:** Đã hoàn thành triển khai Backend Java 21 + Spring Boot 4.1.1 trong `backend/` với **19 RESTful API ưu tiên** (Auth, Users, Species, Favorites, Gardens, Admin Species), bảo mật JWT + BCrypt, phân quyền `ROLE_USER`/`ROLE_ADMIN`, bảo vệ toàn vẹn sở hữu dữ liệu (Data Ownership Security) và tích hợp Flyway Database Migration. 39/39 Unit & Integration Tests đạt 100% Pass.
+> - **Backend:** Đã hoàn thành triển khai Backend Java 21 + Spring Boot 4.1.1 trong `backend/` với **19 RESTful API ưu tiên** (Auth, Users, Species, Favorites, Gardens, Admin Species), bảo mật JWT + BCrypt, phân quyền `ROLE_USER`/`ROLE_ADMIN`, bảo vệ toàn vẹn sở hữu dữ liệu (Data Ownership Security) và tích hợp Flyway Database Migration. 41/41 Unit & Integration Tests đạt 100% Pass.
 > - **Cơ sở dữ liệu:** Thiết kế chuẩn hóa 11 bảng, sơ đồ ERD, Migration PostgreSQL V1 tích hợp trong `backend/src/main/resources/db/migration/`. Hỗ trợ H2 local in-memory, PostgreSQL local và Supabase PostgreSQL.
 > - **Hướng dẫn chi tiết:** Xem thêm tại [docs/backend/backend-setup-guide.md](docs/backend/backend-setup-guide.md).
 

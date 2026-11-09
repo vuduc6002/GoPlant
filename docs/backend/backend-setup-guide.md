@@ -259,7 +259,7 @@ Khi chạy Frontend Expo kết nối với Backend máy host:
 
 ## 8. Kiểm thử hệ thống
 
-Chạy toàn bộ 39 Unit Tests và Integration Tests (bao gồm kiểm thử xác thực JWT, kiểm thử bảo mật CORS, kiểm thử tính toàn vẹn Schema cơ sở dữ liệu và các luồng API):
+Chạy toàn bộ 41 Unit Tests và Integration Tests (bao gồm kiểm thử xác thực JWT, kiểm thử bảo mật CORS và Frame Options `SAMEORIGIN`, kiểm thử tính toàn vẹn Schema cơ sở dữ liệu trên Flyway V1, kiểm thử Hibernate ghi/đọc mảng `String[]` và các luồng API):
 
 ```powershell
 cd E:\GoPlant\backend

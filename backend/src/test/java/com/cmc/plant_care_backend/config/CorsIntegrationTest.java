@@ -9,6 +9,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -45,5 +46,11 @@ class CorsIntegrationTest {
                 .header("Origin", "http://malicious-site.com")
                 .header("Access-Control-Request-Method", "POST"))
             .andExpect(header().doesNotExist("Access-Control-Allow-Origin"));
+    }
+
+    @Test
+    void securityHeaders_FrameOptions_ShouldBeSameOrigin() throws Exception {
+        mockMvc.perform(options("/api/v1/auth/login"))
+            .andExpect(header().string("X-Frame-Options", "SAMEORIGIN"));
     }
 }
