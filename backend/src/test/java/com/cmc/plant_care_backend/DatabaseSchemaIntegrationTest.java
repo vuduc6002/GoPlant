@@ -82,6 +82,7 @@ class DatabaseSchemaIntegrationTest {
         String accessMethod,
         boolean isUnique,
         int keyAttrCount,
+        int totalAttrCount,
         String partialPredicate,
         String fullDef,
         List<IndexKeyInfo> keyExpressions
@@ -320,6 +321,7 @@ class DatabaseSchemaIntegrationTest {
                         am.amname AS access_method,
                         i.indisunique AS is_unique,
                         i.indnkeyatts AS key_attr_count,
+                        i.indnatts AS total_attr_count,
                         pg_get_expr(i.indpred, i.indrelid, true) AS partial_predicate,
                         pg_get_indexdef(ic.oid, 0, true) AS full_def,
                         ic.oid AS index_oid
@@ -347,6 +349,7 @@ class DatabaseSchemaIntegrationTest {
                         String accessMethod = rs.getString("access_method").toLowerCase();
                         boolean isUnique = rs.getBoolean("is_unique");
                         int keyAttrCount = rs.getInt("key_attr_count");
+                        int totalAttrCount = rs.getInt("total_attr_count");
                         String partialPredicate = rs.getString("partial_predicate");
                         String fullDef = rs.getString("full_def");
                         long indexOid = rs.getLong("index_oid");
@@ -369,7 +372,7 @@ class DatabaseSchemaIntegrationTest {
                         }
 
                         actualIndexes.put(indexName, new StrictIndexInfo(
-                            indexName, tableName, accessMethod, isUnique, keyAttrCount, partialPredicate, fullDef, keys
+                            indexName, tableName, accessMethod, isUnique, keyAttrCount, totalAttrCount, partialPredicate, fullDef, keys
                         ));
                     }
                 }
@@ -494,9 +497,13 @@ class DatabaseSchemaIntegrationTest {
         assertEquals(expectedMethod.toLowerCase(), idx.accessMethod().toLowerCase(),
             "Index " + indexName + " access method mismatch: expected [" + expectedMethod + "] but was [" + idx.accessMethod() + "]");
 
-        // 4. Key attributes count and ordinality (via pg_index.indnkeyatts)
+        // 4. Key attributes and total attributes count (verifying no INCLUDE columns)
         assertEquals(expectedKeys.size(), idx.keyAttrCount(),
-            "Index " + indexName + " key attributes count mismatch: expected " + expectedKeys.size() + " but was " + idx.keyAttrCount());
+            "Index " + indexName + " key attributes count mismatch (indnkeyatts): expected " + expectedKeys.size() + " but was " + idx.keyAttrCount());
+        assertEquals(expectedKeys.size(), idx.totalAttrCount(),
+            "Index " + indexName + " total attributes count mismatch (indnatts): expected " + expectedKeys.size() + " but was " + idx.totalAttrCount());
+        assertEquals(idx.keyAttrCount(), idx.totalAttrCount(),
+            "Index " + indexName + " must not have included attributes (indnatts == indnkeyatts required)");
         assertEquals(expectedKeys.size(), idx.keyExpressions().size(),
             "Index " + indexName + " retrieved key expressions count mismatch");
 
@@ -537,6 +544,7 @@ class DatabaseSchemaIntegrationTest {
                 assertTrue(rawLower.contains("to_tsvector"), "GIN index " + indexName + " expression must call to_tsvector");
                 assertTrue(rawLower.contains("'simple'"), "GIN index " + indexName + " expression must use 'simple' config");
                 assertTrue(rawLower.contains("common_name"), "GIN index " + indexName + " expression must reference common_name");
+                assertTrue(rawLower.contains("' '"), "GIN index " + indexName + " expression must include literal space separator");
                 assertTrue(rawLower.contains("scientific_name"), "GIN index " + indexName + " expression must reference scientific_name");
                 assertTrue(actualKey.expression().contains("||"), "GIN index " + indexName + " expression must use concatenation operator ||");
             }
@@ -558,31 +566,143 @@ class DatabaseSchemaIntegrationTest {
         }
     }
 
-    private String normalizeSqlExpression(String expr) {
-        if (expr == null) {
+    static String normalizeSqlExpression(String sql) {
+        if (sql == null) {
             return null;
         }
-        return expr.replace("::regconfig", "")
-                   .replace("::character varying", "")
-                   .replace("::text", "")
-                   .replace("(", "")
-                   .replace(")", "")
-                   .replace(" ", "")
-                   .replace("\"", "")
-                   .toLowerCase();
+
+        // 1. Remove known PostgreSQL system casts (non-semantic representation details)
+        String s = sql.replaceAll("::(?:character\\s+varying|varchar|regconfig|text)", "");
+
+        // 2. Simplify single-identifier parentheses introduced solely by PostgreSQL casting syntax: (col) -> col
+        String prev;
+        do {
+            prev = s;
+            s = s.replaceAll("\\(([a-zA-Z_][a-zA-Z0-9_]*)\\)", "$1");
+        } while (!s.equals(prev));
+
+        // 3. Normalize unparenthesized left-associative concatenation chains: a || b || c -> ((a || b) || c)
+        s = s.replaceAll("([a-zA-Z0-9_]+|'[^']*')\\s*\\|\\|\\s*('[^']*'|[a-zA-Z0-9_]+)\\s*\\|\\|\\s*([a-zA-Z0-9_]+|'[^']*')", "(($1 || $2) || $3)");
+
+        // 4. Strip outer enclosing redundant parentheses: ((expr)) -> expr
+        s = stripRedundantOuterParentheses(s.trim());
+
+        // 5. Normalize casing outside string literals and normalize whitespace
+        s = canonicalizeSqlTokens(s);
+
+        return s;
     }
 
-    private String normalizeSqlPredicate(String pred) {
-        if (pred == null) {
-            return null;
+    static String normalizeSqlPredicate(String sql) {
+        return normalizeSqlExpression(sql);
+    }
+
+    static String stripRedundantOuterParentheses(String s) {
+        if (s == null) return null;
+        s = s.trim();
+        while (s.startsWith("(") && s.endsWith(")")) {
+            int depth = 0;
+            boolean wrapsAll = true;
+            for (int i = 0; i < s.length() - 1; i++) {
+                char c = s.charAt(i);
+                if (c == '(') depth++;
+                else if (c == ')') depth--;
+                if (depth == 0) {
+                    wrapsAll = false;
+                    break;
+                }
+            }
+            if (wrapsAll) {
+                s = s.substring(1, s.length() - 1).trim();
+            } else {
+                break;
+            }
         }
-        return pred.replace("::character varying", "")
-                   .replace("::text", "")
-                   .replace("(", "")
-                   .replace(")", "")
-                   .replace(" ", "")
-                   .replace("\"", "")
-                   .toLowerCase();
+        return s;
+    }
+
+    static String canonicalizeSqlTokens(String s) {
+        if (s == null) return null;
+        StringBuilder sb = new StringBuilder();
+        boolean inQuote = false;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '\'') {
+                inQuote = !inQuote;
+                sb.append(c);
+            } else if (inQuote) {
+                sb.append(c);
+            } else {
+                sb.append(Character.toLowerCase(c));
+            }
+        }
+
+        StringBuilder result = new StringBuilder();
+        inQuote = false;
+        for (int i = 0; i < sb.length(); i++) {
+            char c = sb.charAt(i);
+            if (c == '\'') {
+                inQuote = !inQuote;
+                result.append(c);
+            } else if (inQuote) {
+                result.append(c);
+            } else if (c == ',') {
+                while (result.length() > 0 && result.charAt(result.length() - 1) == ' ') {
+                    result.deleteCharAt(result.length() - 1);
+                }
+                result.append(", ");
+            } else if (c == '=' && (i == 0 || sb.charAt(i - 1) != '!') && (i + 1 == sb.length() || sb.charAt(i + 1) != '=')) {
+                while (result.length() > 0 && result.charAt(result.length() - 1) == ' ') {
+                    result.deleteCharAt(result.length() - 1);
+                }
+                result.append(" = ");
+            } else if (c == '|' && i + 1 < sb.length() && sb.charAt(i + 1) == '|') {
+                while (result.length() > 0 && result.charAt(result.length() - 1) == ' ') {
+                    result.deleteCharAt(result.length() - 1);
+                }
+                result.append(" || ");
+                i++; // skip second '|'
+            } else if (c == '(') {
+                result.append('(');
+            } else if (c == ')') {
+                while (result.length() > 0 && result.charAt(result.length() - 1) == ' ') {
+                    result.deleteCharAt(result.length() - 1);
+                }
+                result.append(')');
+            } else if (Character.isWhitespace(c)) {
+                if (result.length() > 0 && result.charAt(result.length() - 1) != ' ' && result.charAt(result.length() - 1) != '(') {
+                    result.append(' ');
+                }
+            } else {
+                result.append(c);
+            }
+        }
+        return result.toString().replaceAll("\\s+", " ").trim();
+    }
+
+    @Test
+    @DisplayName("Regression: Safe SQL Normalizer preserves expression grouping structure and distinguishes operator precedence")
+    void safeSqlNormalizer_PreservesGroupingStructure() {
+        // 1. Boolean grouping precedence must NOT be conflated
+        String expr1 = "a AND (b OR c)";
+        String expr2 = "(a AND b) OR c";
+        assertNotEquals(normalizeSqlExpression(expr1), normalizeSqlExpression(expr2),
+            "Normalizer must preserve boolean grouping: 'a AND (b OR c)' must not equal '(a AND b) OR c'");
+
+        // 2. Concatenation grouping order must NOT be conflated
+        String leftGrouped = "to_tsvector('simple', ((common_name || ' ') || scientific_name))";
+        String rightGrouped = "to_tsvector('simple', (common_name || (' ' || scientific_name)))";
+        assertNotEquals(normalizeSqlExpression(leftGrouped), normalizeSqlExpression(rightGrouped),
+            "Normalizer must distinguish left-associative from right-associative string concatenation");
+
+        // 3. PostgreSQL system casts are safely normalized without losing expression structure
+        String rawPg = "to_tsvector('simple'::regconfig, (((common_name)::text || ' '::text) || (scientific_name)::text))";
+        assertEquals(normalizeSqlExpression(leftGrouped), normalizeSqlExpression(rawPg),
+            "PostgreSQL decompiled GIN expression must match left-grouped canonical expression");
+
+        // 4. Partial predicates outer parens and casting normalized safely
+        String rawPred = "((status)::text = 'ACTIVE'::text)";
+        assertEquals("status = 'ACTIVE'", normalizeSqlPredicate(rawPred));
     }
 
     @Test
