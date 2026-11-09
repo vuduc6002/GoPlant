@@ -18,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.OffsetDateTime;
@@ -73,7 +74,19 @@ class DatabaseSchemaIntegrationTest {
 
     record ColumnTypeInfo(String dataType, String udtName) {}
 
-    record IndexInfo(String tableName, String indexName, String indexDef) {}
+    record IndexKeyInfo(int position, String expression, boolean isDesc) {}
+
+    record StrictIndexInfo(
+        String indexName,
+        String tableName,
+        String accessMethod,
+        boolean isUnique,
+        int keyAttrCount,
+        String partialPredicate,
+        List<IndexKeyInfo> keyExpressions
+    ) {}
+
+    record ExpectedKey(String rawExpression, boolean isDesc) {}
 
     @Test
     @DisplayName("Verify Database Schema, Flyway Migration V1, Tables, Extensions, Constraints, and Indexes")
@@ -297,54 +310,123 @@ class DatabaseSchemaIntegrationTest {
                 assertEquals(13, checksByTable.values().stream().mapToInt(Map::size).sum(),
                     "Total count of CHECK constraints across all business tables must be exactly 13");
 
-                // 9. Verify Definitions of All 19 Declared Indexes
-                Map<String, IndexInfo> actualIndexes = new HashMap<>();
-                try (Statement stmt = conn.createStatement()) {
-                    try (ResultSet rs = stmt.executeQuery(
-                        "SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = 'public'")) {
-                        while (rs.next()) {
-                            actualIndexes.put(
-                                rs.getString("indexname").toLowerCase(),
-                                new IndexInfo(rs.getString("tablename").toLowerCase(), rs.getString("indexname").toLowerCase(), rs.getString("indexdef"))
-                            );
+                // 9. Verify Definitions of All 19 Declared Indexes via PostgreSQL Catalogs
+                Map<String, StrictIndexInfo> actualIndexes = new HashMap<>();
+                String indexCatalogQuery = """
+                    SELECT
+                        ic.relname AS index_name,
+                        tc.relname AS table_name,
+                        am.amname AS access_method,
+                        i.indisunique AS is_unique,
+                        i.indnkeyatts AS key_attr_count,
+                        pg_get_expr(i.indpred, i.indrelid, true) AS partial_predicate,
+                        ic.oid AS index_oid
+                    FROM pg_index i
+                    JOIN pg_class ic ON ic.oid = i.indexrelid
+                    JOIN pg_class tc ON tc.oid = i.indrelid
+                    JOIN pg_namespace n ON n.oid = ic.relnamespace
+                    JOIN pg_am am ON am.oid = ic.relam
+                    LEFT JOIN pg_constraint con ON con.conindid = i.indexrelid
+                    WHERE n.nspname = 'public'
+                      AND tc.relname != 'flyway_schema_history'
+                      AND NOT i.indisprimary
+                      AND con.oid IS NULL
+                    ORDER BY tc.relname, ic.relname
+                    """;
+
+                try (Statement stmt = conn.createStatement();
+                     PreparedStatement keyStmt = conn.prepareStatement(
+                         "SELECT pg_get_indexdef(?, ?, true) AS expr, " +
+                         "COALESCE(pg_index_column_has_property(?, ?, 'desc'), false) AS is_desc");
+                     ResultSet rs = stmt.executeQuery(indexCatalogQuery)) {
+                    while (rs.next()) {
+                        String indexName = rs.getString("index_name").toLowerCase();
+                        String tableName = rs.getString("table_name").toLowerCase();
+                        String accessMethod = rs.getString("access_method").toLowerCase();
+                        boolean isUnique = rs.getBoolean("is_unique");
+                        int keyAttrCount = rs.getInt("key_attr_count");
+                        String partialPredicate = rs.getString("partial_predicate");
+                        long indexOid = rs.getLong("index_oid");
+
+                        List<IndexKeyInfo> keys = new ArrayList<>();
+                        for (int pos = 1; pos <= keyAttrCount; pos++) {
+                            keyStmt.setLong(1, indexOid);
+                            keyStmt.setInt(2, pos);
+                            keyStmt.setLong(3, indexOid);
+                            keyStmt.setInt(4, pos);
+                            try (ResultSet keyRs = keyStmt.executeQuery()) {
+                                if (keyRs.next()) {
+                                    keys.add(new IndexKeyInfo(
+                                        pos,
+                                        keyRs.getString("expr"),
+                                        keyRs.getBoolean("is_desc")
+                                    ));
+                                }
+                            }
                         }
+
+                        actualIndexes.put(indexName, new StrictIndexInfo(
+                            indexName, tableName, accessMethod, isUnique, keyAttrCount, partialPredicate, keys
+                        ));
                     }
                 }
 
+                assertEquals(19, actualIndexes.size(),
+                    "Total count of explicit non-constraint indexes across public schema business tables must be exactly 19");
+
                 // 9.1. Users (2 UNIQUE partial indexes)
-                assertIndexDefinition(actualIndexes, "idx_users_email_unique", "users", true, "btree", "email", "email IS NOT NULL");
-                assertIndexDefinition(actualIndexes, "idx_users_phone_unique", "users", true, "btree", "phone_number", "phone_number IS NOT NULL");
+                assertIndexDefinition(actualIndexes, "idx_users_email_unique", "users", true, "btree",
+                    List.of(new ExpectedKey("email", false)), "email IS NOT NULL");
+                assertIndexDefinition(actualIndexes, "idx_users_phone_unique", "users", true, "btree",
+                    List.of(new ExpectedKey("phone_number", false)), "phone_number IS NOT NULL");
 
                 // 9.2. Plant Species (2 btree + 1 GIN index)
-                assertIndexDefinition(actualIndexes, "idx_species_category", "plant_species", false, "btree", "category", null);
-                assertIndexDefinition(actualIndexes, "idx_species_active", "plant_species", false, "btree", "is_active", null);
-                assertIndexDefinition(actualIndexes, "idx_plant_species_search_gin", "plant_species", false, "gin", "to_tsvector", null);
+                assertIndexDefinition(actualIndexes, "idx_species_category", "plant_species", false, "btree",
+                    List.of(new ExpectedKey("category", false)), null);
+                assertIndexDefinition(actualIndexes, "idx_species_active", "plant_species", false, "btree",
+                    List.of(new ExpectedKey("is_active", false)), null);
+                assertIndexDefinition(actualIndexes, "idx_plant_species_search_gin", "plant_species", false, "gin",
+                    List.of(new ExpectedKey("to_tsvector('simple', common_name || ' ' || scientific_name)", false)), null);
 
                 // 9.3. Gardens (1 index)
-                assertIndexDefinition(actualIndexes, "idx_gardens_owner_id", "gardens", false, "btree", "owner_id", null);
+                assertIndexDefinition(actualIndexes, "idx_gardens_owner_id", "gardens", false, "btree",
+                    List.of(new ExpectedKey("owner_id", false)), null);
 
                 // 9.4. User Plants (3 indexes)
-                assertIndexDefinition(actualIndexes, "idx_user_plants_owner_id", "user_plants", false, "btree", "owner_id", null);
-                assertIndexDefinition(actualIndexes, "idx_user_plants_garden_id", "user_plants", false, "btree", "garden_id", null);
-                assertIndexDefinition(actualIndexes, "idx_user_plants_species_id", "user_plants", false, "btree", "species_id", null);
+                assertIndexDefinition(actualIndexes, "idx_user_plants_owner_id", "user_plants", false, "btree",
+                    List.of(new ExpectedKey("owner_id", false)), null);
+                assertIndexDefinition(actualIndexes, "idx_user_plants_garden_id", "user_plants", false, "btree",
+                    List.of(new ExpectedKey("garden_id", false)), null);
+                assertIndexDefinition(actualIndexes, "idx_user_plants_species_id", "user_plants", false, "btree",
+                    List.of(new ExpectedKey("species_id", false)), null);
 
                 // 9.5. Care Schedules (3 indexes, 1 partial)
-                assertIndexDefinition(actualIndexes, "idx_care_schedules_plant_id", "care_schedules", false, "btree", "user_plant_id", null);
-                assertIndexDefinition(actualIndexes, "idx_care_schedules_owner_id", "care_schedules", false, "btree", "owner_id", null);
-                assertIndexDefinition(actualIndexes, "idx_care_schedules_active", "care_schedules", false, "btree", "next_scheduled_at", "status = 'ACTIVE'");
+                assertIndexDefinition(actualIndexes, "idx_care_schedules_plant_id", "care_schedules", false, "btree",
+                    List.of(new ExpectedKey("user_plant_id", false)), null);
+                assertIndexDefinition(actualIndexes, "idx_care_schedules_owner_id", "care_schedules", false, "btree",
+                    List.of(new ExpectedKey("owner_id", false)), null);
+                assertIndexDefinition(actualIndexes, "idx_care_schedules_active", "care_schedules", false, "btree",
+                    List.of(new ExpectedKey("next_scheduled_at", false)), "status = 'ACTIVE'");
 
                 // 9.6. Care Logs (4 indexes, 1 partial, 1 DESC)
-                assertIndexDefinition(actualIndexes, "idx_care_logs_plant_id", "care_logs", false, "btree", "user_plant_id", null);
-                assertIndexDefinition(actualIndexes, "idx_care_logs_schedule_id", "care_logs", false, "btree", "schedule_id", "schedule_id IS NOT NULL");
-                assertIndexDefinition(actualIndexes, "idx_care_logs_performed_by", "care_logs", false, "btree", "performed_by", null);
-                assertIndexDefinition(actualIndexes, "idx_care_logs_performed_at", "care_logs", false, "btree", "performed_at DESC", null);
+                assertIndexDefinition(actualIndexes, "idx_care_logs_plant_id", "care_logs", false, "btree",
+                    List.of(new ExpectedKey("user_plant_id", false)), null);
+                assertIndexDefinition(actualIndexes, "idx_care_logs_schedule_id", "care_logs", false, "btree",
+                    List.of(new ExpectedKey("schedule_id", false)), "schedule_id IS NOT NULL");
+                assertIndexDefinition(actualIndexes, "idx_care_logs_performed_by", "care_logs", false, "btree",
+                    List.of(new ExpectedKey("performed_by", false)), null);
+                assertIndexDefinition(actualIndexes, "idx_care_logs_performed_at", "care_logs", false, "btree",
+                    List.of(new ExpectedKey("performed_at DESC", true)), null);
 
                 // 9.7. Growth Journals (2 indexes, 1 DESC)
-                assertIndexDefinition(actualIndexes, "idx_growth_journals_plant_id", "growth_journals", false, "btree", "user_plant_id", null);
-                assertIndexDefinition(actualIndexes, "idx_growth_journals_recorded_at", "growth_journals", false, "btree", "recorded_at DESC", null);
+                assertIndexDefinition(actualIndexes, "idx_growth_journals_plant_id", "growth_journals", false, "btree",
+                    List.of(new ExpectedKey("user_plant_id", false)), null);
+                assertIndexDefinition(actualIndexes, "idx_growth_journals_recorded_at", "growth_journals", false, "btree",
+                    List.of(new ExpectedKey("recorded_at DESC", true)), null);
 
                 // 9.8. Cameras (1 index)
-                assertIndexDefinition(actualIndexes, "idx_cameras_garden_id", "cameras", false, "btree", "garden_id", null);
+                assertIndexDefinition(actualIndexes, "idx_cameras_garden_id", "cameras", false, "btree",
+                    List.of(new ExpectedKey("garden_id", false)), null);
             } else {
                 // When running with default local H2 profile
                 Set<String> actualTables = new HashSet<>();
@@ -386,48 +468,106 @@ class DatabaseSchemaIntegrationTest {
     }
 
     private void assertIndexDefinition(
-        Map<String, IndexInfo> actualIndexes,
+        Map<String, StrictIndexInfo> actualIndexes,
         String indexName,
         String expectedTable,
-        boolean isUnique,
+        boolean expectedUnique,
         String expectedMethod,
-        String requiredColOrExpr,
-        String partialWhere
+        List<ExpectedKey> expectedKeys,
+        String expectedWherePredicate
     ) {
-        IndexInfo idx = actualIndexes.get(indexName.toLowerCase());
-        assertNotNull(idx, "Missing required index: " + indexName);
+        StrictIndexInfo idx = actualIndexes.get(indexName.toLowerCase());
+        assertNotNull(idx, "Missing required index in PostgreSQL catalog: " + indexName);
+
+        // 1. Table name exact match
         assertEquals(expectedTable.toLowerCase(), idx.tableName().toLowerCase(),
-            "Index " + indexName + " must belong to table " + expectedTable);
+            "Index " + indexName + " table mismatch: expected [" + expectedTable + "] but was [" + idx.tableName() + "]");
 
-        String def = idx.indexDef().toLowerCase();
-        if (isUnique) {
-            assertTrue(def.contains("unique index"), "Index " + indexName + " must be UNIQUE");
+        // 2. Exact UNIQUE assertion (must match both true and false via pg_index.indisunique)
+        assertEquals(expectedUnique, idx.isUnique(),
+            "Index " + indexName + " uniqueness mismatch: expected " + expectedUnique + " but was " + idx.isUnique());
+
+        // 3. Exact Access Method (btree, gin via pg_am.amname)
+        assertEquals(expectedMethod.toLowerCase(), idx.accessMethod().toLowerCase(),
+            "Index " + indexName + " access method mismatch: expected [" + expectedMethod + "] but was [" + idx.accessMethod() + "]");
+
+        // 4. Key attributes count and ordinality (via pg_index.indnkeyatts)
+        assertEquals(expectedKeys.size(), idx.keyAttrCount(),
+            "Index " + indexName + " key attributes count mismatch: expected " + expectedKeys.size() + " but was " + idx.keyAttrCount());
+        assertEquals(expectedKeys.size(), idx.keyExpressions().size(),
+            "Index " + indexName + " retrieved key expressions count mismatch");
+
+        // 5. Verify Each Key Expression and sort order (ASC vs DESC via pg_index_column_has_property)
+        for (int i = 0; i < expectedKeys.size(); i++) {
+            ExpectedKey expectedKey = expectedKeys.get(i);
+            IndexKeyInfo actualKey = idx.keyExpressions().get(i);
+
+            assertEquals(i + 1, actualKey.position(),
+                "Index " + indexName + " key position ordinal mismatch");
+
+            // Explicit ASC/DESC check
+            assertEquals(expectedKey.isDesc(), actualKey.isDesc(),
+                "Index " + indexName + " column at position " + (i + 1) + " sort order mismatch: expected DESC=" + expectedKey.isDesc() + ", actual=" + actualKey.isDesc());
+
+            // Expression verification
+            String actualClean = normalizeSqlExpression(actualKey.expression());
+            String expectedClean = normalizeSqlExpression(expectedKey.rawExpression());
+
+            assertEquals(expectedClean, actualClean,
+                "Index " + indexName + " key expression at position " + (i + 1) + " mismatch: expected [" + expectedKey.rawExpression() + "] but was [" + actualKey.expression() + "]");
+
+            // For GIN index expression, verify all required tokens explicitly
+            if ("gin".equalsIgnoreCase(expectedMethod)) {
+                String rawLower = actualKey.expression().toLowerCase();
+                assertTrue(rawLower.contains("to_tsvector"), "GIN index " + indexName + " expression must call to_tsvector");
+                assertTrue(rawLower.contains("'simple'"), "GIN index " + indexName + " expression must use 'simple' config");
+                assertTrue(rawLower.contains("common_name"), "GIN index " + indexName + " expression must reference common_name");
+                assertTrue(rawLower.contains("scientific_name"), "GIN index " + indexName + " expression must reference scientific_name");
+                assertTrue(actualKey.expression().contains("||"), "GIN index " + indexName + " expression must use concatenation operator ||");
+            }
         }
-        assertTrue(def.contains("using " + expectedMethod.toLowerCase()),
-            "Index " + indexName + " must use access method " + expectedMethod + ", definition: " + idx.indexDef());
 
-        assertTrue(def.contains(requiredColOrExpr.toLowerCase()),
-            "Index " + indexName + " must index [" + requiredColOrExpr + "], definition: " + idx.indexDef());
+        // 6. Partial index WHERE predicate (via pg_get_expr(indpred, indrelid, true))
+        if (expectedWherePredicate == null) {
+            assertNull(idx.partialPredicate(),
+                "Index " + indexName + " must NOT have a partial WHERE clause (indpred must be NULL), but found: " + idx.partialPredicate());
+        } else {
+            assertNotNull(idx.partialPredicate(),
+                "Index " + indexName + " must have a partial WHERE clause, but indpred was NULL");
 
-        if (partialWhere != null) {
-            assertTrue(def.contains("where"), "Index " + indexName + " must have a WHERE clause");
-            String cleanDef = def.replace("::text", "")
-                                 .replace("::character varying", "")
-                                 .replace("(", "")
-                                 .replace(")", "")
-                                 .replace(" ", "")
-                                 .replace("\"", "")
-                                 .replace("'", "")
-                                 .toLowerCase();
-            String cleanWhere = partialWhere.replace("(", "")
-                                            .replace(")", "")
-                                            .replace(" ", "")
-                                            .replace("\"", "")
-                                            .replace("'", "")
-                                            .toLowerCase();
-            assertTrue(cleanDef.contains(cleanWhere),
-                "Index " + indexName + " WHERE clause must contain [" + partialWhere + "], definition: " + idx.indexDef());
+            String actualPredClean = normalizeSqlPredicate(idx.partialPredicate());
+            String expectedPredClean = normalizeSqlPredicate(expectedWherePredicate);
+
+            assertEquals(expectedPredClean, actualPredClean,
+                "Index " + indexName + " partial WHERE predicate mismatch: expected [" + expectedWherePredicate + "] but was [" + idx.partialPredicate() + "]");
         }
+    }
+
+    private String normalizeSqlExpression(String expr) {
+        if (expr == null) {
+            return null;
+        }
+        return expr.replace("::regconfig", "")
+                   .replace("::character varying", "")
+                   .replace("::text", "")
+                   .replace("(", "")
+                   .replace(")", "")
+                   .replace(" ", "")
+                   .replace("\"", "")
+                   .toLowerCase();
+    }
+
+    private String normalizeSqlPredicate(String pred) {
+        if (pred == null) {
+            return null;
+        }
+        return pred.replace("::character varying", "")
+                   .replace("::text", "")
+                   .replace("(", "")
+                   .replace(")", "")
+                   .replace(" ", "")
+                   .replace("\"", "")
+                   .toLowerCase();
     }
 
     @Test
