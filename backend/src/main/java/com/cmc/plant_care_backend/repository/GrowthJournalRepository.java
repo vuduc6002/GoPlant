@@ -1,6 +1,8 @@
 package com.cmc.plant_care_backend.repository;
 
 import com.cmc.plant_care_backend.model.GrowthJournal;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
@@ -16,4 +18,6 @@ public interface GrowthJournalRepository extends JpaRepository<GrowthJournal, UU
     List<GrowthJournal> findByAuthorId(UUID authorId);
 
     Optional<GrowthJournal> findByIdAndAuthorId(UUID id, UUID authorId);
+
+    Page<GrowthJournal> findByUserPlantIdAndAuthorId(UUID userPlantId, UUID authorId, Pageable pageable);
 }

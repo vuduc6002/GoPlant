@@ -2,6 +2,7 @@ package com.cmc.plant_care_backend.repository;
 
 import com.cmc.plant_care_backend.model.UserPlant;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -9,7 +10,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 @Repository
-public interface UserPlantRepository extends JpaRepository<UserPlant, UUID> {
+public interface UserPlantRepository extends JpaRepository<UserPlant, UUID>, JpaSpecificationExecutor<UserPlant> {
 
     List<UserPlant> findByOwnerId(UUID ownerId);
 
@@ -18,4 +19,6 @@ public interface UserPlantRepository extends JpaRepository<UserPlant, UUID> {
     Optional<UserPlant> findByIdAndOwnerId(UUID id, UUID ownerId);
 
     boolean existsBySpeciesId(UUID speciesId);
+
+    long countByGardenId(UUID gardenId);
 }
