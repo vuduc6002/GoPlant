@@ -497,13 +497,12 @@ Lộ trình chuẩn hóa theo 10 giai đoạn của dự án GoPlant:
 - [x] **Giai đoạn 0:** Audit chỉ đọc hiện trạng repository và đối chiếu 2 báo cáo kỹ thuật.
 - [x] **Giai đoạn 1:** Tích hợp Frontend React Native + Expo SDK 57 vào nhánh `feature/integrate-frontend-report`; sửa lỗi TypeScript CSS declarations.
 - [x] **Giai đoạn 2:** Chuẩn hóa README, tài liệu môi trường phát triển Windows/VS Code và thiết lập GitHub Actions CI cho cả Frontend lẫn Backend.
-- [ ] **Giai đoạn 3:** Thiết kế mô hình dữ liệu (ERD 10 bảng), migration cơ sở dữ liệu PostgreSQL (Flyway) và đặc tả hợp đồng RESTful API / OpenAPI.
-- [ ] **Giai đoạn 4:** Xây dựng tầng Backend (Entity, Repository, Service, Controller) cho các phân hệ: Loài cây, Khu vườn, Cây cá nhân, Lịch chăm sóc và Nhật ký.
-- [ ] **Giai đoạn 5:** Cài đặt bảo mật Spring Security, mã hóa BCrypt, cơ chế JWT Token và kiểm soát quyền sở hữu dữ liệu cá nhân.
-- [ ] **Giai đoạn 6:** Kết nối Frontend Expo với Backend REST API; thay thế toàn bộ Mock Data bằng dữ liệu thực tế.
-- [ ] **Giai đoạn 7:** Kiểm thử tích hợp toàn diện trên Android Studio / Emulator và thiết bị thật.
-- [ ] **Giai đoạn 8:** Triển khai các tính năng mở rộng theo mức ưu tiên: Giám sát Camera, Mã QR (`plantCode`), Lưu trữ ảnh đám mây.
-- [ ] **Giai đoạn 9:** Hoàn thiện tổng kết, kiểm toán bảo mật, đóng gói bản phát hành và chuẩn bị báo cáo dự án.
+- [x] **Giai đoạn 3:** Thiết kế mô hình dữ liệu (ERD 11 bảng), migration cơ sở dữ liệu PostgreSQL (Flyway V1) và đặc tả hợp đồng RESTful API / OpenAPI.
+- [x] **Giai đoạn 4:** Triển khai Backend Spring Boot 4.1.1 với 19 REST API ưu tiên (Auth, Users, Species, Favorites, Gardens, Admin Species), bảo mật Spring Security + BCrypt + Bearer JWT, kiểm soát quyền sở hữu dữ liệu, Flyway Auto Configuration và kiểm thử tích hợp container PostgreSQL trên CI.
+- [ ] **Giai đoạn 5:** Triển khai 21 REST API nghiệp vụ còn lại (Cây cá nhân User Plants, Lịch chăm sóc Care Schedules, Nhật ký Care Logs, Nhật ký phát triển Growth Journals) và kết nối Frontend Expo với Backend qua REST API (thay thế Mock Data).
+- [ ] **Giai đoạn 6:** Kiểm thử tích hợp toàn diện trên Android Studio / Emulator và thiết bị thật.
+- [ ] **Giai đoạn 7:** Triển khai các tính năng mở rộng theo mức ưu tiên: Giám sát Camera, Mã QR (`plantCode`), Lưu trữ ảnh đám mây, AI chẩn đoán bệnh cây.
+- [ ] **Giai đoạn 8:** Hoàn thiện tổng kết, kiểm toán bảo mật, đóng gói bản phát hành và chuẩn bị báo cáo dự án.
 
 ---
 

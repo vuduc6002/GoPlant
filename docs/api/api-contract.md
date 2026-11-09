@@ -1,9 +1,9 @@
 # Hợp Đồng REST API — GoPlant
 
 > **Phiên bản:** 1.0.0  
-> **Giai đoạn:** 3 — Thiết kế dữ liệu và hợp đồng API  
+> **Giai đoạn:** 4 — Triển khai Backend RESTful API hoàn chỉnh  
 > **Nhánh:** `feature/integrate-frontend-report`  
-> **Ngày cập nhật:** 2026-10-31  
+> **Ngày cập nhật:** 2026-11-09  
 > **Base URL:** `https://<host>/api/v1`  
 > **Xác thực:** Bearer JWT trong header `Authorization: Bearer <token>`
 
@@ -756,74 +756,74 @@ Kích hoạt hoặc khoá tài khoản.
 
 ## 13. Tổng hợp 44 endpoints chuẩn hóa
 
-### 13.1. Bảng phân bổ theo nhóm chức năng
+### 13.1. Bảng phân bổ theo nhóm chức năng và trạng thái triển khai
 
-| Nhóm chức năng | Số endpoint MVP | Số endpoint Backlog | Tổng số endpoint |
-|---|:---:|:---:|:---:|
-| Authentication | 2 | 0 | 2 |
-| Users Profile | 3 | 0 | 3 |
-| Species & Favorites | 5 | 0 | 5 |
-| Gardens | 5 | 0 | 5 |
-| Plants | 8 | 0 | 8 |
-| Schedules | 6 | 0 | 6 |
-| Care Logs | 1 | 0 | 1 |
-| Growth Journals | 3 | 0 | 3 |
-| Admin Species | 4 | 0 | 4 |
-| Admin Users | 3 | 0 | 3 |
-| Cameras (Backlog) | 0 | 4 | 4 |
-| **Tổng cộng** | **40** | **4** | **44** |
+| Nhóm chức năng | Số API Giai đoạn 4 (Đã hoàn thành) | Số API Giai đoạn 5 (Kế hoạch) | Số API Backlog | Tổng số API |
+|---|:---:|:---:|:---:|:---:|
+| Authentication (`/api/v1/auth`) | **2** | 0 | 0 | 2 |
+| Users Profile (`/api/v1/users`) | **3** | 0 | 0 | 3 |
+| Species & Favorites (`/api/v1/species`) | **5** | 0 | 0 | 5 |
+| Gardens (`/api/v1/gardens`) | **5** | 0 | 0 | 5 |
+| Plants (`/api/v1/plants`) | 0 | **8** | 0 | 8 |
+| Schedules (`/api/v1/schedules`) | 0 | **6** | 0 | 6 |
+| Care Logs (`/api/v1/care-logs`) | 0 | **1** | 0 | 1 |
+| Growth Journals (`/api/v1/journals`) | 0 | **3** | 0 | 3 |
+| Admin Species (`/api/v1/admin/species`) | **4** | 0 | 0 | 4 |
+| Admin Users (`/api/v1/admin/users`) | 0 | **3** | 0 | 3 |
+| Cameras (`/api/v1/cameras`) | 0 | 0 | **4** | 4 |
+| **Tổng cộng** | **19 (Đã xong)** | **21 (Giai đoạn 5)** | **4 (Backlog)** | **44** |
 
-### 13.2. Danh sách chi tiết 44 endpoints (đồng bộ hoàn toàn với OpenAPI)
+### 13.2. Danh sách chi tiết 44 endpoints (Đối chiếu trạng thái Giai đoạn 4 và Giai đoạn 5)
 
-| # | Method | Endpoint | Quyền truy cập | Phân loại |
-|---|---|---|---|---|
-| 1 | POST | `/api/v1/auth/register` | Public | MVP |
-| 2 | POST | `/api/v1/auth/login` | Public | MVP |
-| 3 | GET | `/api/v1/users/me` | Authenticated | MVP |
-| 4 | PUT | `/api/v1/users/me` | Authenticated | MVP |
-| 5 | PUT | `/api/v1/users/me/password` | Authenticated | MVP |
-| 6 | GET | `/api/v1/species` | Authenticated | MVP |
-| 7 | GET | `/api/v1/species/{speciesId}` | Authenticated | MVP |
-| 8 | POST | `/api/v1/species/{speciesId}/favorite` | ROLE_USER | MVP |
-| 9 | DELETE | `/api/v1/species/{speciesId}/favorite` | ROLE_USER | MVP |
-| 10 | GET | `/api/v1/species/favorites` | ROLE_USER | MVP |
-| 11 | GET | `/api/v1/gardens` | ROLE_USER | MVP |
-| 12 | POST | `/api/v1/gardens` | ROLE_USER | MVP |
-| 13 | GET | `/api/v1/gardens/{gardenId}` | ROLE_USER (owner) | MVP |
-| 14 | PUT | `/api/v1/gardens/{gardenId}` | ROLE_USER (owner) | MVP |
-| 15 | DELETE | `/api/v1/gardens/{gardenId}` | ROLE_USER (owner) | MVP |
-| 16 | POST | `/api/v1/gardens/{gardenId}/plants` | ROLE_USER (owner) | MVP |
-| 17 | GET | `/api/v1/plants` | ROLE_USER | MVP |
-| 18 | GET | `/api/v1/plants/{plantId}` | ROLE_USER (owner) | MVP |
-| 19 | PUT | `/api/v1/plants/{plantId}` | ROLE_USER (owner) | MVP |
-| 20 | DELETE | `/api/v1/plants/{plantId}` | ROLE_USER (owner) | MVP |
-| 21 | GET | `/api/v1/plants/{plantId}/schedules` | ROLE_USER (owner) | MVP |
-| 22 | GET | `/api/v1/plants/{plantId}/care-logs` | ROLE_USER (owner) | MVP |
-| 23 | GET | `/api/v1/plants/{plantId}/journals` | ROLE_USER (owner) | MVP |
-| 24 | POST | `/api/v1/schedules` | ROLE_USER (owner) | MVP |
-| 25 | GET | `/api/v1/schedules/today` | ROLE_USER | MVP |
-| 26 | PUT | `/api/v1/schedules/{scheduleId}` | ROLE_USER (owner) | MVP |
-| 27 | DELETE | `/api/v1/schedules/{scheduleId}` | ROLE_USER (owner) | MVP |
-| 28 | POST | `/api/v1/schedules/{scheduleId}/complete` | ROLE_USER (owner) | MVP |
-| 29 | POST | `/api/v1/schedules/{scheduleId}/skip` | ROLE_USER (owner) | MVP |
-| 30 | POST | `/api/v1/care-logs` | ROLE_USER (owner) | MVP |
-| 31 | POST | `/api/v1/journals` | ROLE_USER (owner) | MVP |
-| 32 | PUT | `/api/v1/journals/{journalId}` | ROLE_USER (owner) | MVP |
-| 33 | DELETE | `/api/v1/journals/{journalId}` | ROLE_USER (owner) | MVP |
-| 34 | GET | `/api/v1/admin/species` | ROLE_ADMIN | MVP |
-| 35 | POST | `/api/v1/admin/species` | ROLE_ADMIN | MVP |
-| 36 | PUT | `/api/v1/admin/species/{speciesId}` | ROLE_ADMIN | MVP |
-| 37 | DELETE | `/api/v1/admin/species/{speciesId}` | ROLE_ADMIN | MVP |
-| 38 | GET | `/api/v1/admin/users` | ROLE_ADMIN | MVP |
-| 39 | GET | `/api/v1/admin/users/{userId}` | ROLE_ADMIN | MVP |
-| 40 | PATCH | `/api/v1/admin/users/{userId}/status` | ROLE_ADMIN | MVP |
-| 41 | GET | `/api/v1/gardens/{gardenId}/cameras` | ROLE_USER (owner) | Backlog |
-| 42 | POST | `/api/v1/gardens/{gardenId}/cameras` | ROLE_USER (owner) | Backlog |
-| 43 | PUT | `/api/v1/cameras/{cameraId}` | ROLE_USER (owner) | Backlog |
-| 44 | DELETE | `/api/v1/cameras/{cameraId}` | ROLE_USER (owner) | Backlog |
+| # | Method | Endpoint | Quyền truy cập | Phân loại | Trạng thái triển khai |
+|---|---|---|---|---|---|
+| 1 | POST | `/api/v1/auth/register` | Public | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 2 | POST | `/api/v1/auth/login` | Public | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 3 | GET | `/api/v1/users/me` | Authenticated | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 4 | PUT | `/api/v1/users/me` | Authenticated | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 5 | PUT | `/api/v1/users/me/password` | Authenticated | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 6 | GET | `/api/v1/species` | Authenticated | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 7 | GET | `/api/v1/species/{speciesId}` | Authenticated | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 8 | POST | `/api/v1/species/{speciesId}/favorite` | ROLE_USER | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 9 | DELETE | `/api/v1/species/{speciesId}/favorite` | ROLE_USER | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 10 | GET | `/api/v1/species/favorites` | ROLE_USER | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 11 | GET | `/api/v1/gardens` | ROLE_USER | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 12 | POST | `/api/v1/gardens` | ROLE_USER | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 13 | GET | `/api/v1/gardens/{gardenId}` | ROLE_USER (owner) | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 14 | PUT | `/api/v1/gardens/{gardenId}` | ROLE_USER (owner) | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 15 | DELETE | `/api/v1/gardens/{gardenId}` | ROLE_USER (owner) | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 16 | POST | `/api/v1/gardens/{gardenId}/plants` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 17 | GET | `/api/v1/plants` | ROLE_USER | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 18 | GET | `/api/v1/plants/{plantId}` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 19 | PUT | `/api/v1/plants/{plantId}` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 20 | DELETE | `/api/v1/plants/{plantId}` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 21 | GET | `/api/v1/plants/{plantId}/schedules` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 22 | GET | `/api/v1/plants/{plantId}/care-logs` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 23 | GET | `/api/v1/plants/{plantId}/journals` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 24 | POST | `/api/v1/schedules` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 25 | GET | `/api/v1/schedules/today` | ROLE_USER | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 26 | PUT | `/api/v1/schedules/{scheduleId}` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 27 | DELETE | `/api/v1/schedules/{scheduleId}` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 28 | POST | `/api/v1/schedules/{scheduleId}/complete` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 29 | POST | `/api/v1/schedules/{scheduleId}/skip` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 30 | POST | `/api/v1/care-logs` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 31 | POST | `/api/v1/journals` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 32 | PUT | `/api/v1/journals/{journalId}` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 33 | DELETE | `/api/v1/journals/{journalId}` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 34 | GET | `/api/v1/admin/species` | ROLE_ADMIN | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 35 | POST | `/api/v1/admin/species` | ROLE_ADMIN | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 36 | PUT | `/api/v1/admin/species/{speciesId}` | ROLE_ADMIN | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 37 | DELETE | `/api/v1/admin/species/{speciesId}` | ROLE_ADMIN | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 38 | GET | `/api/v1/admin/users` | ROLE_ADMIN | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 39 | GET | `/api/v1/admin/users/{userId}` | ROLE_ADMIN | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 40 | PATCH | `/api/v1/admin/users/{userId}/status` | ROLE_ADMIN | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 41 | GET | `/api/v1/gardens/{gardenId}/cameras` | ROLE_USER (owner) | Backlog | 📋 Kế hoạch Backlog |
+| 42 | POST | `/api/v1/gardens/{gardenId}/cameras` | ROLE_USER (owner) | Backlog | 📋 Kế hoạch Backlog |
+| 43 | PUT | `/api/v1/cameras/{cameraId}` | ROLE_USER (owner) | Backlog | 📋 Kế hoạch Backlog |
+| 44 | DELETE | `/api/v1/cameras/{cameraId}` | ROLE_USER (owner) | Backlog | 📋 Kế hoạch Backlog |
 
 > **Phạm vi mở rộng (ngoài 44 endpoints chuẩn):** Các tính năng Quên mật khẩu qua email (`POST /auth/forgot-password`), Cấp mới token (`POST /auth/refresh`), Đăng nhập Google/Zalo OAuth và Mã QR (`GET /plants/{id}/qr`) được xác định là Backlog mở rộng, không thuộc danh sách 44 endpoints của giai đoạn này.
 
 ---
 
-*Tài liệu này là hợp đồng API Giai đoạn 3.1. Triển khai thực tế sẽ thực hiện ở Giai đoạn 4.*
+*Tài liệu này là hợp đồng API chính thức của dự án GoPlant. 19 API ưu tiên đã được triển khai hoàn chỉnh ở Giai đoạn 4; 21 API còn lại sẽ được triển khai ở Giai đoạn 5.*

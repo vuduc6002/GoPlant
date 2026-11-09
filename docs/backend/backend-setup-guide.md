@@ -42,8 +42,10 @@ Backend cung cấp các profile ứng dụng phân tách rõ ràng:
 
 ### 3.2. Cấu hình CORS (Cross-Origin Resource Sharing)
 - `CORS_ALLOWED_ORIGINS`: Danh sách các origin được phép gọi API (phân tách bởi dấu phẩy).
-  - Giá trị mặc định: `http://localhost:8081,http://localhost:19006,http://localhost:3000,http://127.0.0.1:8081,http://10.0.2.2:8081`
+  - Giá trị mặc định trên `default` và `postgres`: `http://localhost:8081,http://localhost:19006,http://localhost:3000,http://127.0.0.1:8081,http://10.0.2.2:8081` (phục vụ phát triển local và Expo Web).
+  - Trên profile `supabase` (Production): Giá trị mặc định là **rỗng** (`${CORS_ALLOWED_ORIGINS:}`), ngăn chặn tuyệt đối việc mở CORS cho localhost trên môi trường production. Quản trị viên bắt buộc phải cấu hình biến môi trường `CORS_ALLOWED_ORIGINS` trỏ đến đúng domain frontend chính thức (ví dụ: `https://goplant.app,https://admin.goplant.app`).
   - Hệ thống cấu hình `allowCredentials(false)` vì ứng dụng di động và web sử dụng cơ chế Authorization Bearer Token trong Request Header, loại bỏ hoàn toàn lỗ hổng bảo mật CORS wildcard với credentials.
+  - *Lưu ý:* Ứng dụng di động native (Android / iOS) gọi REST API trực tiếp bằng HTTP client native không gửi header `Origin` của trình duyệt, do đó không bị chặn bởi chính sách CORS.
 
 ### 3.3. Cấu hình PostgreSQL Local (Profile `postgres`)
 - `POSTGRES_URL`: `jdbc:postgresql://localhost:5432/goplant`
@@ -113,39 +115,78 @@ $env:JWT_SECRET_BASE64 = "your_base64_jwt_secret_min_256_bits"
 
 ## 5. Quản trị phân quyền: Tạo và thu hồi quyền Quản trị viên (Admin)
 
-Để bảo đảm tính an toàn bảo mật, hệ thống không tự động cấp quyền `ROLE_ADMIN` qua API đăng ký công khai (`/api/v1/auth/register` chỉ cấp `ROLE_USER`). Việc thiết lập hoặc thu hồi quyền Quản trị viên được thực hiện trực tiếp thông qua câu lệnh SQL an toàn (Transaction-safe) trên cơ sở dữ liệu.
+Để bảo đảm tính an toàn bảo mật tuyệt đối:
+- Mọi tài khoản đăng ký mới qua endpoint công khai `POST /api/v1/auth/register` **chỉ được cấp vai trò `ROLE_USER`**.
+- Hệ thống **tuyệt đối không khởi tạo tài khoản Admin mặc định** với mật khẩu hardcoded trong mã nguồn hoặc migration.
+- Việc cấp hoặc thu hồi quyền Quản trị viên (`ROLE_ADMIN`) bắt buộc phải do Quản trị viên hệ thống thực hiện trực tiếp thông qua câu lệnh SQL an toàn (Transaction-safe) trên cơ sở dữ liệu PostgreSQL.
 
-### 5.1. Kịch bản SQL cấp quyền Admin cho tài khoản
+### 5.1. Kịch bản PostgreSQL DO Block cấp quyền Admin (Khuyến nghị - Tự động kiểm tra điều kiện)
 
-Chạy script sau trong PostgreSQL Client (psql, DBeaver, pgAdmin hoặc Supabase SQL Editor):
+Chạy script sau trong PostgreSQL Client (psql, DBeaver, pgAdmin hoặc Supabase SQL Editor). Script sẽ tự động kiểm tra sự tồn tại của tài khoản, xác minh trạng thái `ACTIVE` và đưa ra thông báo rõ ràng:
 
 ```sql
-BEGIN;
+DO $$
+DECLARE
+    v_user_id UUID;
+    v_role_id UUID;
+    v_target_email TEXT := 'admin@goplant.com'; -- << THAY EMAIL TÀI KHOẢN MỤC TIÊU TẠI ĐÂY
+    v_user_status TEXT;
+    v_full_name TEXT;
+BEGIN
+    -- 1. Tìm thông tin tài khoản người dùng
+    SELECT id, status, full_name INTO v_user_id, v_user_status, v_full_name
+    FROM users
+    WHERE email = v_target_email;
 
--- 1. Đảm bảo vai trò ROLE_ADMIN đã tồn tại
-INSERT INTO roles (name) VALUES ('ROLE_ADMIN') ON CONFLICT (name) DO NOTHING;
+    IF v_user_id IS NULL THEN
+        RAISE EXCEPTION 'LỖI: Không tìm thấy tài khoản với email "%". Vui lòng kiểm tra lại.', v_target_email;
+    END IF;
 
--- 2. Gán ROLE_ADMIN cho người dùng theo email (thay thế email mục tiêu tương ứng)
-INSERT INTO user_roles (user_id, role_id)
-SELECT u.id, r.id
-FROM users u, roles r
-WHERE u.email = 'admin@goplant.com'
-  AND r.name = 'ROLE_ADMIN'
-ON CONFLICT (user_id, role_id) DO NOTHING;
+    IF v_user_status <> 'ACTIVE' THEN
+        RAISE EXCEPTION 'LỖI: Tài khoản "%" đang ở trạng thái "%", chỉ được cấp quyền cho tài khoản ACTIVE.', v_target_email, v_user_status;
+    END IF;
 
-COMMIT;
+    -- 2. Đảm bảo vai trò ROLE_ADMIN tồn tại
+    INSERT INTO roles (name) VALUES ('ROLE_ADMIN') ON CONFLICT (name) DO NOTHING;
+    SELECT id INTO v_role_id FROM roles WHERE name = 'ROLE_ADMIN';
+
+    -- 3. Cấp quyền ROLE_ADMIN an toàn (tránh trùng lặp)
+    INSERT INTO user_roles (user_id, role_id)
+    VALUES (v_user_id, v_role_id)
+    ON CONFLICT (user_id, role_id) DO NOTHING;
+
+    RAISE NOTICE 'THÀNH CÔNG: Đã cấp quyền ROLE_ADMIN cho người dùng "%" (ID: %, Tên: "%")', 
+        v_target_email, v_user_id, v_full_name;
+END $$;
 ```
 
-### 5.2. Kịch bản SQL thu hồi quyền Admin
+### 5.2. Kịch bản PostgreSQL DO Block thu hồi quyền Admin
 
 ```sql
-BEGIN;
+DO $$
+DECLARE
+    v_user_id UUID;
+    v_role_id UUID;
+    v_target_email TEXT := 'admin@goplant.com'; -- << THAY EMAIL CẦN THU HỒI
+    v_rows_deleted INT;
+BEGIN
+    SELECT id INTO v_user_id FROM users WHERE email = v_target_email;
+    IF v_user_id IS NULL THEN
+        RAISE EXCEPTION 'LỖI: Không tìm thấy tài khoản với email "%".', v_target_email;
+    END IF;
 
-DELETE FROM user_roles
-WHERE role_id = (SELECT id FROM roles WHERE name = 'ROLE_ADMIN')
-  AND user_id = (SELECT id FROM users WHERE email = 'admin@goplant.com');
+    SELECT id INTO v_role_id FROM roles WHERE name = 'ROLE_ADMIN';
 
-COMMIT;
+    DELETE FROM user_roles
+    WHERE user_id = v_user_id AND role_id = v_role_id;
+    GET DIAGNOSTICS v_rows_deleted = ROW_COUNT;
+
+    IF v_rows_deleted > 0 THEN
+        RAISE NOTICE 'THÀNH CÔNG: Đã thu hồi quyền ROLE_ADMIN của tài khoản "%".', v_target_email;
+    ELSE
+        RAISE NOTICE 'THÔNG BÁO: Tài khoản "%" hiện không nắm giữ quyền ROLE_ADMIN.', v_target_email;
+    END IF;
+END $$;
 ```
 
 ### 5.3. Câu lệnh kiểm tra danh sách tài khoản Quản trị viên hiện tại
@@ -157,7 +198,8 @@ SELECT
     u.email,
     u.phone_number,
     u.status,
-    r.name AS role_name
+    r.name AS role_name,
+    u.created_at
 FROM users u
 JOIN user_roles ur ON u.id = ur.user_id
 JOIN roles r ON ur.role_id = r.id

@@ -4,7 +4,7 @@
 
 GoPlant là ứng dụng di động hỗ trợ người dùng khám phá và quản lý cây trồng, khu vườn cùng các hoạt động chăm sóc. Phạm vi sản phẩm được thể hiện trong thiết kế Figma và tài liệu chức năng của dự án.
 
-Repository hiện có giao diện frontend React Native theo Expo SDK 57, được tổ chức bằng Expo Router và TypeScript. Phase 3 đã bổ sung các màn hình và luồng frontend chính; nhiều phần vẫn dùng dữ liệu minh họa hoặc chưa kết nối dịch vụ. Ứng dụng chưa có backend, cơ sở dữ liệu hay xác thực thật.
+Repository hiện có giao diện frontend React Native theo Expo SDK 57, được tổ chức bằng Expo Router và TypeScript. Trong cấu trúc dự án GoPlant, Backend Spring Boot đã hoàn thành triển khai 19 REST API ưu tiên (Auth, Users, Species, Favorites, Gardens, Admin Species) tại thư mục `backend/`. Ở giai đoạn phát triển hiện tại, ứng dụng Frontend vẫn sử dụng Mock Data và React State cục bộ trong phiên nhằm phục vụ phát triển giao diện độc lập; việc kết nối tích hợp toàn diện giữa Frontend và Backend REST API sẽ được thực hiện tại Giai đoạn 5.
 
 ## Trạng thái công nghệ
 
@@ -182,7 +182,7 @@ Kết quả được xác minh khi cập nhật README:
 - [x] Bổ sung mock login development và quản lý cây cục bộ trong phiên.
 - [x] Chạy TypeScript và kiểm tra dependency chính khi cập nhật tài liệu.
 - [ ] Hoàn thiện dữ liệu nội dung cây, gồm điều kiện sinh trưởng có nguồn xác định.
-- [ ] Kết nối lưu trữ/backend/API và xác thực thật.
+- [ ] Kết nối tích hợp toàn diện Frontend với Backend REST API (thay thế Mock Auth và State cục bộ bằng 19 API hiện có và 21 API Giai đoạn 5).
 - [ ] Hoàn thiện các nghiệp vụ vườn, nhật ký, lịch chăm sóc và theo dõi.
 - [ ] Đối chiếu toàn bộ giao diện trực tiếp trên Android Emulator với ảnh Figma.
 - [ ] Thiết lập ESLint riêng nếu nhóm muốn dùng script lint hiện tại.
