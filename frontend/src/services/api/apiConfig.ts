@@ -17,7 +17,7 @@ function resolveApiBaseUrl(): { url: string; isConfigured: boolean } {
 
   if (!envUrl) {
     const fallback = getDefaultBaseUrl();
-    if (__DEV__) {
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
       console.warn(
         `[GoPlant API] EXPO_PUBLIC_API_BASE_URL chưa được thiết lập trong frontend/.env. ` +
         `Đang sử dụng cấu hình mặc định: ${fallback}. ` +

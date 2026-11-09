@@ -11,6 +11,7 @@ import {
   saveSession,
   getSession,
   clearSession,
+  StorageError,
 } from '@/services/api/tokenStorage';
 import { registerUnauthorizedHandler } from '@/services/api/apiClient';
 import { queryClient, clearQueryCache } from '@/services/query/queryClient';
@@ -37,46 +38,80 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>('initializing');
   const [user, setUser] = useState<AuthUserSummary | null>(null);
   const [profile, setProfile] = useState<UserProfileDto | null>(null);
+  const [storageError, setStorageError] = useState<StorageError | null>(null);
   const isLoggingOutRef = useRef(false);
 
-  const performLogout = useCallback(async () => {
+  const performLogout = useCallback(async (): Promise<void> => {
     if (isLoggingOutRef.current) {
       return;
     }
     isLoggingOutRef.current = true;
 
+    let deleteError: StorageError | null = null;
     try {
-      try {
-        await clearSession();
-      } catch {
-        // Storage clearing failure must NOT block state transition to unauthenticated
-      }
+      // Step 1: Cancel in-flight queries and clear all user cached data
       await clearQueryCache();
       setUser(null);
       setProfile(null);
-      setStatus('unauthenticated');
+      setStorageError(null);
+
+      // Step 2: Clear stored session from SecureStore
+      try {
+        await clearSession();
+      } catch (err) {
+        deleteError =
+          err instanceof StorageError
+            ? err
+            : new StorageError({
+                code: 'DELETE_FAILED',
+                operation: 'delete',
+                message: 'Xóa phiên đăng nhập khỏi SecureStore thất bại.',
+                cause: err,
+              });
+        setStorageError(deleteError);
+      }
     } finally {
+      setStatus('unauthenticated');
       isLoggingOutRef.current = false;
+    }
+
+    if (deleteError) {
+      throw deleteError;
     }
   }, []);
 
   // Listen for 401 Unauthorized signals from protected API calls
   useEffect(() => {
     const unregister = registerUnauthorizedHandler(() => {
-      performLogout();
+      performLogout().catch(() => {
+        // Handled silently for automated 401 logout
+      });
     });
     return unregister;
   }, [performLogout]);
 
   // Load and verify session from SecureStore on app launch
-  const loadSession = useCallback(async () => {
+  const loadSession = useCallback(async (): Promise<void> => {
+    setStatus('initializing');
+    setStorageError(null);
+
     try {
       let session: AuthSession | null = null;
       try {
         session = await getSession();
-      } catch {
-        // Storage I/O failure on startup: safely treat as unauthenticated
-        setStatus('unauthenticated');
+      } catch (err) {
+        // SecureStore read failure: DO NOT delete session, DO NOT treat as unauthenticated!
+        const stErr =
+          err instanceof StorageError
+            ? err
+            : new StorageError({
+                code: 'READ_FAILED',
+                operation: 'read',
+                message: 'Không thể truy cập dữ liệu phiên đăng nhập trên thiết bị.',
+                cause: err,
+              });
+        setStorageError(stErr);
+        setStatus('storage-error');
         return;
       }
 
@@ -100,7 +135,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch (err) {
         if (err instanceof AppApiError && err.statusCode === 401) {
           // Token expired or invalid on backend: purge session
-          await performLogout();
+          await performLogout().catch(() => {
+            // Handled
+          });
         } else {
           // Network error, timeout, or 5xx: retain stored session so user is not locked out offline
           setUser(session.user);
@@ -132,27 +169,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         user: loginData.user,
         savedAt: Date.now(),
       };
+
+      // Only transition to authenticated if saveSession succeeds
       await saveSession(newSession);
 
       // Step 4: Update Auth context state
       setUser(loginData.user);
       setStatus('authenticated');
+      setStorageError(null);
 
-      // Step 5: Prefetch / refresh user profile asynchronously
-      getMeApi()
-        .then((p) => {
-          setProfile(p);
-          queryClient.setQueryData(queryKeys.user.me, p);
-          setUser({
-            id: p.id,
-            fullName: p.fullName,
-            email: p.email,
-            roles: p.roles,
-          });
-        })
-        .catch(() => {
-          // Non-blocking background fetch
-        });
+      // Note: React Query's useUserProfile in HomeScreen will fetch and cache profile on demand,
+      // avoiding duplicate GET /users/me requests during login.
 
       return loginData;
     },
@@ -180,7 +207,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return userProfile;
     } catch (err) {
       if (err instanceof AppApiError && err.statusCode === 401) {
-        await performLogout();
+        await performLogout().catch(() => {
+          // Handled
+        });
       }
       return null;
     }
@@ -191,12 +220,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       status,
       user,
       profile,
+      storageError,
       login,
       register,
       logout: performLogout,
       refreshProfile,
+      retryLoadSession: loadSession,
     }),
-    [status, user, profile, login, register, performLogout, refreshProfile]
+    [status, user, profile, storageError, login, register, performLogout, refreshProfile, loadSession]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

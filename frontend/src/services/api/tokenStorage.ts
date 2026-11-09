@@ -2,7 +2,38 @@ import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 import type { AuthSession } from './apiTypes';
 
-const SESSION_STORAGE_KEY = 'goplant_auth_session';
+export const SESSION_STORAGE_KEY = 'goplant_auth_session';
+
+export type StorageErrorCode =
+  | 'STORAGE_UNAVAILABLE'
+  | 'READ_FAILED'
+  | 'WRITE_FAILED'
+  | 'DELETE_FAILED';
+
+export type StorageOperation = 'check_availability' | 'read' | 'write' | 'delete';
+
+export class StorageError extends Error {
+  readonly code: StorageErrorCode;
+  readonly operation: StorageOperation;
+  readonly cause?: unknown;
+
+  constructor(params: {
+    code: StorageErrorCode;
+    operation: StorageOperation;
+    message: string;
+    cause?: unknown;
+  }) {
+    super(params.message);
+    this.name = 'StorageError';
+    this.code = params.code;
+    this.operation = params.operation;
+    this.cause = params.cause;
+  }
+
+  get isStorageUnavailable(): boolean {
+    return this.code === 'STORAGE_UNAVAILABLE';
+  }
+}
 
 /**
  * In-memory session store strictly for Web demo execution.
@@ -12,14 +43,11 @@ const SESSION_STORAGE_KEY = 'goplant_auth_session';
  */
 let webMemorySession: AuthSession | null = null;
 
-export class StorageError extends Error {
-  readonly isStorageUnavailable: boolean;
-
-  constructor(message: string, isStorageUnavailable = false) {
-    super(message);
-    this.name = 'StorageError';
-    this.isStorageUnavailable = isStorageUnavailable;
-  }
+/**
+ * Testing helper to reset in-memory web session between test runs.
+ */
+export function _resetWebMemorySession(): void {
+  webMemorySession = null;
 }
 
 /**
@@ -62,18 +90,22 @@ async function assertNativeSecureStoreAvailable(): Promise<void> {
   try {
     const isAvailable = await SecureStore.isAvailableAsync();
     if (!isAvailable) {
-      throw new StorageError(
-        'Thiết bị không hỗ trợ lưu trữ bảo mật SecureStore. Phiên đăng nhập không thể lưu an toàn.',
-        true
-      );
+      throw new StorageError({
+        code: 'STORAGE_UNAVAILABLE',
+        operation: 'check_availability',
+        message: 'Thiết bị không hỗ trợ lưu trữ bảo mật SecureStore. Phiên đăng nhập không thể lưu an toàn.',
+      });
     }
   } catch (err) {
     if (err instanceof StorageError) throw err;
-    throw new StorageError(
-      'Không thể kiểm tra tính khả dụng của SecureStore trên thiết bị: ' +
+    throw new StorageError({
+      code: 'STORAGE_UNAVAILABLE',
+      operation: 'check_availability',
+      message:
+        'Không thể kiểm tra tính khả dụng của SecureStore trên thiết bị: ' +
         (err instanceof Error ? err.message : String(err)),
-      true
-    );
+      cause: err,
+    });
   }
 }
 
@@ -85,7 +117,11 @@ async function assertNativeSecureStoreAvailable(): Promise<void> {
  */
 export async function saveSession(session: AuthSession): Promise<void> {
   if (!isValidSession(session)) {
-    throw new StorageError('Dữ liệu phiên làm việc không hợp lệ để lưu trữ.');
+    throw new StorageError({
+      code: 'WRITE_FAILED',
+      operation: 'write',
+      message: 'Dữ liệu phiên làm việc không hợp lệ để lưu trữ.',
+    });
   }
 
   if (Platform.OS === 'web') {
@@ -101,10 +137,14 @@ export async function saveSession(session: AuthSession): Promise<void> {
       keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
     });
   } catch (err) {
-    throw new StorageError(
-      'Lưu trữ phiên đăng nhập vào SecureStore thất bại: ' +
-        (err instanceof Error ? err.message : String(err))
-    );
+    throw new StorageError({
+      code: 'WRITE_FAILED',
+      operation: 'write',
+      message:
+        'Lưu trữ phiên đăng nhập vào SecureStore thất bại: ' +
+        (err instanceof Error ? err.message : String(err)),
+      cause: err,
+    });
   }
 }
 
@@ -125,11 +165,15 @@ export async function getSession(): Promise<AuthSession | null> {
   try {
     raw = await SecureStore.getItemAsync(SESSION_STORAGE_KEY);
   } catch (err) {
-    // I/O or hardware failure: DO NOT delete user data, throw error to caller
-    throw new StorageError(
-      'Không thể đọc phiên làm việc từ SecureStore: ' +
-        (err instanceof Error ? err.message : String(err))
-    );
+    // I/O or hardware failure: DO NOT delete user data, throw typed error to caller
+    throw new StorageError({
+      code: 'READ_FAILED',
+      operation: 'read',
+      message:
+        'Không thể đọc phiên làm việc từ SecureStore: ' +
+        (err instanceof Error ? err.message : String(err)),
+      cause: err,
+    });
   }
 
   if (!raw) {
@@ -163,14 +207,11 @@ async function safeDeleteCorruptSession(): Promise<void> {
 
 /**
  * Fast helper to obtain the current access token for Authorization headers.
+ * Does NOT swallow StorageError: allows StorageError to propagate to caller.
  */
 export async function getAccessToken(): Promise<string | null> {
-  try {
-    const session = await getSession();
-    return session ? session.accessToken : null;
-  } catch {
-    return null;
-  }
+  const session = await getSession();
+  return session ? session.accessToken : null;
 }
 
 /**
@@ -185,9 +226,13 @@ export async function clearSession(): Promise<void> {
   try {
     await SecureStore.deleteItemAsync(SESSION_STORAGE_KEY);
   } catch (err) {
-    throw new StorageError(
-      'Xóa phiên đăng nhập khỏi SecureStore thất bại: ' +
-        (err instanceof Error ? err.message : String(err))
-    );
+    throw new StorageError({
+      code: 'DELETE_FAILED',
+      operation: 'delete',
+      message:
+        'Xóa phiên đăng nhập khỏi SecureStore thất bại: ' +
+        (err instanceof Error ? err.message : String(err)),
+      cause: err,
+    });
   }
 }

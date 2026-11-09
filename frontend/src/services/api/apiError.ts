@@ -1,5 +1,6 @@
 import { type AxiosError, type AxiosResponse, isAxiosError } from 'axios';
 import type { ApiResponse } from './apiTypes';
+import { StorageError } from './tokenStorage';
 
 export class AppApiError extends Error {
   readonly statusCode?: number;
@@ -9,6 +10,9 @@ export class AppApiError extends Error {
   readonly isAuthError: boolean;
   readonly isValidationError: boolean;
   readonly isConflictError: boolean;
+  readonly isStorageError: boolean;
+  readonly isTimeoutError: boolean;
+  readonly isForbiddenError: boolean;
   readonly timestamp?: string;
 
   constructor(params: {
@@ -17,6 +21,9 @@ export class AppApiError extends Error {
     code?: string;
     field?: string;
     isNetworkError?: boolean;
+    isStorageError?: boolean;
+    isTimeoutError?: boolean;
+    isForbiddenError?: boolean;
     timestamp?: string;
   }) {
     super(params.message);
@@ -28,6 +35,15 @@ export class AppApiError extends Error {
     this.isAuthError = params.statusCode === 401 || params.code === 'UNAUTHORIZED';
     this.isValidationError = params.statusCode === 400 || params.code === 'VALIDATION_ERROR';
     this.isConflictError = params.statusCode === 409 || params.code === 'CONFLICT';
+    this.isStorageError =
+      Boolean(params.isStorageError) ||
+      params.code === 'STORAGE_ERROR' ||
+      params.code === 'STORAGE_UNAVAILABLE' ||
+      params.code === 'READ_FAILED' ||
+      params.code === 'WRITE_FAILED' ||
+      params.code === 'DELETE_FAILED';
+    this.isTimeoutError = Boolean(params.isTimeoutError) || params.code === 'TIMEOUT_ERROR';
+    this.isForbiddenError = params.statusCode === 403 || params.code === 'FORBIDDEN';
     this.timestamp = params.timestamp;
   }
 }
@@ -80,7 +96,7 @@ export function normalizeBackendFailure(
 }
 
 /**
- * Normalizes any error (AxiosError, HTTP response, backend envelope, Network error, or generic Error)
+ * Normalizes any error (AxiosError, HTTP response, backend envelope, StorageError, Network error, or generic Error)
  * into a strongly-typed AppApiError.
  */
 export function normalizeApiError(error: unknown): AppApiError {
@@ -88,7 +104,17 @@ export function normalizeApiError(error: unknown): AppApiError {
     return error;
   }
 
-  // 1. Direct Backend failure envelope object passed in
+  // 1. StorageError from tokenStorage
+  if (error instanceof StorageError || (error instanceof Error && error.name === 'StorageError')) {
+    const stErr = error as StorageError;
+    return new AppApiError({
+      message: stErr.message || 'Lỗi lưu trữ phiên đăng nhập.',
+      code: stErr.code || 'STORAGE_ERROR',
+      isStorageError: true,
+    });
+  }
+
+  // 2. Direct Backend failure envelope object passed in
   if (error && typeof error === 'object') {
     const rawObj = error as Record<string, unknown>;
 
@@ -106,7 +132,7 @@ export function normalizeApiError(error: unknown): AppApiError {
     }
   }
 
-  // 2. Standard AxiosError
+  // 3. Standard AxiosError
   if (isAxiosError(error)) {
     const axiosErr = error as AxiosError<ApiResponse<unknown>>;
 
@@ -137,6 +163,7 @@ export function normalizeApiError(error: unknown): AppApiError {
         message: 'Kết nối đến máy chủ quá thời gian chờ. Vui lòng thử lại.',
         code: 'TIMEOUT_ERROR',
         isNetworkError: true,
+        isTimeoutError: true,
       });
     }
 
@@ -148,7 +175,7 @@ export function normalizeApiError(error: unknown): AppApiError {
     });
   }
 
-  // 3. Standard JS Error
+  // 4. Standard JS Error
   if (error instanceof Error) {
     return new AppApiError({
       message: error.message || 'Đã có lỗi xảy ra. Vui lòng thử lại.',
@@ -156,7 +183,7 @@ export function normalizeApiError(error: unknown): AppApiError {
     });
   }
 
-  // 4. Unknown fallback
+  // 5. Unknown fallback
   return new AppApiError({
     message: 'Đã có lỗi không xác định xảy ra.',
     code: 'UNKNOWN_ERROR',

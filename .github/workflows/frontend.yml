@@ -34,6 +34,12 @@ jobs:
       - name: TypeScript typecheck
         run: npm run typecheck
 
+      - name: ESLint
+        run: npm run lint
+
+      - name: Automated tests
+        run: npm test
+
       - name: Validate Expo config
         run: npx expo config --json
 
