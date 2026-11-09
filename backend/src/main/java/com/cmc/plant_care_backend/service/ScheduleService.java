@@ -1,5 +1,6 @@
 package com.cmc.plant_care_backend.service;
 
+import com.cmc.plant_care_backend.common.exception.ConflictException;
 import com.cmc.plant_care_backend.common.exception.ForbiddenException;
 import com.cmc.plant_care_backend.common.exception.ResourceNotFoundException;
 import com.cmc.plant_care_backend.common.exception.ValidationException;
@@ -22,6 +23,7 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.UUID;
@@ -77,13 +79,18 @@ public class ScheduleService {
                 throw new ValidationException("Chu kỳ tùy chỉnh bắt buộc phải có khoảng cách ngày lớn hơn 0", "intervalDays");
             }
             intervalDays = request.getIntervalDays();
+        } else {
+            if (request.getIntervalDays() != null) {
+                throw new ValidationException("Khoảng cách ngày (intervalDays) chỉ áp dụng cho chu kỳ tùy chỉnh (CUSTOM)", "intervalDays");
+            }
         }
 
         LocalTime reminderTime = parseLocalTime(request.getReminderTime(), DEFAULT_REMINDER_TIME);
         OffsetDateTime nextScheduledAt = request.getStartDate()
             .atTime(reminderTime)
             .atZone(VN_ZONE)
-            .toOffsetDateTime();
+            .toOffsetDateTime()
+            .withOffsetSameInstant(ZoneOffset.UTC);
 
         CareSchedule schedule = new CareSchedule();
         schedule.setUserPlant(plant);
@@ -126,7 +133,9 @@ public class ScheduleService {
                 }
                 item.setTaskType(s.getTaskType());
                 item.setTaskLabel(s.getTaskLabel());
-                item.setNextScheduledAt(s.getNextScheduledAt());
+                if (s.getNextScheduledAt() != null) {
+                    item.setNextScheduledAt(s.getNextScheduledAt().withOffsetSameInstant(ZoneOffset.UTC));
+                }
                 item.setOverdue(s.getNextScheduledAt().isBefore(now));
                 item.setStatus(s.getStatus());
                 return item;
@@ -135,7 +144,7 @@ public class ScheduleService {
     }
 
     public CareScheduleResponse updateSchedule(UUID scheduleId, UUID userId, UpdateScheduleRequest request) {
-        CareSchedule schedule = careScheduleRepository.findById(scheduleId)
+        CareSchedule schedule = careScheduleRepository.findByIdWithPessimisticLock(scheduleId)
             .orElseThrow(() -> new ResourceNotFoundException("Lịch chăm sóc", scheduleId));
 
         if (!schedule.getOwner().getId().equals(userId)) {
@@ -151,15 +160,24 @@ public class ScheduleService {
         }
 
         if (request.isReminderTimePresent()) {
-            if (request.getReminderTime() == null || request.getReminderTime().isBlank()) {
+            if (request.getReminderTime() == null) {
                 schedule.setReminderTime(DEFAULT_REMINDER_TIME);
             } else {
                 schedule.setReminderTime(parseLocalTime(request.getReminderTime(), DEFAULT_REMINDER_TIME));
             }
         }
 
+        if (request.isFrequencyPresent() && request.getFrequency() == null) {
+            throw new ValidationException("Tần suất lặp không được để trống", "frequency");
+        }
+
         Frequency targetFreq = request.isFrequencyPresent() ? request.getFrequency() : schedule.getFrequency();
-        Integer targetInterval = request.isIntervalDaysPresent() ? request.getIntervalDays() : schedule.getIntervalDays();
+        Integer targetInterval;
+        if (request.isIntervalDaysPresent()) {
+            targetInterval = request.getIntervalDays();
+        } else {
+            targetInterval = (targetFreq == Frequency.CUSTOM) ? schedule.getIntervalDays() : null;
+        }
 
         if (targetFreq == Frequency.CUSTOM) {
             if (targetInterval == null || targetInterval <= 0) {
@@ -167,6 +185,9 @@ public class ScheduleService {
             }
             schedule.setIntervalDays(targetInterval);
         } else {
+            if (request.isIntervalDaysPresent() && request.getIntervalDays() != null) {
+                throw new ValidationException("Khoảng cách ngày (intervalDays) chỉ áp dụng cho chu kỳ tùy chỉnh (CUSTOM)", "intervalDays");
+            }
             schedule.setIntervalDays(null);
         }
         schedule.setFrequency(targetFreq);
@@ -200,7 +221,7 @@ public class ScheduleService {
                     next = next.plusDays(step);
                 }
             }
-            schedule.setNextScheduledAt(next);
+            schedule.setNextScheduledAt(next.withOffsetSameInstant(ZoneOffset.UTC));
         }
 
         schedule = careScheduleRepository.save(schedule);
@@ -208,7 +229,7 @@ public class ScheduleService {
     }
 
     public void deleteSchedule(UUID scheduleId, UUID userId) {
-        CareSchedule schedule = careScheduleRepository.findById(scheduleId)
+        CareSchedule schedule = careScheduleRepository.findByIdWithPessimisticLock(scheduleId)
             .orElseThrow(() -> new ResourceNotFoundException("Lịch chăm sóc", scheduleId));
 
         if (!schedule.getOwner().getId().equals(userId)) {
@@ -220,11 +241,20 @@ public class ScheduleService {
     }
 
     public CompleteScheduleResponse completeSchedule(UUID scheduleId, UUID userId, CompleteCareRequest request) {
-        CareSchedule schedule = careScheduleRepository.findById(scheduleId)
+        CareSchedule schedule = careScheduleRepository.findByIdWithPessimisticLock(scheduleId)
             .orElseThrow(() -> new ResourceNotFoundException("Lịch chăm sóc", scheduleId));
 
         if (!schedule.getOwner().getId().equals(userId)) {
             throw new ForbiddenException("Bạn không có quyền thao tác trên lịch chăm sóc này");
+        }
+
+        if (schedule.getStatus() != ScheduleStatus.ACTIVE) {
+            throw new ConflictException("Lịch chăm sóc không ở trạng thái hoạt động (" + schedule.getStatus() + ")");
+        }
+
+        OffsetDateTime now = OffsetDateTime.now();
+        if (schedule.getNextScheduledAt().isAfter(now)) {
+            throw new ConflictException("Lượt chăm sóc chưa đến hạn hoặc đã được hoàn thành");
         }
 
         CareLog log = new CareLog();
@@ -240,22 +270,39 @@ public class ScheduleService {
             }
             if (request.getPerformedAt() != null) {
                 log.setPerformedAt(request.getPerformedAt());
+            } else {
+                log.setPerformedAt(now);
             }
+        } else {
+            log.setPerformedAt(now);
         }
         log = careLogRepository.save(log);
 
         advanceSchedule(schedule);
         schedule = careScheduleRepository.save(schedule);
 
-        return new CompleteScheduleResponse(log.getId(), schedule.getStatus().name(), schedule.getNextScheduledAt());
+        OffsetDateTime nextUtc = schedule.getNextScheduledAt() != null
+            ? schedule.getNextScheduledAt().withOffsetSameInstant(ZoneOffset.UTC)
+            : null;
+
+        return new CompleteScheduleResponse(log.getId(), schedule.getStatus().name(), nextUtc);
     }
 
     public CompleteScheduleResponse skipSchedule(UUID scheduleId, UUID userId, SkipCareRequest request) {
-        CareSchedule schedule = careScheduleRepository.findById(scheduleId)
+        CareSchedule schedule = careScheduleRepository.findByIdWithPessimisticLock(scheduleId)
             .orElseThrow(() -> new ResourceNotFoundException("Lịch chăm sóc", scheduleId));
 
         if (!schedule.getOwner().getId().equals(userId)) {
             throw new ForbiddenException("Bạn không có quyền thao tác trên lịch chăm sóc này");
+        }
+
+        if (schedule.getStatus() != ScheduleStatus.ACTIVE) {
+            throw new ConflictException("Lịch chăm sóc không ở trạng thái hoạt động (" + schedule.getStatus() + ")");
+        }
+
+        OffsetDateTime now = OffsetDateTime.now();
+        if (schedule.getNextScheduledAt().isAfter(now)) {
+            throw new ConflictException("Lượt chăm sóc chưa đến hạn hoặc đã được hoàn thành");
         }
 
         CareLog log = new CareLog();
@@ -267,12 +314,17 @@ public class ScheduleService {
         if (request != null && request.getNote() != null) {
             log.setNote(request.getNote());
         }
+        log.setPerformedAt(now);
         log = careLogRepository.save(log);
 
         advanceSchedule(schedule);
         schedule = careScheduleRepository.save(schedule);
 
-        return new CompleteScheduleResponse(log.getId(), schedule.getStatus().name(), schedule.getNextScheduledAt());
+        OffsetDateTime nextUtc = schedule.getNextScheduledAt() != null
+            ? schedule.getNextScheduledAt().withOffsetSameInstant(ZoneOffset.UTC)
+            : null;
+
+        return new CompleteScheduleResponse(log.getId(), schedule.getStatus().name(), nextUtc);
     }
 
     private void advanceSchedule(CareSchedule schedule) {
@@ -296,7 +348,7 @@ public class ScheduleService {
             }
         }
 
-        schedule.setNextScheduledAt(next);
+        schedule.setNextScheduledAt(next.withOffsetSameInstant(ZoneOffset.UTC));
     }
 
     private int getStepDays(Frequency freq, Integer intervalDays) {
@@ -310,17 +362,20 @@ public class ScheduleService {
     }
 
     private LocalTime parseLocalTime(String timeStr, LocalTime defaultTime) {
-        if (timeStr == null || timeStr.trim().isEmpty()) {
+        if (timeStr == null) {
             return defaultTime;
         }
+        String trimmed = timeStr.trim();
+        if (trimmed.isEmpty()) {
+            throw new ValidationException("Giờ nhắc không được để trống", "reminderTime");
+        }
         try {
-            String trimmed = timeStr.trim();
             if (trimmed.length() == 5) {
                 trimmed = trimmed + ":00";
             }
             return LocalTime.parse(trimmed);
         } catch (DateTimeParseException e) {
-            return defaultTime;
+            throw new ValidationException("Giờ nhắc không đúng định dạng HH:mm:ss", "reminderTime");
         }
     }
 
@@ -341,7 +396,9 @@ public class ScheduleService {
         }
         res.setStartDate(s.getStartDate());
         res.setEndDate(s.getEndDate());
-        res.setNextScheduledAt(s.getNextScheduledAt());
+        if (s.getNextScheduledAt() != null) {
+            res.setNextScheduledAt(s.getNextScheduledAt().withOffsetSameInstant(ZoneOffset.UTC));
+        }
         res.setOverdue(s.getStatus() == ScheduleStatus.ACTIVE && s.getNextScheduledAt().isBefore(now));
         res.setStatus(s.getStatus());
         return res;

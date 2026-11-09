@@ -23,6 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.*;
 
 @Service
@@ -330,7 +331,9 @@ public class PlantService {
         }
         res.setStartDate(s.getStartDate());
         res.setEndDate(s.getEndDate());
-        res.setNextScheduledAt(s.getNextScheduledAt());
+        if (s.getNextScheduledAt() != null) {
+            res.setNextScheduledAt(s.getNextScheduledAt().withOffsetSameInstant(ZoneOffset.UTC));
+        }
         res.setOverdue(s.getStatus() == ScheduleStatus.ACTIVE && s.getNextScheduledAt().isBefore(now));
         res.setStatus(s.getStatus());
         return res;

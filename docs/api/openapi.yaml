@@ -904,6 +904,8 @@ paths:
           $ref: '#/components/responses/403Forbidden'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
 
   /schedules/{scheduleId}/skip:
     post:
@@ -939,6 +941,8 @@ paths:
           $ref: '#/components/responses/403Forbidden'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
 
   /care-logs:
     post:
@@ -1221,6 +1225,12 @@ paths:
           schema:
             type: integer
             default: 20
+        - name: sort
+          in: query
+          description: "Sắp xếp theo trường và chiều (ví dụ: createdAt,desc)"
+          schema:
+            type: string
+            default: "createdAt,desc"
       responses:
         '200':
           description: Danh sách người dùng phân trang
@@ -1718,6 +1728,9 @@ components:
         createdAt:
           type: string
           format: date-time
+        updatedAt:
+          type: string
+          format: date-time
 
     SpeciesSummary:
       type: object
@@ -1992,12 +2005,18 @@ components:
           type: string
         category:
           type: string
+        gardenName:
+          type: string
+          nullable: true
         healthStatus:
           type: string
           enum: [HEALTHY, NEEDS_ATTENTION, CRITICAL, UNKNOWN]
         imageUrl:
           type: string
           nullable: true
+        createdAt:
+          type: string
+          format: date-time
 
     UserPlantDetail:
       type: object

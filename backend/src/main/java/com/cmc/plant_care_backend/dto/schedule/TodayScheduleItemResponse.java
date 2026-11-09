@@ -2,6 +2,7 @@ package com.cmc.plant_care_backend.dto.schedule;
 
 import com.cmc.plant_care_backend.model.enums.ScheduleStatus;
 import com.cmc.plant_care_backend.model.enums.TaskType;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.time.OffsetDateTime;
 import java.util.UUID;
@@ -15,6 +16,7 @@ public class TodayScheduleItemResponse {
     private TaskType taskType;
     private String taskLabel;
     private OffsetDateTime nextScheduledAt;
+    @JsonProperty("isOverdue")
     private boolean isOverdue;
     private ScheduleStatus status;
 
@@ -76,10 +78,12 @@ public class TodayScheduleItemResponse {
         this.nextScheduledAt = nextScheduledAt;
     }
 
+    @JsonProperty("isOverdue")
     public boolean isOverdue() {
         return isOverdue;
     }
 
+    @JsonProperty("isOverdue")
     public void setOverdue(boolean overdue) {
         isOverdue = overdue;
     }

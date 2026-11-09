@@ -1,5 +1,6 @@
 package com.cmc.plant_care_backend.service;
 
+import com.cmc.plant_care_backend.common.exception.ConflictException;
 import com.cmc.plant_care_backend.common.exception.ForbiddenException;
 import com.cmc.plant_care_backend.common.exception.ResourceNotFoundException;
 import com.cmc.plant_care_backend.common.exception.ValidationException;
@@ -24,7 +25,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDate;
-import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.List;
@@ -99,6 +99,57 @@ class ScheduleServiceTest {
     }
 
     @Test
+    void createSchedule_NonCustomWithIntervalDays_ThrowsValidationException() {
+        LocalDate todayVn = LocalDate.now(VN_ZONE);
+        CreateScheduleRequest req = new CreateScheduleRequest();
+        req.setUserPlantId(plantId);
+        req.setTaskType(TaskType.WATERING);
+        req.setFrequency(Frequency.DAILY);
+        req.setIntervalDays(3);
+        req.setStartDate(todayVn);
+
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        when(userPlantRepository.findById(plantId)).thenReturn(Optional.of(plant));
+
+        assertThrows(ValidationException.class, () ->
+            scheduleService.createSchedule(userId, req));
+    }
+
+    @Test
+    void createSchedule_InvalidReminderTime_ThrowsValidationException() {
+        LocalDate todayVn = LocalDate.now(VN_ZONE);
+        CreateScheduleRequest req = new CreateScheduleRequest();
+        req.setUserPlantId(plantId);
+        req.setTaskType(TaskType.WATERING);
+        req.setFrequency(Frequency.DAILY);
+        req.setStartDate(todayVn);
+        req.setReminderTime("invalid_time");
+
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        when(userPlantRepository.findById(plantId)).thenReturn(Optional.of(plant));
+
+        assertThrows(ValidationException.class, () ->
+            scheduleService.createSchedule(userId, req));
+    }
+
+    @Test
+    void createSchedule_BlankReminderTime_ThrowsValidationException() {
+        LocalDate todayVn = LocalDate.now(VN_ZONE);
+        CreateScheduleRequest req = new CreateScheduleRequest();
+        req.setUserPlantId(plantId);
+        req.setTaskType(TaskType.WATERING);
+        req.setFrequency(Frequency.DAILY);
+        req.setStartDate(todayVn);
+        req.setReminderTime("   ");
+
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        when(userPlantRepository.findById(plantId)).thenReturn(Optional.of(plant));
+
+        assertThrows(ValidationException.class, () ->
+            scheduleService.createSchedule(userId, req));
+    }
+
+    @Test
     void createSchedule_CustomWithoutInterval_ThrowsValidationException() {
         LocalDate todayVn = LocalDate.now(VN_ZONE);
         CreateScheduleRequest req = new CreateScheduleRequest();
@@ -106,6 +157,23 @@ class ScheduleServiceTest {
         req.setTaskType(TaskType.WATERING);
         req.setFrequency(Frequency.CUSTOM);
         req.setIntervalDays(null);
+        req.setStartDate(todayVn);
+
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        when(userPlantRepository.findById(plantId)).thenReturn(Optional.of(plant));
+
+        assertThrows(ValidationException.class, () ->
+            scheduleService.createSchedule(userId, req));
+    }
+
+    @Test
+    void createSchedule_CustomIntervalDaysNonPositive_ThrowsValidationException() {
+        LocalDate todayVn = LocalDate.now(VN_ZONE);
+        CreateScheduleRequest req = new CreateScheduleRequest();
+        req.setUserPlantId(plantId);
+        req.setTaskType(TaskType.WATERING);
+        req.setFrequency(Frequency.CUSTOM);
+        req.setIntervalDays(0);
         req.setStartDate(todayVn);
 
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
@@ -229,7 +297,7 @@ class ScheduleServiceTest {
         req.setTaskLabel("Nhãn mới");
         req.setFrequency(Frequency.WEEKLY);
 
-        when(careScheduleRepository.findById(scheduleId)).thenReturn(Optional.of(s));
+        when(careScheduleRepository.findByIdWithPessimisticLock(scheduleId)).thenReturn(Optional.of(s));
         when(careScheduleRepository.save(any(CareSchedule.class))).thenAnswer(i -> i.getArgument(0));
 
         CareScheduleResponse res = scheduleService.updateSchedule(scheduleId, userId, req);
@@ -241,6 +309,41 @@ class ScheduleServiceTest {
     }
 
     @Test
+    void updateSchedule_FrequencyNull_ThrowsValidationException() {
+        UUID scheduleId = UUID.randomUUID();
+        CareSchedule s = new CareSchedule();
+        s.setId(scheduleId);
+        s.setUserPlant(plant);
+        s.setOwner(user);
+
+        UpdateScheduleRequest req = new UpdateScheduleRequest();
+        req.setFrequency(null);
+
+        when(careScheduleRepository.findByIdWithPessimisticLock(scheduleId)).thenReturn(Optional.of(s));
+
+        assertThrows(ValidationException.class, () ->
+            scheduleService.updateSchedule(scheduleId, userId, req));
+    }
+
+    @Test
+    void updateSchedule_NonCustomWithIntervalDays_ThrowsValidationException() {
+        UUID scheduleId = UUID.randomUUID();
+        CareSchedule s = new CareSchedule();
+        s.setId(scheduleId);
+        s.setUserPlant(plant);
+        s.setOwner(user);
+        s.setFrequency(Frequency.DAILY);
+
+        UpdateScheduleRequest req = new UpdateScheduleRequest();
+        req.setIntervalDays(5);
+
+        when(careScheduleRepository.findByIdWithPessimisticLock(scheduleId)).thenReturn(Optional.of(s));
+
+        assertThrows(ValidationException.class, () ->
+            scheduleService.updateSchedule(scheduleId, userId, req));
+    }
+
+    @Test
     void deleteSchedule_DetachesCareLogsAndDeletes() {
         UUID scheduleId = UUID.randomUUID();
         CareSchedule s = new CareSchedule();
@@ -248,7 +351,7 @@ class ScheduleServiceTest {
         s.setUserPlant(plant);
         s.setOwner(user);
 
-        when(careScheduleRepository.findById(scheduleId)).thenReturn(Optional.of(s));
+        when(careScheduleRepository.findByIdWithPessimisticLock(scheduleId)).thenReturn(Optional.of(s));
 
         scheduleService.deleteSchedule(scheduleId, userId);
 
@@ -265,10 +368,10 @@ class ScheduleServiceTest {
         s.setOwner(user);
         s.setTaskType(TaskType.WATERING);
         s.setFrequency(Frequency.ONCE);
-        s.setNextScheduledAt(OffsetDateTime.now());
+        s.setNextScheduledAt(OffsetDateTime.now().minusMinutes(5));
         s.setStatus(ScheduleStatus.ACTIVE);
 
-        when(careScheduleRepository.findById(scheduleId)).thenReturn(Optional.of(s));
+        when(careScheduleRepository.findByIdWithPessimisticLock(scheduleId)).thenReturn(Optional.of(s));
         when(careLogRepository.save(any(CareLog.class))).thenAnswer(i -> {
             CareLog l = i.getArgument(0);
             l.setId(UUID.randomUUID());
@@ -283,6 +386,37 @@ class ScheduleServiceTest {
     }
 
     @Test
+    void completeSchedule_NotActive_ThrowsConflictException() {
+        UUID scheduleId = UUID.randomUUID();
+        CareSchedule s = new CareSchedule();
+        s.setId(scheduleId);
+        s.setUserPlant(plant);
+        s.setOwner(user);
+        s.setStatus(ScheduleStatus.PAUSED);
+
+        when(careScheduleRepository.findByIdWithPessimisticLock(scheduleId)).thenReturn(Optional.of(s));
+
+        assertThrows(ConflictException.class, () ->
+            scheduleService.completeSchedule(scheduleId, userId, null));
+    }
+
+    @Test
+    void completeSchedule_NotDueYet_ThrowsConflictException() {
+        UUID scheduleId = UUID.randomUUID();
+        CareSchedule s = new CareSchedule();
+        s.setId(scheduleId);
+        s.setUserPlant(plant);
+        s.setOwner(user);
+        s.setStatus(ScheduleStatus.ACTIVE);
+        s.setNextScheduledAt(OffsetDateTime.now().plusDays(2)); // not due yet
+
+        when(careScheduleRepository.findByIdWithPessimisticLock(scheduleId)).thenReturn(Optional.of(s));
+
+        assertThrows(ConflictException.class, () ->
+            scheduleService.completeSchedule(scheduleId, userId, null));
+    }
+
+    @Test
     void completeSchedule_Recurring_AdvancesNextScheduledAt() {
         UUID scheduleId = UUID.randomUUID();
         CareSchedule s = new CareSchedule();
@@ -294,7 +428,7 @@ class ScheduleServiceTest {
         s.setNextScheduledAt(OffsetDateTime.now().minusDays(2)); // overdue by 2 days
         s.setStatus(ScheduleStatus.ACTIVE);
 
-        when(careScheduleRepository.findById(scheduleId)).thenReturn(Optional.of(s));
+        when(careScheduleRepository.findByIdWithPessimisticLock(scheduleId)).thenReturn(Optional.of(s));
         when(careLogRepository.save(any(CareLog.class))).thenAnswer(i -> {
             CareLog l = i.getArgument(0);
             l.setId(UUID.randomUUID());
@@ -310,6 +444,64 @@ class ScheduleServiceTest {
     }
 
     @Test
+    void completeSchedule_ExceedsEndDate_SetsCompleted() {
+        UUID scheduleId = UUID.randomUUID();
+        CareSchedule s = new CareSchedule();
+        s.setId(scheduleId);
+        s.setUserPlant(plant);
+        s.setOwner(user);
+        s.setTaskType(TaskType.WATERING);
+        s.setFrequency(Frequency.DAILY);
+        s.setNextScheduledAt(OffsetDateTime.now().minusHours(1));
+        s.setEndDate(LocalDate.now(VN_ZONE)); // ends today; next daily run would be tomorrow, which exceeds endDate
+        s.setStatus(ScheduleStatus.ACTIVE);
+
+        when(careScheduleRepository.findByIdWithPessimisticLock(scheduleId)).thenReturn(Optional.of(s));
+        when(careLogRepository.save(any(CareLog.class))).thenAnswer(i -> {
+            CareLog l = i.getArgument(0);
+            l.setId(UUID.randomUUID());
+            return l;
+        });
+        when(careScheduleRepository.save(any(CareSchedule.class))).thenAnswer(i -> i.getArgument(0));
+
+        CompleteScheduleResponse res = scheduleService.completeSchedule(scheduleId, userId, null);
+
+        assertNotNull(res);
+        assertEquals("COMPLETED", res.getScheduleStatus());
+    }
+
+    @Test
+    void skipSchedule_NotActive_ThrowsConflictException() {
+        UUID scheduleId = UUID.randomUUID();
+        CareSchedule s = new CareSchedule();
+        s.setId(scheduleId);
+        s.setUserPlant(plant);
+        s.setOwner(user);
+        s.setStatus(ScheduleStatus.CANCELLED);
+
+        when(careScheduleRepository.findByIdWithPessimisticLock(scheduleId)).thenReturn(Optional.of(s));
+
+        assertThrows(ConflictException.class, () ->
+            scheduleService.skipSchedule(scheduleId, userId, null));
+    }
+
+    @Test
+    void skipSchedule_NotDueYet_ThrowsConflictException() {
+        UUID scheduleId = UUID.randomUUID();
+        CareSchedule s = new CareSchedule();
+        s.setId(scheduleId);
+        s.setUserPlant(plant);
+        s.setOwner(user);
+        s.setStatus(ScheduleStatus.ACTIVE);
+        s.setNextScheduledAt(OffsetDateTime.now().plusHours(3)); // in future
+
+        when(careScheduleRepository.findByIdWithPessimisticLock(scheduleId)).thenReturn(Optional.of(s));
+
+        assertThrows(ConflictException.class, () ->
+            scheduleService.skipSchedule(scheduleId, userId, null));
+    }
+
+    @Test
     void skipSchedule_CreatesSkippedCareLogAndAdvances() {
         UUID scheduleId = UUID.randomUUID();
         CareSchedule s = new CareSchedule();
@@ -321,7 +513,7 @@ class ScheduleServiceTest {
         s.setNextScheduledAt(OffsetDateTime.now().minusHours(1));
         s.setStatus(ScheduleStatus.ACTIVE);
 
-        when(careScheduleRepository.findById(scheduleId)).thenReturn(Optional.of(s));
+        when(careScheduleRepository.findByIdWithPessimisticLock(scheduleId)).thenReturn(Optional.of(s));
         when(careLogRepository.save(any(CareLog.class))).thenAnswer(i -> {
             CareLog l = i.getArgument(0);
             l.setId(UUID.randomUUID());

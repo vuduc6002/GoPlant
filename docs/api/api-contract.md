@@ -772,6 +772,8 @@ Xóa lịch chăm sóc. Các lượt `care_logs` trước đó được giữ ng
 }
 ```
 
+**Lỗi:** `409 CONFLICT` nếu lịch không ở trạng thái `ACTIVE` hoặc lượt chăm sóc chưa đến hạn.
+
 ---
 
 ### POST `/api/v1/schedules/{scheduleId}/skip`
@@ -800,6 +802,8 @@ Rỗng hoặc kèm ghi chú lý do:
   }
 }
 ```
+
+**Lỗi:** `409 CONFLICT` nếu lịch không ở trạng thái `ACTIVE` hoặc lượt chăm sóc chưa đến hạn.
 
 ---
 
@@ -915,6 +919,7 @@ Danh sách tài khoản người dùng, có phân trang.
 - `role` (string, tùy chọn): Lọc theo vai trò (`ROLE_USER`, `ROLE_ADMIN`).
 - `page` (integer, tùy chọn, mặc định `0`): Chỉ số trang bắt đầu từ 0.
 - `size` (integer, tùy chọn, mặc định `20`): Số lượng bản ghi mỗi trang.
+- `sort` (string, tùy chọn, mặc định `createdAt,desc`): Sắp xếp theo trường và chiều.
 
 **Response 200:**
 ```json
