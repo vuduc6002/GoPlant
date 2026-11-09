@@ -71,6 +71,10 @@ class DatabaseSchemaIntegrationTest {
 
     record ForeignKeyMapping(String sourceTable, String sourceColumns, String targetTable, String targetColumns) {}
 
+    record ColumnTypeInfo(String dataType, String udtName) {}
+
+    record IndexInfo(String tableName, String indexName, String indexDef) {}
+
     @Test
     @DisplayName("Verify Database Schema, Flyway Migration V1, Tables, Extensions, Constraints, and Indexes")
     void databaseSchema_Verification() throws Exception {
@@ -94,16 +98,18 @@ class DatabaseSchemaIntegrationTest {
                     }
                 }
 
-                // 2. Verify all 11 tables exist in PostgreSQL
-                Set<String> actualTables = new HashSet<>();
+                // 2. Verify exactly the 11 business tables exist in PostgreSQL (excluding flyway_schema_history)
+                Set<String> actualBusinessTables = new HashSet<>();
                 try (ResultSet rs = metaData.getTables(null, "public", "%", new String[]{"TABLE"})) {
                     while (rs.next()) {
-                        actualTables.add(rs.getString("TABLE_NAME").toLowerCase());
+                        String tbl = rs.getString("TABLE_NAME").toLowerCase();
+                        if (!tbl.equals("flyway_schema_history")) {
+                            actualBusinessTables.add(tbl);
+                        }
                     }
                 }
-                for (String expected : ALL_11_TABLES) {
-                    assertTrue(actualTables.contains(expected), "Missing expected table in PostgreSQL: " + expected);
-                }
+                assertEquals(ALL_11_TABLES, actualBusinessTables,
+                    "PostgreSQL public schema must contain exactly the 11 business tables declared in V1");
 
                 // 3. Verify PostgreSQL extension pgcrypto and gen_random_uuid()
                 try (Statement stmt = conn.createStatement()) {
@@ -143,18 +149,30 @@ class DatabaseSchemaIntegrationTest {
                 }
 
                 // 6. Verify exact column types for image_urls (ARRAY with text element type: text[] / _text)
+                Map<String, ColumnTypeInfo> arrayColumns = new HashMap<>();
                 try (Statement stmt = conn.createStatement()) {
                     try (ResultSet rs = stmt.executeQuery(
                         "SELECT table_name, data_type, udt_name FROM information_schema.columns " +
                         "WHERE table_schema = 'public' AND column_name = 'image_urls' AND table_name IN ('care_logs', 'growth_journals')")) {
-                        Map<String, String> arrayColumns = new HashMap<>();
                         while (rs.next()) {
-                            arrayColumns.put(rs.getString("table_name"), rs.getString("udt_name"));
+                            arrayColumns.put(
+                                rs.getString("table_name").toLowerCase(),
+                                new ColumnTypeInfo(rs.getString("data_type"), rs.getString("udt_name"))
+                            );
                         }
-                        assertEquals("_text", arrayColumns.get("care_logs"), "care_logs.image_urls must have udt_name = _text (text[])");
-                        assertEquals("_text", arrayColumns.get("growth_journals"), "growth_journals.image_urls must have udt_name = _text (text[])");
                     }
                 }
+                assertEquals(2, arrayColumns.size(), "Must find exactly 2 image_urls array columns (care_logs and growth_journals)");
+
+                ColumnTypeInfo careLogCol = arrayColumns.get("care_logs");
+                assertNotNull(careLogCol, "care_logs.image_urls must exist");
+                assertEquals("ARRAY", careLogCol.dataType(), "care_logs.image_urls data_type must be ARRAY");
+                assertEquals("_text", careLogCol.udtName(), "care_logs.image_urls udt_name must be _text (text[])");
+
+                ColumnTypeInfo journalCol = arrayColumns.get("growth_journals");
+                assertNotNull(journalCol, "growth_journals.image_urls must exist");
+                assertEquals("ARRAY", journalCol.dataType(), "growth_journals.image_urls data_type must be ARRAY");
+                assertEquals("_text", journalCol.udtName(), "growth_journals.image_urls udt_name must be _text (text[])");
 
                 // 7. Verify All Foreign Key Constraints (exact source table, source columns, target table, target columns)
                 List<ForeignKeyMapping> actualFks = new ArrayList<>();
@@ -232,7 +250,7 @@ class DatabaseSchemaIntegrationTest {
                 assertEquals(expectedFks.size(), actualFks.size(),
                     "Total foreign keys count in public schema must match expected 17 FKs");
 
-                // 8. Verify Table-Specific CHECK Constraints
+                // 8. Verify Table-Specific CHECK Constraints (all 13 constraints verified by exact table and name)
                 Map<String, Map<String, String>> checksByTable = new HashMap<>();
                 try (Statement stmt = conn.createStatement()) {
                     try (ResultSet rs = stmt.executeQuery(
@@ -243,107 +261,90 @@ class DatabaseSchemaIntegrationTest {
                         "WHERE n.nspname = 'public' AND c.contype = 'c' " +
                         "ORDER BY src_tbl.relname, c.conname")) {
                         while (rs.next()) {
-                            checksByTable.computeIfAbsent(rs.getString("table_name"), k -> new HashMap<>())
-                                         .put(rs.getString("constraint_name"), rs.getString("definition"));
+                            checksByTable.computeIfAbsent(rs.getString("table_name").toLowerCase(), k -> new HashMap<>())
+                                         .put(rs.getString("constraint_name").toLowerCase(), rs.getString("definition"));
                         }
                     }
                 }
 
-                // 8.1. users table CHECKs
-                Map<String, String> userChecks = checksByTable.getOrDefault("users", Collections.emptyMap());
-                assertTrue(userChecks.values().stream().anyMatch(d -> d.contains("email IS NOT NULL") || (d.contains("email") && d.contains("phone_number"))),
-                    "users table must have contact presence check constraint (email IS NOT NULL OR phone_number IS NOT NULL)");
-                assertTrue(userChecks.values().stream().anyMatch(d -> d.contains("MOBILE") && d.contains("PC")),
-                    "users table must have preferred_device check constraint ('MOBILE', 'PC')");
-                assertTrue(userChecks.values().stream().anyMatch(d -> d.contains("ACTIVE") && d.contains("INACTIVE") && d.contains("BANNED")),
-                    "users table must have status check constraint ('ACTIVE', 'INACTIVE', 'BANNED')");
+                // 8.1. users (3 CHECKs)
+                assertCheckConstraint(checksByTable, "users", "users_preferred_device_check", "preferred_device", "MOBILE", "PC");
+                assertCheckConstraint(checksByTable, "users", "users_status_check", "status", "ACTIVE", "INACTIVE", "BANNED");
+                assertCheckConstraint(checksByTable, "users", "chk_users_contact_present", "email", "phone_number");
 
-                // 8.2. gardens table CHECKs
-                Map<String, String> gardenChecks = checksByTable.getOrDefault("gardens", Collections.emptyMap());
-                assertTrue(gardenChecks.values().stream().anyMatch(d ->
-                    d.contains("BAN_CONG") && d.contains("SAN_THUONG") && d.contains("TRONG_NHA") && d.contains("SAN_VUON") && d.contains("KHAC")),
-                    "gardens table must have space_type check constraint");
+                // 8.2. gardens (1 CHECK)
+                assertCheckConstraint(checksByTable, "gardens", "gardens_space_type_check", "space_type", "BAN_CONG", "SAN_THUONG", "TRONG_NHA", "SAN_VUON", "KHAC");
 
-                // 8.3. user_plants table CHECKs
-                Map<String, String> plantChecks = checksByTable.getOrDefault("user_plants", Collections.emptyMap());
-                assertTrue(plantChecks.values().stream().anyMatch(d ->
-                    d.contains("HEALTHY") && d.contains("NEEDS_ATTENTION") && d.contains("CRITICAL") && d.contains("UNKNOWN")),
-                    "user_plants table must have health_status check constraint");
+                // 8.3. user_plants (1 CHECK)
+                assertCheckConstraint(checksByTable, "user_plants", "user_plants_health_status_check", "health_status", "HEALTHY", "NEEDS_ATTENTION", "CRITICAL", "UNKNOWN");
 
-                // 8.4. care_schedules table CHECKs
-                Map<String, String> scheduleChecks = checksByTable.getOrDefault("care_schedules", Collections.emptyMap());
-                assertTrue(scheduleChecks.values().stream().anyMatch(d ->
-                    d.contains("WATERING") && d.contains("FERTILIZING") && d.contains("PRUNING") && d.contains("PEST_CHECK") && d.contains("MISTING") && d.contains("JOURNAL")),
-                    "care_schedules table must have task_type check constraint");
-                assertTrue(scheduleChecks.values().stream().anyMatch(d ->
-                    d.contains("ONCE") && d.contains("DAILY") && d.contains("EVERY_OTHER_DAY") && d.contains("WEEKLY") && d.contains("CUSTOM")),
-                    "care_schedules table must have frequency check constraint");
-                assertTrue(scheduleChecks.values().stream().anyMatch(d ->
-                    d.contains("ACTIVE") && d.contains("PAUSED") && d.contains("COMPLETED") && d.contains("CANCELLED")),
-                    "care_schedules table must have status check constraint");
-                assertTrue(scheduleChecks.values().stream().anyMatch(d ->
-                    d.contains("CUSTOM") && d.contains("interval_days")),
-                    "care_schedules table must have chk_care_schedules_interval check constraint");
+                // 8.4. care_schedules (4 CHECKs)
+                assertCheckConstraint(checksByTable, "care_schedules", "care_schedules_task_type_check", "task_type", "WATERING", "FERTILIZING", "PRUNING", "PEST_CHECK", "MISTING", "JOURNAL");
+                assertCheckConstraint(checksByTable, "care_schedules", "care_schedules_frequency_check", "frequency", "ONCE", "DAILY", "EVERY_OTHER_DAY", "WEEKLY", "CUSTOM");
+                assertCheckConstraint(checksByTable, "care_schedules", "care_schedules_status_check", "status", "ACTIVE", "PAUSED", "COMPLETED", "CANCELLED");
+                assertCheckConstraint(checksByTable, "care_schedules", "chk_care_schedules_interval", "frequency", "CUSTOM", "interval_days");
 
-                // 8.5. care_logs table CHECKs
-                Map<String, String> careLogChecks = checksByTable.getOrDefault("care_logs", Collections.emptyMap());
-                assertTrue(careLogChecks.values().stream().anyMatch(d -> d.contains("COMPLETED") && d.contains("SKIPPED")),
-                    "care_logs table must have status check constraint ('COMPLETED', 'SKIPPED')");
+                // 8.5. care_logs (1 CHECK)
+                assertCheckConstraint(checksByTable, "care_logs", "care_logs_status_check", "status", "COMPLETED", "SKIPPED");
 
-                // 8.6. growth_journals table CHECKs
-                Map<String, String> journalChecks = checksByTable.getOrDefault("growth_journals", Collections.emptyMap());
-                assertTrue(journalChecks.values().stream().anyMatch(d ->
-                    d.contains("GROWTH") && d.contains("WATERING") && d.contains("FERTILIZING") && d.contains("PEST") && d.contains("OTHER")),
-                    "growth_journals table must have entry_type check constraint");
-                assertTrue(journalChecks.values().stream().anyMatch(d ->
-                    d.contains("HEALTHY") && d.contains("NEEDS_ATTENTION") && d.contains("CRITICAL")),
-                    "growth_journals table must have health_status check constraint");
+                // 8.6. growth_journals (2 CHECKs)
+                assertCheckConstraint(checksByTable, "growth_journals", "growth_journals_entry_type_check", "entry_type", "GROWTH", "WATERING", "FERTILIZING", "PEST", "OTHER");
+                assertCheckConstraint(checksByTable, "growth_journals", "growth_journals_health_status_check", "health_status", "HEALTHY", "NEEDS_ATTENTION", "CRITICAL");
 
-                // 8.7. cameras table CHECKs
-                Map<String, String> cameraChecks = checksByTable.getOrDefault("cameras", Collections.emptyMap());
-                assertTrue(cameraChecks.values().stream().anyMatch(d -> d.contains("ONLINE") && d.contains("OFFLINE") && d.contains("ERROR")),
-                    "cameras table must have status check constraint ('ONLINE', 'OFFLINE', 'ERROR')");
+                // 8.7. cameras (1 CHECK)
+                assertCheckConstraint(checksByTable, "cameras", "cameras_status_check", "status", "ONLINE", "OFFLINE", "ERROR");
 
-                // 9. Verify Essential Indexes including GIN index
+                assertEquals(13, checksByTable.values().stream().mapToInt(Map::size).sum(),
+                    "Total count of CHECK constraints across all business tables must be exactly 13");
+
+                // 9. Verify Definitions of All 19 Declared Indexes
+                Map<String, IndexInfo> actualIndexes = new HashMap<>();
                 try (Statement stmt = conn.createStatement()) {
                     try (ResultSet rs = stmt.executeQuery(
-                        "SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public'")) {
-                        Map<String, String> indexes = new HashMap<>();
+                        "SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = 'public'")) {
                         while (rs.next()) {
-                            indexes.put(rs.getString("indexname"), rs.getString("indexdef"));
+                            actualIndexes.put(
+                                rs.getString("indexname").toLowerCase(),
+                                new IndexInfo(rs.getString("tablename").toLowerCase(), rs.getString("indexname").toLowerCase(), rs.getString("indexdef"))
+                            );
                         }
-
-                        Set<String> requiredIndexes = Set.of(
-                            "idx_users_email_unique",
-                            "idx_users_phone_unique",
-                            "idx_species_category",
-                            "idx_species_active",
-                            "idx_plant_species_search_gin",
-                            "idx_gardens_owner_id",
-                            "idx_user_plants_owner_id",
-                            "idx_user_plants_garden_id",
-                            "idx_user_plants_species_id",
-                            "idx_care_schedules_plant_id",
-                            "idx_care_schedules_owner_id",
-                            "idx_care_schedules_active",
-                            "idx_care_logs_plant_id",
-                            "idx_care_logs_schedule_id",
-                            "idx_care_logs_performed_by",
-                            "idx_care_logs_performed_at",
-                            "idx_growth_journals_plant_id",
-                            "idx_growth_journals_recorded_at",
-                            "idx_cameras_garden_id"
-                        );
-
-                        for (String reqIdx : requiredIndexes) {
-                            assertTrue(indexes.containsKey(reqIdx), "Missing required index in PostgreSQL: " + reqIdx);
-                        }
-
-                        // Specifically verify GIN index type
-                        assertTrue(indexes.get("idx_plant_species_search_gin").toLowerCase().contains("using gin"),
-                            "idx_plant_species_search_gin must be a GIN index");
                     }
                 }
+
+                // 9.1. Users (2 UNIQUE partial indexes)
+                assertIndexDefinition(actualIndexes, "idx_users_email_unique", "users", true, "btree", "email", "email IS NOT NULL");
+                assertIndexDefinition(actualIndexes, "idx_users_phone_unique", "users", true, "btree", "phone_number", "phone_number IS NOT NULL");
+
+                // 9.2. Plant Species (2 btree + 1 GIN index)
+                assertIndexDefinition(actualIndexes, "idx_species_category", "plant_species", false, "btree", "category", null);
+                assertIndexDefinition(actualIndexes, "idx_species_active", "plant_species", false, "btree", "is_active", null);
+                assertIndexDefinition(actualIndexes, "idx_plant_species_search_gin", "plant_species", false, "gin", "to_tsvector", null);
+
+                // 9.3. Gardens (1 index)
+                assertIndexDefinition(actualIndexes, "idx_gardens_owner_id", "gardens", false, "btree", "owner_id", null);
+
+                // 9.4. User Plants (3 indexes)
+                assertIndexDefinition(actualIndexes, "idx_user_plants_owner_id", "user_plants", false, "btree", "owner_id", null);
+                assertIndexDefinition(actualIndexes, "idx_user_plants_garden_id", "user_plants", false, "btree", "garden_id", null);
+                assertIndexDefinition(actualIndexes, "idx_user_plants_species_id", "user_plants", false, "btree", "species_id", null);
+
+                // 9.5. Care Schedules (3 indexes, 1 partial)
+                assertIndexDefinition(actualIndexes, "idx_care_schedules_plant_id", "care_schedules", false, "btree", "user_plant_id", null);
+                assertIndexDefinition(actualIndexes, "idx_care_schedules_owner_id", "care_schedules", false, "btree", "owner_id", null);
+                assertIndexDefinition(actualIndexes, "idx_care_schedules_active", "care_schedules", false, "btree", "next_scheduled_at", "status = 'ACTIVE'");
+
+                // 9.6. Care Logs (4 indexes, 1 partial, 1 DESC)
+                assertIndexDefinition(actualIndexes, "idx_care_logs_plant_id", "care_logs", false, "btree", "user_plant_id", null);
+                assertIndexDefinition(actualIndexes, "idx_care_logs_schedule_id", "care_logs", false, "btree", "schedule_id", "schedule_id IS NOT NULL");
+                assertIndexDefinition(actualIndexes, "idx_care_logs_performed_by", "care_logs", false, "btree", "performed_by", null);
+                assertIndexDefinition(actualIndexes, "idx_care_logs_performed_at", "care_logs", false, "btree", "performed_at DESC", null);
+
+                // 9.7. Growth Journals (2 indexes, 1 DESC)
+                assertIndexDefinition(actualIndexes, "idx_growth_journals_plant_id", "growth_journals", false, "btree", "user_plant_id", null);
+                assertIndexDefinition(actualIndexes, "idx_growth_journals_recorded_at", "growth_journals", false, "btree", "recorded_at DESC", null);
+
+                // 9.8. Cameras (1 index)
+                assertIndexDefinition(actualIndexes, "idx_cameras_garden_id", "cameras", false, "btree", "garden_id", null);
             } else {
                 // When running with default local H2 profile
                 Set<String> actualTables = new HashSet<>();
@@ -360,6 +361,60 @@ class DatabaseSchemaIntegrationTest {
                     assertTrue(actualTables.contains(expected), "Missing expected table in H2: " + expected);
                 }
             }
+        }
+    }
+
+    private void assertCheckConstraint(
+        Map<String, Map<String, String>> checksByTable,
+        String tableName,
+        String constraintName,
+        String... requiredTokens
+    ) {
+        Map<String, String> tableChecks = checksByTable.get(tableName.toLowerCase());
+        assertNotNull(tableChecks, "Table '" + tableName + "' has no CHECK constraints registered in catalog");
+
+        String def = tableChecks.get(constraintName.toLowerCase());
+        assertNotNull(def, "Missing expected CHECK constraint '" + constraintName + "' on table '" + tableName + "'");
+
+        String normalizedDef = def.replace("\"", "").replace("'", "").toUpperCase();
+        for (String token : requiredTokens) {
+            String normalizedToken = token.replace("\"", "").replace("'", "").toUpperCase();
+            assertTrue(normalizedDef.contains(normalizedToken),
+                "CHECK constraint '" + constraintName + "' on table '" + tableName +
+                "' definition [" + def + "] must contain expected fragment [" + token + "]");
+        }
+    }
+
+    private void assertIndexDefinition(
+        Map<String, IndexInfo> actualIndexes,
+        String indexName,
+        String expectedTable,
+        boolean isUnique,
+        String expectedMethod,
+        String requiredColOrExpr,
+        String partialWhere
+    ) {
+        IndexInfo idx = actualIndexes.get(indexName.toLowerCase());
+        assertNotNull(idx, "Missing required index: " + indexName);
+        assertEquals(expectedTable.toLowerCase(), idx.tableName().toLowerCase(),
+            "Index " + indexName + " must belong to table " + expectedTable);
+
+        String def = idx.indexDef().toLowerCase();
+        if (isUnique) {
+            assertTrue(def.contains("unique index"), "Index " + indexName + " must be UNIQUE");
+        }
+        assertTrue(def.contains("using " + expectedMethod.toLowerCase()),
+            "Index " + indexName + " must use access method " + expectedMethod + ", definition: " + idx.indexDef());
+
+        assertTrue(def.contains(requiredColOrExpr.toLowerCase()),
+            "Index " + indexName + " must index [" + requiredColOrExpr + "], definition: " + idx.indexDef());
+
+        if (partialWhere != null) {
+            assertTrue(def.contains("where"), "Index " + indexName + " must have a WHERE clause");
+            String normalizedWhere = partialWhere.replace(" ", "").replace("\"", "").replace("'", "").toLowerCase();
+            String normalizedDef = def.replace(" ", "").replace("\"", "").replace("'", "").toLowerCase();
+            assertTrue(normalizedDef.contains(normalizedWhere),
+                "Index " + indexName + " WHERE clause must contain [" + partialWhere + "], definition: " + idx.indexDef());
         }
     }
 
