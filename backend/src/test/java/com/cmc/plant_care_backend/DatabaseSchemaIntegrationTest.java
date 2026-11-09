@@ -581,8 +581,8 @@ class DatabaseSchemaIntegrationTest {
             s = s.replaceAll("\\(([a-zA-Z_][a-zA-Z0-9_]*)\\)", "$1");
         } while (!s.equals(prev));
 
-        // 3. Normalize unparenthesized left-associative concatenation chains: a || b || c -> ((a || b) || c)
-        s = s.replaceAll("([a-zA-Z0-9_]+|'[^']*')\\s*\\|\\|\\s*('[^']*'|[a-zA-Z0-9_]+)\\s*\\|\\|\\s*([a-zA-Z0-9_]+|'[^']*')", "(($1 || $2) || $3)");
+        // 3. Normalize unparenthesized left-associative concatenation chains: a || b || c -> (a || b) || c
+        s = s.replaceAll("([a-zA-Z0-9_]+|'[^']*')\\s*\\|\\|\\s*('[^']*'|[a-zA-Z0-9_]+)\\s*\\|\\|\\s*([a-zA-Z0-9_]+|'[^']*')", "($1 || $2) || $3");
 
         // 4. Strip outer enclosing redundant parentheses: ((expr)) -> expr
         s = stripRedundantOuterParentheses(s.trim());
@@ -690,17 +690,22 @@ class DatabaseSchemaIntegrationTest {
             "Normalizer must preserve boolean grouping: 'a AND (b OR c)' must not equal '(a AND b) OR c'");
 
         // 2. Concatenation grouping order must NOT be conflated
-        String leftGrouped = "to_tsvector('simple', ((common_name || ' ') || scientific_name))";
-        String rightGrouped = "to_tsvector('simple', (common_name || (' ' || scientific_name)))";
+        String leftGrouped = "to_tsvector('simple', (common_name || ' ') || scientific_name)";
+        String rightGrouped = "to_tsvector('simple', common_name || (' ' || scientific_name))";
         assertNotEquals(normalizeSqlExpression(leftGrouped), normalizeSqlExpression(rightGrouped),
             "Normalizer must distinguish left-associative from right-associative string concatenation");
 
         // 3. PostgreSQL system casts are safely normalized without losing expression structure
-        String rawPg = "to_tsvector('simple'::regconfig, (((common_name)::text || ' '::text) || (scientific_name)::text))";
+        String rawPg = "to_tsvector('simple'::regconfig, (common_name::text || ' '::text) || scientific_name::text)";
         assertEquals(normalizeSqlExpression(leftGrouped), normalizeSqlExpression(rawPg),
             "PostgreSQL decompiled GIN expression must match left-grouped canonical expression");
 
-        // 4. Partial predicates outer parens and casting normalized safely
+        // 4. Unparenthesized concatenation canonically normalizes to left-grouped form
+        String unparenthesized = "to_tsvector('simple', common_name || ' ' || scientific_name)";
+        assertEquals(normalizeSqlExpression(leftGrouped), normalizeSqlExpression(unparenthesized),
+            "Unparenthesized concatenation must canonically normalize to left-grouped form");
+
+        // 5. Partial predicates outer parens and casting normalized safely
         String rawPred = "((status)::text = 'ACTIVE'::text)";
         assertEquals("status = 'ACTIVE'", normalizeSqlPredicate(rawPred));
     }
