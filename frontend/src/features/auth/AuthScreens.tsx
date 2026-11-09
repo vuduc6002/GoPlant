@@ -1,11 +1,13 @@
-import { useMemo, useState, type ComponentType } from 'react';
+import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import { Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { SvgProps } from 'react-native-svg';
 
 import { GoPlantColors as C, GoPlantTypography as F } from '@/constants/theme';
-import { authenticateWithMockAuth } from '@/services/mockAuth';
+import { useAuth } from './AuthProvider';
+import { AppApiError } from '@/services/api/apiError';
+
 import RegisterPot from '@/assets/images/figma/auth/signup/signup-23ac7.svg';
 import RegisterLeaf from '@/assets/images/figma/auth/signup/signup-30c2d.svg';
 import UserIcon from '@/assets/images/figma/auth/signup/signup-eecde.svg';
@@ -100,6 +102,7 @@ function InlineUnavailable(message: string) {
 }
 
 export function RegisterScreen() {
+  const { register } = useAuth();
   const [name, setName] = useState('');
   const [account, setAccount] = useState('');
   const [recoveryEmail, setRecoveryEmail] = useState('');
@@ -110,6 +113,7 @@ export function RegisterScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [showValidationSummary, setShowValidationSummary] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const strength = useMemo(() => {
     let score = 0;
@@ -119,18 +123,70 @@ export function RegisterScreen() {
     return score;
   }, [password]);
 
-  const submit = () => {
+  const submit = async () => {
     const next: Record<string, string> = {};
     if (!name.trim()) next.name = 'Vui lòng nhập họ và tên.';
+    else if (name.trim().length < 2) next.name = 'Họ và tên phải có ít nhất 2 ký tự.';
+
     if (!account.trim()) next.account = 'Vui lòng nhập email hoặc số điện thoại.';
     if (password.length < 8) next.password = 'Mật khẩu cần có ít nhất 8 ký tự.';
     if (!confirm || confirm !== password) next.confirm = 'Mật khẩu xác nhận chưa khớp.';
     if (!accepted) next.terms = 'Vui lòng đồng ý với điều khoản để tiếp tục.';
+
     setErrors(next);
     if (Object.keys(next).length > 0) {
       setShowValidationSummary(true);
-    } else {
-      InlineUnavailable('Đăng ký tài khoản chưa kết nối backend trong phiên bản frontend này.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      await register({
+        fullName: name.trim(),
+        account: account.trim(),
+        recoveryEmail: recoveryEmail.trim() ? recoveryEmail.trim() : undefined,
+        password,
+        preferredDevice: device === 'mobile' ? 'MOBILE' : 'PC',
+      });
+
+      Alert.alert(
+        'Đăng ký thành công',
+        'Tài khoản đã được tạo thành công! Vui lòng đăng nhập để bắt đầu trải nghiệm GoPlant.',
+        [
+          {
+            text: 'Đăng nhập ngay',
+            onPress: () => {
+              router.replace({
+                pathname: '/auth/login',
+                params: { account: account.trim() },
+              });
+            },
+          },
+        ]
+      );
+    } catch (err) {
+      if (err instanceof AppApiError) {
+        if (err.isConflictError) {
+          setErrors({ account: 'Tài khoản (email hoặc số điện thoại) đã được đăng ký.' });
+          setShowValidationSummary(true);
+        } else if (err.isValidationError && err.field) {
+          const fieldMap: Record<string, string> = {
+            fullName: 'name',
+            account: 'account',
+            password: 'password',
+            recoveryEmail: 'recoveryEmail',
+          };
+          const targetField = fieldMap[err.field] || 'general';
+          setErrors({ [targetField]: err.message });
+          setShowValidationSummary(true);
+        } else {
+          Alert.alert('Đăng ký thất bại', err.message);
+        }
+      } else {
+        Alert.alert('Đăng ký thất bại', 'Không thể hoàn tất đăng ký. Vui lòng kiểm tra lại kết nối mạng.');
+      }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -150,8 +206,8 @@ export function RegisterScreen() {
         </View>
 
         <View style={styles.form}>
-          <Field label="Họ và tên" placeholder="Ví dụ: Nguyễn Văn An" icon={UserIcon} value={name} onChangeText={setName} error={errors.name} />
-          <Field label="Số điện thoại hoặc Email" placeholder="Nhập số điện thoại hoặc email" icon={ContactIcon} value={account} onChangeText={setAccount} error={errors.account} keyboardType="email-address" />
+          <Field label="Họ và tên" placeholder="Ví dụ: Nguyễn Văn An" icon={UserIcon} value={name} onChangeText={(val) => { setName(val); setErrors((prev) => ({ ...prev, name: '' })); }} error={errors.name} />
+          <Field label="Số điện thoại hoặc Email" placeholder="Nhập số điện thoại hoặc email" icon={ContactIcon} value={account} onChangeText={(val) => { setAccount(val); setErrors((prev) => ({ ...prev, account: '' })); }} error={errors.account} keyboardType="email-address" />
           <View style={styles.recoveryField}>
             <Field label="Email khôi phục tài khoản" placeholder="Email dự phòng khi cần lấy lại mật khẩu" icon={MailIcon} value={recoveryEmail} onChangeText={setRecoveryEmail} optional keyboardType="email-address" />
             <View style={styles.helperRow}><InfoIcon width={13} height={13} /><Text style={styles.helperText}>Dùng để xác minh bảo mật khi bạn quên mật khẩu</Text></View>
@@ -172,12 +228,12 @@ export function RegisterScreen() {
             </View>
           </View>
 
-          <Field label="Mật khẩu" placeholder="Tối thiểu 8 ký tự" icon={LockIcon} value={password} onChangeText={setPassword} error={errors.password} secureTextEntry={!showPassword} onToggleSecure={() => setShowPassword((value) => !value)} />
+          <Field label="Mật khẩu" placeholder="Tối thiểu 8 ký tự" icon={LockIcon} value={password} onChangeText={(val) => { setPassword(val); setErrors((prev) => ({ ...prev, password: '' })); }} error={errors.password} secureTextEntry={!showPassword} onToggleSecure={() => setShowPassword((value) => !value)} />
           <View style={styles.strengthArea}>
             <View style={styles.strengthBars}>{[1, 2, 3].map((part) => <View key={part} style={[styles.strengthBar, part <= strength && styles.strengthBarActive]} />)}</View>
             <View style={styles.strengthLabels}><Text style={styles.helperText}>Độ mạnh: {strength === 0 ? 'Chưa nhập' : strength === 1 ? 'Yếu' : strength === 2 ? 'Trung bình' : 'Mạnh'}</Text><Text style={styles.helperText}>Nên gồm chữ, số & ký tự đặc biệt</Text></View>
           </View>
-          <Field label="Nhập lại mật khẩu" placeholder="Nhập lại mật khẩu đã tạo" icon={ShieldIcon} value={confirm} onChangeText={setConfirm} error={errors.confirm} secureTextEntry={!showPassword} onToggleSecure={() => setShowPassword((value) => !value)} />
+          <Field label="Nhập lại mật khẩu" placeholder="Nhập lại mật khẩu đã tạo" icon={ShieldIcon} value={confirm} onChangeText={(val) => { setConfirm(val); setErrors((prev) => ({ ...prev, confirm: '' })); }} error={errors.confirm} secureTextEntry={!showPassword} onToggleSecure={() => setShowPassword((value) => !value)} />
 
           <Pressable onPress={() => setAccepted((value) => !value)} style={styles.termsRow} accessibilityRole="checkbox" accessibilityState={{ checked: accepted }}>
             <View style={[styles.checkbox, accepted && styles.checkboxChecked]}>{accepted ? <Text style={styles.checkmark}>✓</Text> : null}</View>
@@ -185,8 +241,8 @@ export function RegisterScreen() {
           </Pressable>
           {errors.terms ? <Text style={styles.errorText}>{errors.terms}</Text> : null}
 
-          <Pressable onPress={submit} style={({ pressed }) => [styles.submitButton, pressed && styles.pressed]} accessibilityRole="button">
-            <RegisterActionIcon width={15} height={15} /><Text style={styles.submitLabel}>Đăng ký tài khoản</Text>
+          <Pressable disabled={isSubmitting} onPress={submit} style={({ pressed }) => [styles.submitButton, pressed && styles.pressed, isSubmitting && styles.loginSubmitDisabled]} accessibilityRole="button">
+            <RegisterActionIcon width={15} height={15} /><Text style={styles.submitLabel}>{isSubmitting ? 'Đang đăng ký…' : 'Đăng ký tài khoản'}</Text>
           </Pressable>
           <Text style={styles.submitHint}>Sau khi đăng ký thành công sẽ chuyển sang màn hình Đăng nhập</Text>
         </View>
@@ -207,7 +263,7 @@ export function RegisterScreen() {
               <View style={styles.warningIcon}><Text style={styles.warningMark}>!</Text></View>
               <Text style={styles.modalTitle}>Thông tin không hợp lệ, hãy kiểm tra lại</Text>
               <Text style={styles.modalDescription}>Một số trường bắt buộc chưa được nhập hoặc chưa chính xác để tiếp tục.</Text>
-              <View style={styles.errorList}>{Object.entries(errors).map(([key, message]) => <View key={key} style={styles.modalErrorRow}><Text style={styles.errorCross}>×</Text><View style={styles.modalErrorCopy}><Text style={styles.modalErrorTitle}>{({ name: 'Họ và tên', account: 'Số điện thoại hoặc Email', password: 'Mật khẩu', confirm: 'Xác nhận mật khẩu', terms: 'Điều khoản dịch vụ' } as Record<string, string>)[key]}</Text><Text style={styles.modalErrorMessage}>{message}</Text></View></View>)}</View>
+              <View style={styles.errorList}>{Object.entries(errors).filter(([, msg]) => Boolean(msg)).map(([key, message]) => <View key={key} style={styles.modalErrorRow}><Text style={styles.errorCross}>×</Text><View style={styles.modalErrorCopy}><Text style={styles.modalErrorTitle}>{({ name: 'Họ và tên', account: 'Số điện thoại hoặc Email', password: 'Mật khẩu', confirm: 'Xác nhận mật khẩu', terms: 'Điều khoản dịch vụ', general: 'Thông báo chung' } as Record<string, string>)[key] || key}</Text><Text style={styles.modalErrorMessage}>{message}</Text></View></View>)}</View>
               <Pressable onPress={() => setShowValidationSummary(false)} style={styles.modalPrimary}><Text style={styles.modalPrimaryText}>☷  Kiểm tra và sửa lại</Text></Pressable>
               <Pressable onPress={() => setShowValidationSummary(false)} style={styles.modalSecondary}><Text style={styles.modalSecondaryText}>Đóng cảnh báo</Text></Pressable>
               <Text style={styles.modalPrivacy}>GoPlant tôn trọng quyền riêng tư và mầm xanh an toàn</Text>
@@ -220,36 +276,44 @@ export function RegisterScreen() {
 }
 
 export function LoginScreen() {
-  const [account, setAccount] = useState('');
+  const { login } = useAuth();
+  const params = useLocalSearchParams<{ account?: string }>();
+  const [account, setAccount] = useState(params.account || '');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  useEffect(() => {
+    if (params.account) {
+      setAccount(params.account);
+    }
+  }, [params.account]);
+
   const submit = async () => {
-    if (!account.trim() || !password) {
+    const trimmedAccount = account.trim();
+    if (!trimmedAccount || !password) {
       setError('Vui lòng nhập tài khoản và mật khẩu.');
       return;
     }
     setError('');
     setIsSubmitting(true);
     try {
-      const result = await authenticateWithMockAuth(account, password);
-      if (!result.ok) {
-        if (result.reason === 'disabled') {
-          setError('Mock authentication đã bị tắt. Tài khoản demo không thể đăng nhập trong cấu hình này.');
-        } else if (result.reason === 'invalid-credentials') {
-          setError('Email hoặc mật khẩu không chính xác.');
-        } else {
-          setError('Vui lòng nhập email và mật khẩu.');
-        }
-        return;
-      }
-
+      await login({ account: trimmedAccount, password });
       setPassword('');
       router.replace('/home');
-    } catch {
-      setError('Không thể hoàn tất đăng nhập demo. Vui lòng thử lại.');
+    } catch (err) {
+      if (err instanceof AppApiError) {
+        if (err.statusCode === 401) {
+          setError('Tài khoản hoặc mật khẩu không chính xác.');
+        } else if (err.isNetworkError) {
+          setError('Không thể kết nối đến máy chủ. Vui lòng kiểm tra lại mạng hoặc cấu hình API.');
+        } else {
+          setError(err.message);
+        }
+      } else {
+        setError('Không thể hoàn tất đăng nhập. Vui lòng thử lại.');
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -289,7 +353,7 @@ export function LoginScreen() {
           <Pressable onPress={() => InlineUnavailable('Khôi phục mật khẩu chưa được kết nối dịch vụ xác thực.')} style={styles.forgotButton}><Text style={styles.forgotText}>Quên mật khẩu?</Text></Pressable>
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
           <Pressable disabled={isSubmitting} onPress={submit} style={({ pressed }) => [styles.loginSubmit, pressed && styles.pressed, isSubmitting && styles.loginSubmitDisabled]}><Text style={styles.loginSubmitLabel}>{isSubmitting ? 'Đang đăng nhập…' : 'Đăng nhập'}</Text><View style={styles.loginSubmitIcon}><ProfileIcon width={15} height={15} /></View></Pressable>
-          <View style={styles.successHint}><InfoIcon width={14} height={14} /><Text style={styles.helperText}>Đăng nhập demo thành công sẽ mở Trang chủ và các giao diện hiện có.</Text></View>
+          <View style={styles.successHint}><InfoIcon width={14} height={14} /><Text style={styles.helperText}>Đăng nhập an toàn với hệ thống tài khoản GoPlant và đồng bộ dữ liệu.</Text></View>
 
           <View style={styles.orRow}><View style={styles.rule} /><Text style={styles.orText}>HOẶC TIẾP TỤC VỚI</Text><View style={styles.rule} /></View>
           <View style={styles.socialRow}>
@@ -328,92 +392,92 @@ const styles = StyleSheet.create({
   optionalPill: { marginLeft: 'auto', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 99, backgroundColor: 'rgba(153,245,198,0.3)', color: '#004D33', fontFamily: F.bold, fontSize: 10, lineHeight: 14 },
   inputShell: { minHeight: 44, paddingHorizontal: 14, borderRadius: 8, backgroundColor: C.surface, flexDirection: 'row', alignItems: 'center', gap: 12, elevation: 1 },
   inputError: { borderWidth: 1, borderColor: '#B42318' },
-  input: { flex: 1, paddingVertical: 10, color: C.text, fontFamily: F.regular, fontSize: 14, lineHeight: 20 },
-  eyeButton: { width: 30, height: 32, alignItems: 'center', justifyContent: 'center' },
-  errorText: { color: '#B42318', fontFamily: F.regular, fontSize: 11, lineHeight: 16, marginTop: 2 },
+  input: { flex: 1, color: C.text, fontFamily: F.regular, fontSize: 14, paddingVertical: 0 },
+  eyeButton: { padding: 4 },
+  errorText: { color: '#B42318', fontFamily: F.regular, fontSize: 12, lineHeight: 16 },
   recoveryField: { gap: 6 },
-  helperRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  helperText: { color: '#7A837D', fontFamily: F.regular, fontSize: 10, lineHeight: 14 },
-  deviceHint: { marginLeft: 'auto', color: C.secondaryText, fontFamily: F.regular, fontSize: 10, lineHeight: 14 },
-  deviceSelector: { padding: 4, borderRadius: 10, backgroundColor: C.softSurface, flexDirection: 'row', gap: 4 },
-  deviceOption: { flex: 1, height: 36, borderRadius: 8, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 },
-  deviceOptionSelected: { backgroundColor: C.surface, elevation: 1 },
+  helperRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 4 },
+  helperText: { color: C.secondaryText, fontFamily: F.regular, fontSize: 11, lineHeight: 16 },
+  deviceHint: { marginLeft: 'auto', color: C.mutedText, fontFamily: F.regular, fontSize: 11, lineHeight: 16 },
+  deviceSelector: { flexDirection: 'row', gap: 10 },
+  deviceOption: { flex: 1, minHeight: 42, paddingHorizontal: 10, borderRadius: 8, backgroundColor: C.surface, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderWidth: 1, borderColor: '#D9D9D9' },
+  deviceOptionSelected: { borderColor: C.forest, backgroundColor: 'rgba(2,52,35,0.04)' },
   deviceLabel: { color: C.secondaryText, fontFamily: F.regular, fontSize: 12, lineHeight: 16 },
   deviceLabelSelected: { color: C.forest, fontFamily: F.semiBold },
-  strengthArea: { gap: 4, marginTop: -6 },
-  strengthBars: { flexDirection: 'row', gap: 4 },
-  strengthBar: { height: 6, flex: 1, borderRadius: 4, backgroundColor: '#DDE5DE' },
-  strengthBarActive: { backgroundColor: '#69B98C' },
-  strengthLabels: { flexDirection: 'row', justifyContent: 'space-between' },
-  termsRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginTop: 2 },
-  checkbox: { width: 20, height: 20, borderRadius: 5, backgroundColor: '#E3EAE4', alignItems: 'center', justifyContent: 'center' },
-  checkboxChecked: { backgroundColor: C.primary },
-  checkmark: { color: C.surface, fontFamily: F.bold, fontSize: 14 },
-  termsText: { flex: 1, color: C.secondaryText, fontFamily: F.regular, fontSize: 11, lineHeight: 17 },
+  strengthArea: { gap: 6 },
+  strengthBars: { flexDirection: 'row', gap: 6 },
+  strengthBar: { flex: 1, height: 4, borderRadius: 2, backgroundColor: '#E2E8F0' },
+  strengthBarActive: { backgroundColor: '#10B981' },
+  strengthLabels: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  termsRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingVertical: 4 },
+  checkbox: { width: 18, height: 18, borderRadius: 4, borderWidth: 1, borderColor: '#C8D5CA', backgroundColor: C.surface, alignItems: 'center', justifyContent: 'center', marginTop: 1 },
+  checkboxChecked: { backgroundColor: C.forest, borderColor: C.forest },
+  checkmark: { color: '#FFFFFF', fontSize: 12, lineHeight: 14, fontWeight: 'bold' },
+  termsText: { flex: 1, color: C.secondaryText, fontFamily: F.regular, fontSize: 11, lineHeight: 16 },
   inlineLink: { color: C.forest, fontFamily: F.semiBold },
-  submitButton: { minHeight: 48, borderRadius: 8, backgroundColor: C.primary, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, elevation: 2 },
-  submitLabel: { color: C.surface, fontFamily: F.semiBold, fontSize: 16, lineHeight: 24 },
-  submitHint: { marginTop: -6, color: C.secondaryText, fontFamily: F.regular, fontSize: 10, lineHeight: 14, textAlign: 'center' },
-  gardenTip: { padding: 12, borderRadius: 12, backgroundColor: C.softSurface, flexDirection: 'row', alignItems: 'center', gap: 10 },
-  gardenPhoto: { width: 48, height: 48, borderRadius: 8 },
+  submitButton: { minHeight: 48, borderRadius: 8, backgroundColor: C.forest, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  submitLabel: { color: '#FFFFFF', fontFamily: F.bold, fontSize: 14, lineHeight: 20 },
+  submitHint: { color: C.mutedText, fontFamily: F.regular, fontSize: 11, lineHeight: 16, textAlign: 'center' },
+  gardenTip: { padding: 10, borderRadius: 12, backgroundColor: C.softSurface, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  gardenPhoto: { width: 64, height: 64, borderRadius: 8 },
   gardenCopy: { flex: 1, gap: 2 },
-  gardenTitle: { color: C.text, fontFamily: F.semiBold, fontSize: 12, lineHeight: 16 },
-  gardenText: { color: C.secondaryText, fontFamily: F.regular, fontSize: 10, lineHeight: 14 },
-  switchAuth: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', minHeight: 34 },
-  switchText: { color: C.secondaryText, fontFamily: F.regular, fontSize: 14, lineHeight: 20 },
-  switchAction: { color: C.forest, fontFamily: F.semiBold, fontSize: 16, lineHeight: 24 },
-  loginContent: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 20, gap: 20 },
-  loginHero: { padding: 20, borderRadius: 12, backgroundColor: C.softSurface, gap: 8, overflow: 'hidden' },
-  loginHeroTop: { flexDirection: 'row', alignItems: 'center', gap: 14 },
-  loginLogo: { width: 56, height: 56, borderRadius: 28, backgroundColor: C.primary, alignItems: 'center', justifyContent: 'center', elevation: 2 },
-  loginHeroCopy: { flex: 1, gap: 4 },
-  botanicalTag: { alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 99, backgroundColor: 'rgba(161,209,184,0.3)', flexDirection: 'row', alignItems: 'center', gap: 6 },
-  botanicalLabel: { color: C.forest, fontFamily: F.bold, fontSize: 10, lineHeight: 14, letterSpacing: 0.5 },
-  loginTitle: { color: C.text, fontFamily: F.semiBold, fontSize: 20, lineHeight: 28, letterSpacing: -0.2 },
-  loginSubtitle: { color: C.secondaryText, fontFamily: F.regular, fontSize: 12, lineHeight: 18 },
-  loginForm: { padding: 20, borderRadius: 12, backgroundColor: C.surface, gap: 14, elevation: 1 },
-  loginField: { gap: 4 },
-  loginFieldLabel: { color: C.text, fontFamily: F.semiBold, fontSize: 14, lineHeight: 20, letterSpacing: 0.14 },
-  loginMeta: { marginLeft: 'auto', color: 'rgba(65,73,68,0.7)', fontFamily: F.regular, fontSize: 12, lineHeight: 18 },
-  loginInput: { minHeight: 46, paddingHorizontal: 12, borderRadius: 8, backgroundColor: C.softSurface, flexDirection: 'row', alignItems: 'center', gap: 10 },
-  loginInputText: { flex: 1, paddingVertical: 10, color: C.text, fontFamily: F.regular, fontSize: 14, lineHeight: 20 },
-  loginEye: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
+  gardenTitle: { color: C.text, fontFamily: F.bold, fontSize: 13, lineHeight: 18 },
+  gardenText: { color: C.secondaryText, fontFamily: F.regular, fontSize: 11, lineHeight: 16 },
+  switchAuth: { alignItems: 'center', justifyContent: 'center', flexDirection: 'row', paddingVertical: 8 },
+  switchText: { color: C.secondaryText, fontFamily: F.regular, fontSize: 13, lineHeight: 18 },
+  switchAction: { color: C.forest, fontFamily: F.bold, fontSize: 13, lineHeight: 18 },
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  validationModal: { width: '100%', maxWidth: 360, borderRadius: 16, backgroundColor: C.surface, overflow: 'hidden' },
+  modalAccent: { height: 6, backgroundColor: '#EF4444' },
+  modalContent: { padding: 20, gap: 14, alignItems: 'center' },
+  warningIcon: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#FEE2E2', alignItems: 'center', justifyContent: 'center' },
+  warningMark: { color: '#EF4444', fontSize: 22, fontWeight: 'bold' },
+  modalTitle: { color: C.text, fontFamily: F.bold, fontSize: 16, lineHeight: 22, textAlign: 'center' },
+  modalDescription: { color: C.secondaryText, fontFamily: F.regular, fontSize: 12, lineHeight: 18, textAlign: 'center' },
+  errorList: { width: '100%', gap: 8 },
+  modalErrorRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 8, borderRadius: 8, backgroundColor: '#FEF2F2' },
+  errorCross: { color: '#EF4444', fontSize: 16, lineHeight: 18, fontWeight: 'bold' },
+  modalErrorCopy: { flex: 1 },
+  modalErrorTitle: { color: '#991B1B', fontFamily: F.bold, fontSize: 12, lineHeight: 16 },
+  modalErrorMessage: { color: '#B91C1C', fontFamily: F.regular, fontSize: 11, lineHeight: 15 },
+  modalPrimary: { width: '100%', height: 44, borderRadius: 8, backgroundColor: C.forest, alignItems: 'center', justifyContent: 'center' },
+  modalPrimaryText: { color: '#FFFFFF', fontFamily: F.bold, fontSize: 13 },
+  modalSecondary: { paddingVertical: 6 },
+  modalSecondaryText: { color: C.secondaryText, fontFamily: F.regular, fontSize: 12 },
+  modalPrivacy: { color: C.mutedText, fontFamily: F.regular, fontSize: 10, textAlign: 'center' },
+  loginContent: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 24, gap: 20 },
+  loginHero: { gap: 10 },
+  loginHeroTop: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  loginLogo: { width: 48, height: 48, borderRadius: 24, backgroundColor: C.mint, alignItems: 'center', justifyContent: 'center' },
+  loginHeroCopy: { flex: 1, gap: 2 },
+  botanicalTag: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  botanicalLabel: { color: C.forest, fontFamily: F.bold, fontSize: 9, letterSpacing: 0.8 },
+  loginTitle: { color: C.text, fontFamily: F.bold, fontSize: 22, lineHeight: 28 },
+  loginSubtitle: { color: C.secondaryText, fontFamily: F.regular, fontSize: 13, lineHeight: 20 },
+  loginForm: { gap: 14 },
+  loginField: { gap: 6 },
+  loginFieldLabel: { color: C.text, fontFamily: F.semiBold, fontSize: 12, lineHeight: 16 },
+  loginMeta: { marginLeft: 'auto', color: C.mutedText, fontFamily: F.regular, fontSize: 11 },
+  loginInput: { minHeight: 46, paddingHorizontal: 14, borderRadius: 8, backgroundColor: C.surface, flexDirection: 'row', alignItems: 'center', gap: 12, elevation: 1 },
+  loginInputText: { flex: 1, color: C.text, fontFamily: F.regular, fontSize: 14, paddingVertical: 0 },
+  loginEye: { padding: 4 },
   forgotButton: { alignSelf: 'flex-end', paddingVertical: 2 },
-  forgotText: { color: C.primary, fontFamily: F.semiBold, fontSize: 12, lineHeight: 16 },
-  loginSubmit: { height: 48, borderRadius: 8, backgroundColor: C.primary, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', elevation: 2 },
-  loginSubmitDisabled: { opacity: 0.65 },
-  loginSubmitLabel: { color: C.surface, fontFamily: F.semiBold, fontSize: 14, lineHeight: 20 },
-  loginSubmitIcon: { position: 'absolute', right: 10, width: 28, height: 28, alignItems: 'center', justifyContent: 'center', borderRadius: 6 },
-  successHint: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, marginTop: -6 },
-  orRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 4 },
-  rule: { flex: 1, height: 1, backgroundColor: '#E3EAE4' },
-  orText: { color: C.secondaryText, fontFamily: F.semiBold, fontSize: 10, lineHeight: 14 },
-  socialRow: { flexDirection: 'row', gap: 8 },
-  socialButton: { flex: 1, height: 50, borderRadius: 10, backgroundColor: C.softSurface, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-  socialText: { color: C.text, fontFamily: F.semiBold, fontSize: 12, lineHeight: 18 },
-  zaloMark: { width: 24, height: 24, borderRadius: 12, overflow: 'hidden', backgroundColor: '#0877F9', color: C.surface, fontFamily: F.bold, fontSize: 16, lineHeight: 24, textAlign: 'center' },
-  googleMark: { color: '#4285F4', fontFamily: F.bold, fontSize: 20, lineHeight: 24 },
-  createAccount: { minHeight: 48, borderRadius: 10, backgroundColor: C.softSurface, alignItems: 'center', justifyContent: 'center', flexDirection: 'row' },
-  loginPrivacy: { color: '#7A837D', fontFamily: F.regular, fontSize: 10, lineHeight: 14, textAlign: 'center', marginTop: 2 },
-  loginCopyright: { color: '#BCC7C0', fontFamily: F.regular, fontSize: 10, lineHeight: 14, textAlign: 'center', marginTop: -14 },
-  modalBackdrop: { flex: 1, paddingHorizontal: 24, backgroundColor: 'rgba(21,31,25,0.58)', alignItems: 'center', justifyContent: 'center' },
-  validationModal: { width: '100%', maxWidth: 420, overflow: 'hidden', borderRadius: 14, backgroundColor: C.surface, elevation: 10 },
-  modalAccent: { height: 5, backgroundColor: '#FF9A65' },
-  modalContent: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 0, alignItems: 'center', gap: 9 },
-  warningIcon: { width: 54, height: 54, borderRadius: 27, backgroundColor: C.peach, alignItems: 'center', justifyContent: 'center', elevation: 2 },
-  warningMark: { color: '#984416', fontFamily: F.bold, fontSize: 26 },
-  modalTitle: { color: C.text, fontFamily: F.semiBold, fontSize: 16, lineHeight: 22, textAlign: 'center' },
-  modalDescription: { color: C.secondaryText, fontFamily: F.regular, fontSize: 11, lineHeight: 17, textAlign: 'center' },
-  errorList: { width: '100%', paddingHorizontal: 10, paddingVertical: 3, borderRadius: 10, backgroundColor: C.softSurface },
-  modalErrorRow: { minHeight: 42, flexDirection: 'row', alignItems: 'center', gap: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#DCE7DE' },
-  errorCross: { width: 20, height: 20, overflow: 'hidden', borderRadius: 10, backgroundColor: '#FADADA', color: '#B42318', textAlign: 'center', textAlignVertical: 'center', fontFamily: F.bold },
-  modalErrorCopy: { flex: 1, gap: 2 },
-  modalErrorTitle: { color: C.text, fontFamily: F.semiBold, fontSize: 11 },
-  modalErrorMessage: { color: '#B42318', fontFamily: F.regular, fontSize: 10 },
-  modalPrimary: { width: '100%', minHeight: 43, borderRadius: 9, backgroundColor: C.primary, alignItems: 'center', justifyContent: 'center' },
-  modalPrimaryText: { color: C.surface, fontFamily: F.semiBold, fontSize: 12 },
-  modalSecondary: { width: '100%', minHeight: 39, borderRadius: 9, backgroundColor: C.softSurface, alignItems: 'center', justifyContent: 'center' },
-  modalSecondaryText: { color: C.secondaryText, fontFamily: F.semiBold, fontSize: 11 },
-  modalPrivacy: { marginHorizontal: -16, marginTop: 1, paddingVertical: 6, width: '110%', backgroundColor: '#EEF4EF', color: C.secondaryText, fontFamily: F.semiBold, fontSize: 9, textAlign: 'center' },
-  pressed: { opacity: 0.82 },
+  forgotText: { color: C.forest, fontFamily: F.semiBold, fontSize: 12 },
+  loginSubmit: { minHeight: 48, borderRadius: 8, backgroundColor: C.forest, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  loginSubmitDisabled: { opacity: 0.6 },
+  loginSubmitLabel: { color: '#FFFFFF', fontFamily: F.bold, fontSize: 14, lineHeight: 20 },
+  loginSubmitIcon: { width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' },
+  successHint: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10, borderRadius: 8, backgroundColor: C.softSurface },
+  orRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 4 },
+  rule: { flex: 1, height: 1, backgroundColor: '#E2E8F0' },
+  orText: { color: C.mutedText, fontFamily: F.bold, fontSize: 10, letterSpacing: 0.8 },
+  socialRow: { flexDirection: 'row', gap: 12 },
+  socialButton: { flex: 1, height: 44, borderRadius: 8, backgroundColor: C.surface, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderWidth: 1, borderColor: '#E2E8F0' },
+  zaloMark: { color: '#0068FF', fontFamily: F.bold, fontSize: 16 },
+  googleMark: { color: '#EA4335', fontFamily: F.bold, fontSize: 16 },
+  socialText: { color: C.text, fontFamily: F.semiBold, fontSize: 12 },
+  createAccount: { alignItems: 'center', justifyContent: 'center', flexDirection: 'row', paddingVertical: 8 },
+  loginPrivacy: { color: C.mutedText, fontFamily: F.regular, fontSize: 11, textAlign: 'center' },
+  loginCopyright: { color: C.mutedText, fontFamily: F.regular, fontSize: 10, textAlign: 'center' },
+  pressed: { opacity: 0.8 },
 });

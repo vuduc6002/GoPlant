@@ -4,7 +4,7 @@
 
 GoPlant là ứng dụng di động hỗ trợ người dùng khám phá và quản lý cây trồng, khu vườn cùng các hoạt động chăm sóc. Phạm vi sản phẩm được thể hiện trong thiết kế Figma và tài liệu chức năng của dự án.
 
-Repository hiện có giao diện frontend React Native theo Expo SDK 57, được tổ chức bằng Expo Router và TypeScript. Trong cấu trúc dự án GoPlant, Backend Spring Boot đã hoàn thành triển khai 19 REST API ưu tiên (Auth, Users, Species, Favorites, Gardens, Admin Species) tại thư mục `backend/`. Ở giai đoạn phát triển hiện tại, ứng dụng Frontend vẫn sử dụng Mock Data và React State cục bộ trong phiên nhằm phục vụ phát triển giao diện độc lập; việc kết nối tích hợp toàn diện giữa Frontend và Backend REST API sẽ được thực hiện tại Giai đoạn 5.
+Repository hiện có giao diện frontend React Native theo Expo SDK 57, được tổ chức bằng Expo Router và TypeScript. Trong cấu trúc dự án GoPlant, Backend Spring Boot REST API đã hoàn thiện đầy đủ tại thư mục `backend/`. Giai đoạn G5.2 đã hoàn tất thiết lập nền tảng API Client (Axios), quản lý JWT an toàn bằng Expo SecureStore, quản lý server state bằng TanStack React Query, và tích hợp luồng Xác thực thật (Đăng ký, Đăng nhập, Hồ sơ cá nhân `GET /users/me`, Route Protection, Logout). Các phân hệ nghiệp vụ tiếp theo (Vườn, Cây trồng, Lịch chăm sóc, Nhật ký) sẽ tiếp tục kết nối ở các giai đoạn G5.3+.
 
 ## Trạng thái công nghệ
 
@@ -107,6 +107,28 @@ GOPLANTT/
 ```
 
 Thư mục `android/` và `ios/` hiện không có trong repository. Expo có thể sinh native project theo quy trình cần thiết; không tạo hoặc chỉnh các thư mục này thủ công trong workflow Expo hiện tại.
+
+## Cấu hình Môi trường và API Base URL
+
+Ứng dụng cấu hình API Base URL thông qua biến môi trường `EXPO_PUBLIC_API_BASE_URL` trong file `frontend/.env` (tham khảo `frontend/.env.example`):
+
+- **Expo Web / Localhost**: `EXPO_PUBLIC_API_BASE_URL=http://localhost:8080/api/v1`
+- **Android Emulator**: `EXPO_PUBLIC_API_BASE_URL=http://10.0.2.2:8080/api/v1`
+- **Thiết bị thật qua mạng LAN**: `EXPO_PUBLIC_API_BASE_URL=http://<IP_MAY_TINH_LAN>:8080/api/v1`
+
+### Khởi động hệ thống kiểm thử:
+
+1. **Khởi động Backend Spring Boot**:
+```powershell
+cd E:\GoPlant\backend
+.\mvnw.cmd spring-boot:run
+```
+
+2. **Khởi động Frontend Expo**:
+```powershell
+cd E:\GoPlant\frontend
+npx.cmd expo start
+```
 
 ## Yêu cầu môi trường
 

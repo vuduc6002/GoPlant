@@ -5,6 +5,7 @@ import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GoPlantColors as C, GoPlantTypography as F } from '@/constants/theme';
+import { useAuth } from '@/features/auth';
 
 // Local sample content for the visual prototype; no live weather or plant service is connected.
 
@@ -20,11 +21,35 @@ function SectionTitle({ title, trailing }: { title: string; trailing?: string })
 }
 
 export default function HomeScreen() {
+  const { user, profile, logout } = useAuth();
   const [category, setCategory] = useState(categories[0]);
   const [query, setQuery] = useState('');
 
   const unavailable = (feature: string) => Alert.alert('Bản xem trước giao diện', `${feature} sẽ được triển khai theo thiết kế ở đợt tiếp theo.`);
   const navigate = (route: string) => router.push(route as never);
+
+  const displayName = profile?.fullName || user?.fullName || 'Người yêu cây';
+  const displayInitial = displayName.charAt(0).toUpperCase();
+
+  const handleAvatarPress = () => {
+    Alert.alert(
+      'Tài khoản GoPlant',
+      `Tên: ${displayName}\nEmail: ${profile?.email || user?.email || 'N/A'}\nVai trò: ${(user?.roles || []).join(', ') || 'ROLE_USER'}`,
+      [
+        { text: 'Đóng', style: 'cancel' },
+        {
+          text: 'Đăng xuất',
+          style: 'destructive',
+          onPress: () => {
+            Alert.alert('Xác nhận đăng xuất', 'Bạn có chắc chắn muốn đăng xuất không?', [
+              { text: 'Hủy', style: 'cancel' },
+              { text: 'Đăng xuất', style: 'destructive', onPress: () => logout() },
+            ]);
+          },
+        },
+      ]
+    );
+  };
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
@@ -40,14 +65,16 @@ export default function HomeScreen() {
           <Pressable accessibilityRole="button" accessibilityLabel="Thông báo" onPress={() => unavailable('Thông báo')} style={styles.iconButton}>
             <Text style={styles.headerIcon}>♧</Text>
           </Pressable>
-          <View style={styles.avatar}><Text style={styles.avatarText}>G</Text></View>
+          <Pressable accessibilityRole="button" accessibilityLabel="Hồ sơ cá nhân và đăng xuất" onPress={handleAvatarPress} style={styles.avatar}>
+            <Text style={styles.avatarText}>{displayInitial}</Text>
+          </Pressable>
         </View>
       </View>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.greetingRow}>
           <View style={styles.greetingCopy}>
-            <Text style={styles.greeting}>Chào buổi sáng, Amy🌱</Text>
+            <Text style={styles.greeting}>Chào buổi sáng, {displayName}🌱</Text>
             <Text style={styles.subtitle}>Hôm nay là thời điểm lý tưởng để chăm vườn nhỏ!</Text>
           </View>
           <View style={styles.sunBadge}><Text style={styles.sun}>☼</Text></View>
