@@ -538,7 +538,7 @@ Danh sách lịch chăm sóc của 1 cây.
         "frequency": "DAILY",
         "intervalDays": null,
         "reminderTime": "08:00:00",
-        "nextScheduledAt": "2026-11-10T08:00:00Z",
+        "nextScheduledAt": "2026-11-10T01:00:00Z",
         "status": "ACTIVE"
       }
     ],
@@ -605,8 +605,8 @@ Nhật ký phát triển của 1 cây, phân trang.
    - Khi lịch `ONCE` hoàn thành/bỏ qua hoặc lịch có `endDate` đã qua mốc chu kỳ cuối cùng: `COMPLETED`.
    - Lịch **KHÔNG BAO GIỜ** nhận trạng thái `SKIPPED` (`SKIPPED` chỉ là trạng thái của bản ghi trong bảng `care_logs`).
 8. **Quy tắc hiển thị Lịch hôm nay (`GET /api/v1/schedules/today`):**
-   - Lịch cần thực hiện: Chỉ các lịch có trạng thái `ACTIVE` mà đến hạn thực hiện trong ngày hôm nay hoặc đã quá hạn (`next_scheduled_at` <= cuối ngày hôm nay theo giờ hệ thống).
-   - Cờ `isOverdue`: Được gán `true` khi `next_scheduled_at` nhỏ hơn thời điểm hiện tại (`NOW()`).
+   - Lịch cần thực hiện: Chỉ các lịch có trạng thái `ACTIVE` mà đến hạn thực hiện trong ngày hôm nay hoặc đã quá hạn được xác định theo ngày hiện tại ở múi giờ `Asia/Ho_Chi_Minh` (`nextScheduledAt` không vượt quá cuối ngày hôm nay theo giờ Việt Nam: 23:59:59.999 `Asia/Ho_Chi_Minh`, tương đương 16:59:59.999 UTC; hoàn toàn độc lập với timezone mặc định của máy chủ).
+   - Cờ `isOverdue`: Được gán `true` khi `nextScheduledAt` nhỏ hơn thời điểm hiện tại thực tế (`NOW()`).
    - Lịch có trạng thái `PAUSED`, `CANCELLED`, hoặc `COMPLETED` tuyệt đối không xuất hiện trong danh sách lịch cần thực hiện hôm nay.
 9. **Hoạt động `/complete`:**
    - Tạo một bản ghi trong `care_logs` với `status = 'COMPLETED'`, `performed_at = NOW()`, `schedule_id = schedule.id`, `task_type = schedule.task_type`.
@@ -619,10 +619,10 @@ Nhật ký phát triển của 1 cây, phân trang.
     - Cập nhật `care_schedules.updated_at = NOW()`.
     - Trạng thái lịch vẫn duy trì là `ACTIVE` (với lịch lặp) hoặc `COMPLETED` (với lịch `ONCE` hoặc khi vượt quá `endDate`).
 11. **Tương thích múi giờ và kiểu dữ liệu (Timezone & Data Types):**
-    - `reminderTime`: Định dạng `LocalTime` (`HH:mm:ss`), mặc định `08:00:00`.
+    - `reminderTime`: Định dạng `LocalTime` (`HH:mm:ss`), mặc định `08:00:00` theo múi giờ `Asia/Ho_Chi_Minh`.
     - `startDate`, `endDate`: Định dạng `LocalDate` (`YYYY-MM-DD`).
-    - `next_scheduled_at`: Định dạng `OffsetDateTime` / `TIMESTAMPTZ` (lưu trữ theo chuẩn UTC).
-    - Toàn bộ việc tính toán thời gian, ngày đến hạn và thời điểm nhắc nhở của hệ thống phải được thực hiện nhất quán theo múi giờ `Asia/Ho_Chi_Minh` (UTC+7) cho giai đoạn MVP.
+    - `next_scheduled_at`: Định dạng `OffsetDateTime` / `TIMESTAMPTZ` (lưu trữ theo chuẩn UTC, ký hiệu hậu tố `Z`). Với giờ nhắc mặc định `08:00:00` sáng giờ Việt Nam (`Asia/Ho_Chi_Minh`, UTC+7), thời điểm UTC biểu diễn tương ứng sẽ là `01:00:00Z` cùng ngày (VD: ngày 2026-10-31 nhắc lúc 08:00:00 VN thì `nextScheduledAt` là `2026-10-31T01:00:00Z`).
+    - Toàn bộ việc tính toán thời gian, ngày đến hạn và thời điểm nhắc nhở của hệ thống phải được thực hiện nhất quán theo múi giờ `Asia/Ho_Chi_Minh` (UTC+7) cho giai đoạn MVP, hoàn toàn độc lập với timezone mặc định của máy chủ.
 12. **Quan hệ với Cây trồng (User Plant):**
     - Khi một cây bị xóa (`DELETE /api/v1/plants/{plantId}`), toàn bộ `care_schedules` và `care_logs` của cây đó sẽ tự động bị xóa theo (`ON DELETE CASCADE` đã được thiết lập chặt chẽ trong lược đồ CSDL).
 
@@ -652,7 +652,13 @@ Tạo lịch chăm sóc mới.
 
 ### GET `/api/v1/schedules/today`
 
-Danh sách lịch cần thực hiện hôm nay của tất cả cây (của người dùng hiện tại).
+Danh sách lịch chăm sóc cần thực hiện trong ngày hôm nay của người dùng hiện tại.
+
+**Quy tắc nghiệp vụ:**
+- Chỉ lấy các lịch có trạng thái `ACTIVE`.
+- Lịch đến hạn trong ngày hôm nay hoặc đã quá hạn được tính theo ngày hiện tại ở múi giờ `Asia/Ho_Chi_Minh` (nextScheduledAt không vượt quá cuối ngày hôm nay theo giờ Việt Nam: 23:59:59.999 `Asia/Ho_Chi_Minh`, tương đương 16:59:59.999 UTC; không phụ thuộc timezone máy chủ).
+- `isOverdue = true` khi `nextScheduledAt < NOW()`.
+- Loại trừ hoàn toàn lịch `PAUSED`, `CANCELLED`, `COMPLETED`.
 
 **Response 200:**
 ```json
@@ -666,7 +672,7 @@ Danh sách lịch cần thực hiện hôm nay của tất cả cây (của ngư
       "gardenName": "Ban Công Tầng 3",
       "taskType": "WATERING",
       "taskLabel": null,
-      "nextScheduledAt": "2026-10-31T08:00:00Z",
+      "nextScheduledAt": "2026-10-31T01:00:00Z",
       "isOverdue": false,
       "status": "ACTIVE"
     }
@@ -678,11 +684,53 @@ Danh sách lịch cần thực hiện hôm nay của tất cả cây (của ngư
 
 ### PUT `/api/v1/schedules/{scheduleId}`
 
-Cập nhật lịch (loại việc, nhãn, chu kỳ, thời gian bắt đầu, kết thúc, trạng thái `ACTIVE`/`PAUSED`/`CANCELLED`).
+Cập nhật thông tin lịch chăm sóc (loại việc, nhãn, chu kỳ, thời gian bắt đầu, kết thúc, trạng thái).
 
-**Request Body:** Tương tự POST, trừ `userPlantId` (không đổi được).
+**Quy tắc cập nhật (Update Semantics):**
+- **Trường bị bỏ qua (omitted):** Giữ nguyên giá trị hiện tại của lịch.
+- **`taskLabel: null`:** Xóa nhãn mô tả (cập nhật trường thành null trong CSDL).
+- **`reminderTime: null`:** Sử dụng lại mặc định `08:00:00` theo múi giờ `Asia/Ho_Chi_Minh`.
+- **`endDate: null`:** Xóa thời hạn kết thúc (lịch trở thành vô thời hạn cho đến khi người dùng tạm ngưng hoặc hủy).
+- **Ràng buộc toàn vẹn chu kỳ (`intervalDays`):**
+  - Nếu thay đổi `frequency` sang giá trị khác `CUSTOM` (`ONCE`, `DAILY`, `EVERY_OTHER_DAY`, `WEEKLY`), phải bảo đảm `intervalDays = null` (tuân thủ CHECK constraint CSDL `chk_care_schedules_interval`).
+  - Nếu `frequency` là `CUSTOM`, `intervalDays` bắt buộc phải được cung cấp và lớn hơn 0 (`intervalDays > 0`).
+- **`userPlantId`:** Không thể thay đổi (bất biến sau khi tạo).
 
-**Response 200:** Trả về schedule đã cập nhật.
+**Request Body (ví dụ):**
+```json
+{
+  "taskType": "WATERING",
+  "taskLabel": null,
+  "frequency": "CUSTOM",
+  "intervalDays": 3,
+  "reminderTime": "08:00:00",
+  "startDate": "2026-10-31",
+  "endDate": null,
+  "status": "ACTIVE"
+}
+```
+
+**Response 200:** Trả về schedule đã cập nhật (`CareSchedule`).
+```json
+{
+  "success": true,
+  "data": {
+    "id": "e2a1b3c4-5d6e-7f8a-9b0c-1d2e3f4a5b6c",
+    "userPlantId": "c1f7a3e2-8b4d-4e9a-9c12-3f4a5b6c7d8e",
+    "plantName": "Cà Chua Cherry của tôi",
+    "taskType": "WATERING",
+    "taskLabel": null,
+    "frequency": "CUSTOM",
+    "intervalDays": 3,
+    "reminderTime": "08:00:00",
+    "startDate": "2026-10-31",
+    "endDate": null,
+    "nextScheduledAt": "2026-10-31T01:00:00Z",
+    "isOverdue": false,
+    "status": "ACTIVE"
+  }
+}
+```
 
 ---
 
@@ -719,7 +767,7 @@ Xóa lịch chăm sóc. Các lượt `care_logs` trước đó được giữ ng
   "data": {
     "careLogId": "uuid",
     "scheduleStatus": "ACTIVE",
-    "nextScheduledAt": "2026-11-01T08:00:00Z"
+    "nextScheduledAt": "2026-11-01T01:00:00Z"
   }
 }
 ```
@@ -748,7 +796,7 @@ Rỗng hoặc kèm ghi chú lý do:
   "data": {
     "careLogId": "uuid-cua-care-log-vua-tao",
     "scheduleStatus": "ACTIVE",
-    "nextScheduledAt": "2026-04-12T08:00:00Z"
+    "nextScheduledAt": "2026-04-12T01:00:00Z"
   }
 }
 ```
