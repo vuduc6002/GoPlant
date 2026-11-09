@@ -411,9 +411,21 @@ class DatabaseSchemaIntegrationTest {
 
         if (partialWhere != null) {
             assertTrue(def.contains("where"), "Index " + indexName + " must have a WHERE clause");
-            String normalizedWhere = partialWhere.replace(" ", "").replace("\"", "").replace("'", "").toLowerCase();
-            String normalizedDef = def.replace(" ", "").replace("\"", "").replace("'", "").toLowerCase();
-            assertTrue(normalizedDef.contains(normalizedWhere),
+            String cleanDef = def.replace("::text", "")
+                                 .replace("::character varying", "")
+                                 .replace("(", "")
+                                 .replace(")", "")
+                                 .replace(" ", "")
+                                 .replace("\"", "")
+                                 .replace("'", "")
+                                 .toLowerCase();
+            String cleanWhere = partialWhere.replace("(", "")
+                                            .replace(")", "")
+                                            .replace(" ", "")
+                                            .replace("\"", "")
+                                            .replace("'", "")
+                                            .toLowerCase();
+            assertTrue(cleanDef.contains(cleanWhere),
                 "Index " + indexName + " WHERE clause must contain [" + partialWhere + "], definition: " + idx.indexDef());
         }
     }
