@@ -5,7 +5,7 @@ import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GoPlantColors as C, GoPlantTypography as F } from '@/constants/theme';
-import { useAuth } from '@/features/auth';
+import { useAuth, useUserProfile } from '@/features/auth';
 
 // Local sample content for the visual prototype; no live weather or plant service is connected.
 
@@ -21,7 +21,8 @@ function SectionTitle({ title, trailing }: { title: string; trailing?: string })
 }
 
 export default function HomeScreen() {
-  const { user, profile, logout } = useAuth();
+  const { user, logout } = useAuth();
+  const { data: profile } = useUserProfile();
   const [category, setCategory] = useState(categories[0]);
   const [query, setQuery] = useState('');
 
@@ -30,11 +31,15 @@ export default function HomeScreen() {
 
   const displayName = profile?.fullName || user?.fullName || 'Người yêu cây';
   const displayInitial = displayName.charAt(0).toUpperCase();
+  const displayEmail =
+    profile?.email ||
+    user?.email ||
+    (profile?.phoneNumber ? `SĐT: ${profile.phoneNumber}` : 'Chưa cập nhật email');
 
   const handleAvatarPress = () => {
     Alert.alert(
       'Tài khoản GoPlant',
-      `Tên: ${displayName}\nEmail: ${profile?.email || user?.email || 'N/A'}\nVai trò: ${(user?.roles || []).join(', ') || 'ROLE_USER'}`,
+      `Tên: ${displayName}\nEmail: ${displayEmail}\nVai trò: ${(profile?.roles || user?.roles || []).join(', ') || 'ROLE_USER'}`,
       [
         { text: 'Đóng', style: 'cancel' },
         {

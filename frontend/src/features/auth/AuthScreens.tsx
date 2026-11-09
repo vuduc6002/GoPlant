@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState, type ComponentType } from 'react';
+import { useMemo, useState, type ComponentType } from 'react';
 import { Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { SvgProps } from 'react-native-svg';
 
 import { GoPlantColors as C, GoPlantTypography as F } from '@/constants/theme';
-import { useAuth } from './AuthProvider';
+import { useLoginMutation, useRegisterMutation } from './authHooks';
 import { AppApiError } from '@/services/api/apiError';
 
 import RegisterPot from '@/assets/images/figma/auth/signup/signup-23ac7.svg';
@@ -102,7 +102,7 @@ function InlineUnavailable(message: string) {
 }
 
 export function RegisterScreen() {
-  const { register } = useAuth();
+  const registerMutation = useRegisterMutation();
   const [name, setName] = useState('');
   const [account, setAccount] = useState('');
   const [recoveryEmail, setRecoveryEmail] = useState('');
@@ -113,7 +113,6 @@ export function RegisterScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [showValidationSummary, setShowValidationSummary] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const strength = useMemo(() => {
     let score = 0;
@@ -139,9 +138,10 @@ export function RegisterScreen() {
       return;
     }
 
-    setIsSubmitting(true);
+    if (registerMutation.isPending) return;
+
     try {
-      await register({
+      await registerMutation.mutateAsync({
         fullName: name.trim(),
         account: account.trim(),
         recoveryEmail: recoveryEmail.trim() ? recoveryEmail.trim() : undefined,
@@ -185,8 +185,6 @@ export function RegisterScreen() {
       } else {
         Alert.alert('Đăng ký thất bại', 'Không thể hoàn tất đăng ký. Vui lòng kiểm tra lại kết nối mạng.');
       }
-    } finally {
-      setIsSubmitting(false);
     }
   };
 
@@ -241,8 +239,8 @@ export function RegisterScreen() {
           </Pressable>
           {errors.terms ? <Text style={styles.errorText}>{errors.terms}</Text> : null}
 
-          <Pressable disabled={isSubmitting} onPress={submit} style={({ pressed }) => [styles.submitButton, pressed && styles.pressed, isSubmitting && styles.loginSubmitDisabled]} accessibilityRole="button">
-            <RegisterActionIcon width={15} height={15} /><Text style={styles.submitLabel}>{isSubmitting ? 'Đang đăng ký…' : 'Đăng ký tài khoản'}</Text>
+          <Pressable disabled={registerMutation.isPending} onPress={submit} style={({ pressed }) => [styles.submitButton, pressed && styles.pressed, registerMutation.isPending && styles.loginSubmitDisabled]} accessibilityRole="button">
+            <RegisterActionIcon width={15} height={15} /><Text style={styles.submitLabel}>{registerMutation.isPending ? 'Đang đăng ký…' : 'Đăng ký tài khoản'}</Text>
           </Pressable>
           <Text style={styles.submitHint}>Sau khi đăng ký thành công sẽ chuyển sang màn hình Đăng nhập</Text>
         </View>
@@ -276,30 +274,26 @@ export function RegisterScreen() {
 }
 
 export function LoginScreen() {
-  const { login } = useAuth();
+  const loginMutation = useLoginMutation();
   const params = useLocalSearchParams<{ account?: string }>();
   const [account, setAccount] = useState(params.account || '');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  useEffect(() => {
-    if (params.account) {
-      setAccount(params.account);
-    }
-  }, [params.account]);
+
 
   const submit = async () => {
     const trimmedAccount = account.trim();
+    if (loginMutation.isPending) return;
+
     if (!trimmedAccount || !password) {
       setError('Vui lòng nhập tài khoản và mật khẩu.');
       return;
     }
     setError('');
-    setIsSubmitting(true);
     try {
-      await login({ account: trimmedAccount, password });
+      await loginMutation.mutateAsync({ account: trimmedAccount, password });
       setPassword('');
       router.replace('/home');
     } catch (err) {
@@ -314,8 +308,6 @@ export function LoginScreen() {
       } else {
         setError('Không thể hoàn tất đăng nhập. Vui lòng thử lại.');
       }
-    } finally {
-      setIsSubmitting(false);
     }
   };
 
@@ -339,20 +331,20 @@ export function LoginScreen() {
             <View style={styles.labelRow}><Text style={styles.loginFieldLabel}>Tài khoản</Text><Text style={styles.loginMeta}>Email hoặc SĐT</Text></View>
             <View style={styles.loginInput}>
               <LoginUser width={17} height={17} />
-              <TextInput value={account} onChangeText={(value) => { setAccount(value); setError(''); }} placeholder="Nhập email hoặc số điện thoại" placeholderTextColor={C.mutedText} style={styles.loginInputText} autoCapitalize="none" autoCorrect={false} keyboardType="email-address" editable={!isSubmitting} />
+              <TextInput value={account} onChangeText={(value) => { setAccount(value); setError(''); }} placeholder="Nhập email hoặc số điện thoại" placeholderTextColor={C.mutedText} style={styles.loginInputText} autoCapitalize="none" autoCorrect={false} keyboardType="email-address" editable={!loginMutation.isPending} />
             </View>
           </View>
           <View style={styles.loginField}>
             <Text style={styles.loginFieldLabel}>Mật khẩu</Text>
             <View style={styles.loginInput}>
               <LoginLock width={15} height={18} />
-              <TextInput value={password} onChangeText={(value) => { setPassword(value); setError(''); }} placeholder="Nhập mật khẩu" placeholderTextColor={C.mutedText} style={styles.loginInputText} secureTextEntry={!showPassword} editable={!isSubmitting} />
+              <TextInput value={password} onChangeText={(value) => { setPassword(value); setError(''); }} placeholder="Nhập mật khẩu" placeholderTextColor={C.mutedText} style={styles.loginInputText} secureTextEntry={!showPassword} editable={!loginMutation.isPending} />
               <Pressable onPress={() => setShowPassword((value) => !value)} style={styles.loginEye}><LoginEye width={18} height={13} /></Pressable>
             </View>
           </View>
           <Pressable onPress={() => InlineUnavailable('Khôi phục mật khẩu chưa được kết nối dịch vụ xác thực.')} style={styles.forgotButton}><Text style={styles.forgotText}>Quên mật khẩu?</Text></Pressable>
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
-          <Pressable disabled={isSubmitting} onPress={submit} style={({ pressed }) => [styles.loginSubmit, pressed && styles.pressed, isSubmitting && styles.loginSubmitDisabled]}><Text style={styles.loginSubmitLabel}>{isSubmitting ? 'Đang đăng nhập…' : 'Đăng nhập'}</Text><View style={styles.loginSubmitIcon}><ProfileIcon width={15} height={15} /></View></Pressable>
+          <Pressable disabled={loginMutation.isPending} onPress={submit} style={({ pressed }) => [styles.loginSubmit, pressed && styles.pressed, loginMutation.isPending && styles.loginSubmitDisabled]}><Text style={styles.loginSubmitLabel}>{loginMutation.isPending ? 'Đang đăng nhập…' : 'Đăng nhập'}</Text><View style={styles.loginSubmitIcon}><ProfileIcon width={15} height={15} /></View></Pressable>
           <View style={styles.successHint}><InfoIcon width={14} height={14} /><Text style={styles.helperText}>Đăng nhập an toàn với hệ thống tài khoản GoPlant và đồng bộ dữ liệu.</Text></View>
 
           <View style={styles.orRow}><View style={styles.rule} /><Text style={styles.orText}>HOẶC TIẾP TỤC VỚI</Text><View style={styles.rule} /></View>

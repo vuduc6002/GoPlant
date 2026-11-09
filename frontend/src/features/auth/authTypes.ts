@@ -13,7 +13,6 @@ export interface AuthContextValue {
   status: AuthStatus;
   user: AuthUserSummary | null;
   profile: UserProfileDto | null;
-  isLoading: boolean;
   login: (request: LoginRequestDto) => Promise<LoginResponseDto>;
   register: (request: RegisterRequestDto) => Promise<RegisterResponseDto>;
   logout: () => Promise<void>;

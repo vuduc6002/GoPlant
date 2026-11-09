@@ -1,4 +1,4 @@
-import axios, { AxiosError } from 'axios';
+import { type AxiosError, type AxiosResponse, isAxiosError } from 'axios';
 import type { ApiResponse } from './apiTypes';
 
 export class AppApiError extends Error {
@@ -25,9 +25,9 @@ export class AppApiError extends Error {
     this.code = params.code || 'UNKNOWN_ERROR';
     this.field = params.field;
     this.isNetworkError = Boolean(params.isNetworkError);
-    this.isAuthError = params.statusCode === 401;
-    this.isValidationError = params.statusCode === 400;
-    this.isConflictError = params.statusCode === 409;
+    this.isAuthError = params.statusCode === 401 || params.code === 'UNAUTHORIZED';
+    this.isValidationError = params.statusCode === 400 || params.code === 'VALIDATION_ERROR';
+    this.isConflictError = params.statusCode === 409 || params.code === 'CONFLICT';
     this.timestamp = params.timestamp;
   }
 }
@@ -54,15 +54,62 @@ function getDefaultStatusMessage(statusCode: number): string {
   }
 }
 
+/**
+ * Normalizes an application-level failure envelope ({ success: false, error: ... })
+ * into an AppApiError without losing code, message, or field.
+ */
+export function normalizeBackendFailure(
+  envelope: ApiResponse<unknown>,
+  statusCode = 400
+): AppApiError {
+  const code = envelope.error?.code || `HTTP_${statusCode}`;
+  const message =
+    envelope.error?.message?.trim() ||
+    envelope.message?.trim() ||
+    getDefaultStatusMessage(statusCode);
+  const field = envelope.error?.field;
+  const timestamp = envelope.timestamp;
+
+  return new AppApiError({
+    message,
+    statusCode,
+    code,
+    field,
+    timestamp,
+  });
+}
+
+/**
+ * Normalizes any error (AxiosError, HTTP response, backend envelope, Network error, or generic Error)
+ * into a strongly-typed AppApiError.
+ */
 export function normalizeApiError(error: unknown): AppApiError {
   if (error instanceof AppApiError) {
     return error;
   }
 
-  if (axios.isAxiosError(error)) {
-    const axiosErr = error as AxiosError<ApiResponse>;
+  // 1. Direct Backend failure envelope object passed in
+  if (error && typeof error === 'object') {
+    const rawObj = error as Record<string, unknown>;
 
-    // Response received from server
+    // Case: { success: false, error: { code, message, field } }
+    if (rawObj.success === false && rawObj.error) {
+      return normalizeBackendFailure(rawObj as unknown as ApiResponse<unknown>);
+    }
+
+    // Case: Object containing response property (e.g. { response: { data, status } })
+    if (rawObj.response && typeof rawObj.response === 'object') {
+      const resp = rawObj.response as AxiosResponse<ApiResponse<unknown>>;
+      if (resp.data && typeof resp.data === 'object' && resp.data.success === false) {
+        return normalizeBackendFailure(resp.data, resp.status);
+      }
+    }
+  }
+
+  // 2. Standard AxiosError
+  if (isAxiosError(error)) {
+    const axiosErr = error as AxiosError<ApiResponse<unknown>>;
+
     if (axiosErr.response) {
       const status = axiosErr.response.status;
       const data = axiosErr.response.data;
@@ -70,8 +117,6 @@ export function normalizeApiError(error: unknown): AppApiError {
       const code = data?.error?.code || `HTTP_${status}`;
       const field = data?.error?.field;
       const timestamp = data?.timestamp;
-
-      // Extract message priority: data.error.message -> data.message -> default status text
       const message =
         data?.error?.message?.trim() ||
         data?.message?.trim() ||
@@ -86,8 +131,8 @@ export function normalizeApiError(error: unknown): AppApiError {
       });
     }
 
-    // Network timeout or no response
-    if (axiosErr.code === 'ECONNABORTED' || axiosErr.message.includes('timeout')) {
+    // Network timeout
+    if (axiosErr.code === 'ECONNABORTED' || (axiosErr.message && axiosErr.message.includes('timeout'))) {
       return new AppApiError({
         message: 'Kết nối đến máy chủ quá thời gian chờ. Vui lòng thử lại.',
         code: 'TIMEOUT_ERROR',
@@ -95,6 +140,7 @@ export function normalizeApiError(error: unknown): AppApiError {
       });
     }
 
+    // Network disconnection / server unreachable
     return new AppApiError({
       message: 'Không thể kết nối đến máy chủ. Vui lòng kiểm tra lại mạng hoặc địa chỉ máy chủ API.',
       code: 'NETWORK_ERROR',
@@ -102,6 +148,7 @@ export function normalizeApiError(error: unknown): AppApiError {
     });
   }
 
+  // 3. Standard JS Error
   if (error instanceof Error) {
     return new AppApiError({
       message: error.message || 'Đã có lỗi xảy ra. Vui lòng thử lại.',
@@ -109,6 +156,7 @@ export function normalizeApiError(error: unknown): AppApiError {
     });
   }
 
+  // 4. Unknown fallback
   return new AppApiError({
     message: 'Đã có lỗi không xác định xảy ra.',
     code: 'UNKNOWN_ERROR',

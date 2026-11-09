@@ -20,11 +20,12 @@ export interface ApiErrorDetail {
 
 /**
  * User summary returned upon successful login
+ * Note: email can be null when the user registers with a phone number.
  */
 export interface AuthUserSummary {
   id: string;
   fullName: string;
-  email: string;
+  email: string | null;
   roles: string[];
 }
 
@@ -70,11 +71,12 @@ export interface RegisterResponseDto {
 
 /**
  * Response data for GET /api/v1/users/me
+ * Note: email can be null when the user registers with a phone number.
  */
 export interface UserProfileDto {
   id: string;
   fullName: string;
-  email: string;
+  email: string | null;
   phoneNumber?: string | null;
   recoveryEmail?: string | null;
   preferredDevice?: PreferredDevice;

@@ -1,4 +1,12 @@
-import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useCallback,
+  useMemo,
+  useRef,
+} from 'react';
 import {
   saveSession,
   getSession,
@@ -29,21 +37,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>('initializing');
   const [user, setUser] = useState<AuthUserSummary | null>(null);
   const [profile, setProfile] = useState<UserProfileDto | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const isLoggingOutRef = useRef(false);
 
   const performLogout = useCallback(async () => {
-    try {
-      await clearSession();
-    } catch {
-      // Ignore storage clear failure
+    if (isLoggingOutRef.current) {
+      return;
     }
-    clearQueryCache();
-    setUser(null);
-    setProfile(null);
-    setStatus('unauthenticated');
+    isLoggingOutRef.current = true;
+
+    try {
+      try {
+        await clearSession();
+      } catch {
+        // Storage clearing failure must NOT block state transition to unauthenticated
+      }
+      await clearQueryCache();
+      setUser(null);
+      setProfile(null);
+      setStatus('unauthenticated');
+    } finally {
+      isLoggingOutRef.current = false;
+    }
   }, []);
 
-  // Listen for 401s from any API request across the app
+  // Listen for 401 Unauthorized signals from protected API calls
   useEffect(() => {
     const unregister = registerUnauthorizedHandler(() => {
       performLogout();
@@ -51,37 +68,47 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return unregister;
   }, [performLogout]);
 
-  // Load session from SecureStore on startup
+  // Load and verify session from SecureStore on app launch
   const loadSession = useCallback(async () => {
     try {
-      const session = await getSession();
+      let session: AuthSession | null = null;
+      try {
+        session = await getSession();
+      } catch {
+        // Storage I/O failure on startup: safely treat as unauthenticated
+        setStatus('unauthenticated');
+        return;
+      }
+
       if (!session || !session.accessToken || !session.user) {
         setStatus('unauthenticated');
         return;
       }
 
-      setUser(session.user);
-      setStatus('authenticated');
-
-      // Verify token validity by fetching user profile
+      // Session exists in SecureStore: verify token by fetching current user profile
       try {
         const userProfile = await getMeApi();
         setProfile(userProfile);
         queryClient.setQueryData(queryKeys.user.me, userProfile);
-        setUser((prev) => ({
+        setUser({
           id: userProfile.id,
           fullName: userProfile.fullName,
           email: userProfile.email,
           roles: userProfile.roles,
-        }));
+        });
+        setStatus('authenticated');
       } catch (err) {
         if (err instanceof AppApiError && err.statusCode === 401) {
+          // Token expired or invalid on backend: purge session
           await performLogout();
+        } else {
+          // Network error, timeout, or 5xx: retain stored session so user is not locked out offline
+          setUser(session.user);
+          setStatus('authenticated');
         }
-        // If network error, retain cached user so user is not locked out
       }
     } catch {
-      await performLogout();
+      setStatus('unauthenticated');
     }
   }, [performLogout]);
 
@@ -91,49 +118,50 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = useCallback(
     async (request: LoginRequestDto): Promise<LoginResponseDto> => {
-      setIsLoading(true);
-      try {
-        const loginData = await loginApi(request);
+      // Step 1: Purge any residual query cache from a previous session to prevent data leakage
+      await clearQueryCache();
 
-        const newSession: AuthSession = {
-          accessToken: loginData.accessToken,
-          tokenType: loginData.tokenType,
-          expiresIn: loginData.expiresIn,
-          user: loginData.user,
-          savedAt: Date.now(),
-        };
+      // Step 2: Call real backend login API
+      const loginData = await loginApi(request);
 
-        await saveSession(newSession);
+      // Step 3: Persist session to SecureStore (throws StorageError if storage fails)
+      const newSession: AuthSession = {
+        accessToken: loginData.accessToken,
+        tokenType: loginData.tokenType,
+        expiresIn: loginData.expiresIn,
+        user: loginData.user,
+        savedAt: Date.now(),
+      };
+      await saveSession(newSession);
 
-        setUser(loginData.user);
-        setStatus('authenticated');
+      // Step 4: Update Auth context state
+      setUser(loginData.user);
+      setStatus('authenticated');
 
-        // Refresh profile in background
-        getMeApi()
-          .then((p) => {
-            setProfile(p);
-            queryClient.setQueryData(queryKeys.user.me, p);
-          })
-          .catch(() => {
-            // Non-blocking
+      // Step 5: Prefetch / refresh user profile asynchronously
+      getMeApi()
+        .then((p) => {
+          setProfile(p);
+          queryClient.setQueryData(queryKeys.user.me, p);
+          setUser({
+            id: p.id,
+            fullName: p.fullName,
+            email: p.email,
+            roles: p.roles,
           });
+        })
+        .catch(() => {
+          // Non-blocking background fetch
+        });
 
-        return loginData;
-      } finally {
-        setIsLoading(false);
-      }
+      return loginData;
     },
     []
   );
 
   const register = useCallback(
     async (request: RegisterRequestDto): Promise<RegisterResponseDto> => {
-      setIsLoading(true);
-      try {
-        return await registerApi(request);
-      } finally {
-        setIsLoading(false);
-      }
+      return await registerApi(request);
     },
     []
   );
@@ -143,12 +171,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const userProfile = await getMeApi();
       setProfile(userProfile);
       queryClient.setQueryData(queryKeys.user.me, userProfile);
-      setUser((prev) => ({
+      setUser({
         id: userProfile.id,
         fullName: userProfile.fullName,
         email: userProfile.email,
         roles: userProfile.roles,
-      }));
+      });
       return userProfile;
     } catch (err) {
       if (err instanceof AppApiError && err.statusCode === 401) {
@@ -163,13 +191,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       status,
       user,
       profile,
-      isLoading,
       login,
       register,
       logout: performLogout,
       refreshProfile,
     }),
-    [status, user, profile, isLoading, login, register, performLogout, refreshProfile]
+    [status, user, profile, login, register, performLogout, refreshProfile]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

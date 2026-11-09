@@ -1,16 +1,17 @@
 import axios, { AxiosInstance, InternalAxiosRequestConfig } from 'axios';
 import { API_BASE_URL, API_TIMEOUT } from './apiConfig';
-import { normalizeApiError } from './apiError';
-import { clearSession, getAccessToken } from './tokenStorage';
+import { normalizeApiError, normalizeBackendFailure } from './apiError';
+import { getAccessToken } from './tokenStorage';
 
-let unauthorizedListener: (() => void) | null = null;
-let isHandlingUnauthorized = false;
+type UnauthorizedListener = () => void;
+let unauthorizedListener: UnauthorizedListener | null = null;
 
 /**
  * Register a listener to be notified when a protected endpoint returns HTTP 401.
+ * AuthProvider subscribes to this to handle session cleanup and navigation state transition.
  * Returns an unregister function.
  */
-export function registerUnauthorizedHandler(handler: () => void): () => void {
+export function registerUnauthorizedHandler(handler: UnauthorizedListener): () => void {
   unauthorizedListener = handler;
   return () => {
     if (unauthorizedListener === handler) {
@@ -37,19 +38,19 @@ apiClient.interceptors.request.use(
         config.headers.Authorization = `Bearer ${token}`;
       }
     } catch {
-      // If reading token fails, continue without token
+      // If reading token fails, proceed without token
     }
     return config;
   },
   (error) => Promise.reject(normalizeApiError(error))
 );
 
-// Response Interceptor: Normalize responses and errors
+// Response Interceptor: Normalize envelopes and errors
 apiClient.interceptors.response.use(
   (response) => {
-    // If backend envelope returned { success: false }, treat as error
+    // If backend envelope returned { success: false }, treat as application error
     if (response.data && typeof response.data === 'object' && response.data.success === false) {
-      return Promise.reject(normalizeApiError({ response }));
+      return Promise.reject(normalizeBackendFailure(response.data, response.status));
     }
     return response;
   },
@@ -59,20 +60,12 @@ apiClient.interceptors.response.use(
     // Handle 401 Unauthorized on protected routes
     if (normalizedError.statusCode === 401) {
       const requestUrl = error?.config?.url || '';
-      const isAuthEndpoint = requestUrl.includes('/auth/login') || requestUrl.includes('/auth/register');
+      const isAuthEndpoint =
+        requestUrl.includes('/auth/login') || requestUrl.includes('/auth/register');
 
-      if (!isAuthEndpoint && !isHandlingUnauthorized) {
-        isHandlingUnauthorized = true;
-        try {
-          await clearSession();
-          if (unauthorizedListener) {
-            unauthorizedListener();
-          }
-        } finally {
-          setTimeout(() => {
-            isHandlingUnauthorized = false;
-          }, 1000);
-        }
+      // Only notify AuthProvider if this is a protected API call
+      if (!isAuthEndpoint && unauthorizedListener) {
+        unauthorizedListener();
       }
     }
 

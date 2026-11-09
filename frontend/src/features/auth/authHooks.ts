@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { queryKeys } from '@/services/query/queryKeys';
-import { getMeApi, loginApi, registerApi } from './authService';
+import { getMeApi } from './authService';
 import { useAuth } from './AuthProvider';
 import type {
   LoginRequestDto,
@@ -9,16 +9,18 @@ import type {
   RegisterResponseDto,
   UserProfileDto,
 } from '@/services/api/apiTypes';
+import { AppApiError } from '@/services/api/apiError';
 
-export { useAuth };
+
 
 /**
- * React Query hook to fetch and cache user profile
+ * React Query hook to fetch and cache user profile.
+ * Only active when the user is authenticated.
  */
 export function useUserProfile() {
   const { status } = useAuth();
 
-  return useQuery<UserProfileDto>({
+  return useQuery<UserProfileDto, AppApiError>({
     queryKey: queryKeys.user.me,
     queryFn: getMeApi,
     enabled: status === 'authenticated',
@@ -26,23 +28,23 @@ export function useUserProfile() {
 }
 
 /**
- * Mutation hook for login
+ * Mutation hook for login backed by TanStack React Query.
  */
 export function useLoginMutation() {
   const { login } = useAuth();
 
-  return useMutation<LoginResponseDto, Error, LoginRequestDto>({
+  return useMutation<LoginResponseDto, AppApiError, LoginRequestDto>({
     mutationFn: (data: LoginRequestDto) => login(data),
   });
 }
 
 /**
- * Mutation hook for register
+ * Mutation hook for register backed by TanStack React Query.
  */
 export function useRegisterMutation() {
   const { register } = useAuth();
 
-  return useMutation<RegisterResponseDto, Error, RegisterRequestDto>({
+  return useMutation<RegisterResponseDto, AppApiError, RegisterRequestDto>({
     mutationFn: (data: RegisterRequestDto) => register(data),
   });
 }

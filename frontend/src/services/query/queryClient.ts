@@ -1,19 +1,35 @@
 import { QueryClient } from '@tanstack/react-query';
 import { AppApiError } from '../api/apiError';
 
-function shouldRetry(failureCount: number, error: unknown): boolean {
+/**
+ * Strict retry policy for TanStack React Query:
+ * Only retries on:
+ * - Network errors (offline / connection refused)
+ * - Timeout errors
+ * - HTTP 5xx server errors
+ * Never retries:
+ * - HTTP 4xx (400, 401, 403, 404, 409, etc.)
+ * - Parse or application logic errors
+ * - Unknown errors
+ */
+export function shouldRetry(failureCount: number, error: unknown): boolean {
   if (failureCount >= 2) {
     return false;
   }
 
   if (error instanceof AppApiError) {
-    const status = error.statusCode;
-    if (status && [400, 401, 403, 404, 409].includes(status)) {
-      return false;
+    if (error.isNetworkError || error.code === 'TIMEOUT_ERROR') {
+      return true;
     }
+    const status = error.statusCode;
+    if (typeof status === 'number' && status >= 500 && status < 600) {
+      return true;
+    }
+    // Any 4xx or other application errors must not be retried
+    return false;
   }
 
-  return true;
+  return false;
 }
 
 export const queryClient = new QueryClient({
@@ -32,8 +48,10 @@ export const queryClient = new QueryClient({
 });
 
 /**
- * Clears all cached user queries upon logout to prevent data leakage between sessions.
+ * Cancels all active in-flight queries and completely purges the cache.
+ * Called upon logout or user session switch to guarantee no data leaks.
  */
-export function clearQueryCache(): void {
+export async function clearQueryCache(): Promise<void> {
+  await queryClient.cancelQueries();
   queryClient.clear();
 }
