@@ -536,7 +536,7 @@ Danh sách lịch chăm sóc của 1 cây.
         "taskType": "WATERING",
         "taskLabel": null,
         "frequency": "DAILY",
-        "intervalDays": 1,
+        "intervalDays": null,
         "reminderTime": "08:00:00",
         "nextScheduledAt": "2026-11-10T08:00:00Z",
         "status": "ACTIVE"
@@ -575,50 +575,56 @@ Nhật ký phát triển của 1 cây, phân trang.
 
 1. **Một lần (`ONCE`):**
    - Chỉ chạy 1 lần vào `startDate` lúc `reminderTime`.
-   - `intervalDays` bắt buộc phải là `NULL`.
+   - `intervalDays` bắt buộc phải là `NULL` (ràng buộc toàn vẹn CSDL qua CHECK constraint `chk_care_schedules_interval`).
    - Khi gọi `/complete` hoặc `/skip`, trạng thái lịch chuyển thành `COMPLETED` (kết thúc vòng đời).
 2. **Lặp hàng ngày (`DAILY`):**
-   - `intervalDays` tự động là 1 (hoặc `NULL`, ngầm định 1).
-   - Khi hoàn thành/bỏ qua, `next_scheduled_at` = ngày thực hiện (hoặc ngày dự kiến) + 1 ngày vào lúc `reminderTime`.
+   - `intervalDays` bắt buộc phải là `NULL` (chu kỳ lặp 1 ngày được tính toán nội bộ trong logic ứng dụng; CSDL không lưu giá trị số cho frequency này).
+   - Khi hoàn thành/bỏ qua, `next_scheduled_at` cộng thêm 1 ngày vào lúc `reminderTime`.
 3. **Lặp cách ngày (`EVERY_OTHER_DAY`):**
-   - `intervalDays` tự động là 2.
-   - Khi hoàn thành/bỏ qua, `next_scheduled_at` cộng 2 ngày vào lúc `reminderTime`.
+   - `intervalDays` bắt buộc phải là `NULL` (chu kỳ lặp 2 ngày được tính toán nội bộ trong logic ứng dụng; CSDL không lưu giá trị số cho frequency này).
+   - Khi hoàn thành/bỏ qua, `next_scheduled_at` cộng thêm 2 ngày vào lúc `reminderTime`.
 4. **Lặp hàng tuần (`WEEKLY`):**
-   - `intervalDays` tự động là 7.
-   - Khi hoàn thành/bỏ qua, `next_scheduled_at` cộng 7 ngày vào lúc `reminderTime`.
+   - `intervalDays` bắt buộc phải là `NULL` (chu kỳ lặp 7 ngày được tính toán nội bộ trong logic ứng dụng; CSDL không lưu giá trị số cho frequency này).
+   - Khi hoàn thành/bỏ qua, `next_scheduled_at` cộng thêm 7 ngày vào lúc `reminderTime`.
 5. **Lặp tùy chỉnh (`CUSTOM`):**
-   - `intervalDays` bắt buộc phải được cung cấp và `>= 1`.
-   - Khi hoàn thành/bỏ qua, `next_scheduled_at` cộng `intervalDays` ngày vào lúc `reminderTime`.
+   - `intervalDays` bắt buộc phải được cung cấp và `> 0` (`intervalDays >= 1`).
+   - Khi hoàn thành/bỏ qua, `next_scheduled_at` cộng thêm `intervalDays` ngày vào lúc `reminderTime`.
 6. **Xác thực dữ liệu tạo lịch:**
-   - `taskType` bắt buộc thuộc: `WATERING`, `FERTILIZING`, `PRUNING`, `PEST_CONTROL`, `REPOTTING`, `CLEANING`, `MISTING`, `HARVESTING`, `OTHER`.
-   - Nếu `taskType` = `OTHER` thì `taskLabel` không được để trống (bắt buộc mô tả công việc khác). Nếu `taskType` != `OTHER` thì `taskLabel` có thể null (tùy chọn ghi thêm chi tiết).
-   - `startDate` không được là ngày trong quá khứ so với thời điểm tạo (cho phép ngày hôm nay).
-   - `endDate` nếu có phải sau `startDate`.
+   - `taskType` bắt buộc thuộc 6 giá trị đã được định nghĩa trong Entity `TaskType` và CHECK constraint CSDL: `WATERING`, `FERTILIZING`, `PRUNING`, `PEST_CHECK`, `MISTING`, `JOURNAL`.
+   - `taskLabel`: Nhãn mô tả chi tiết công việc chăm sóc (tùy chọn, tối đa 200 ký tự, có thể null).
+   - `startDate`: Ngày bắt đầu thực hiện lịch, không được là ngày trong quá khứ so với thời điểm tạo (cho phép ngày hôm nay, mặc định ngày hiện tại).
+   - `endDate`: Ngày kết thúc lịch (tùy chọn). Nếu không cung cấp hoặc `NULL`, lịch không có ngày kết thúc cho đến khi người dùng chủ động tạm dừng (`PAUSED`), hủy (`CANCELLED`) hoặc hoàn thành theo nghiệp vụ. Nếu cung cấp, `endDate` phải sau hoặc bằng `startDate`.
+   - Quy tắc tính `endDate`: `endDate` được tính bao gồm cả ngày cuối cùng. Hệ thống không tạo mốc thực hiện tiếp theo vượt quá ngày này; nếu `next_scheduled_at` tính toán mới vượt quá `endDate`, trạng thái lịch sẽ tự động chuyển thành `COMPLETED`.
+   - `reminderTime`: Giờ nhắc nhở trong ngày (định dạng `HH:mm:ss`). Nếu không cung cấp hoặc `NULL`, hệ thống mặc định là `08:00:00` theo múi giờ `Asia/Ho_Chi_Minh`.
 7. **Trạng thái lịch (`care_schedules.status`):**
    - Chỉ có 4 giá trị hợp lệ: `ACTIVE`, `PAUSED`, `COMPLETED`, `CANCELLED`.
    - Lịch khi tạo mặc định là `ACTIVE`.
    - Khi người dùng tạm ngưng: `PAUSED`.
-   - Khi tiếp tục: `ACTIVE`.
+   - Khi người dùng tiếp tục: `ACTIVE`.
    - Khi người dùng chủ động hủy: `CANCELLED`.
-   - Khi lịch `ONCE` hoàn thành/bỏ qua hoặc lịch có `endDate` đã qua: `COMPLETED`.
-   - Lịch **KHÔNG BAO GIỜ** nhận trạng thái `SKIPPED` (`SKIPPED` chỉ là trạng thái của bản ghi trong `care_logs`).
-8. **Hoạt động `/complete`:**
-   - Tạo một bản ghi trong `care_logs` với `status = 'COMPLETED'`, `performed_at = NOW()`, `scheduled_at = lịch.next_scheduled_at`.
-   - Cập nhật `care_schedules.last_performed_at = NOW()`.
-   - Tính toán `care_schedules.next_scheduled_at` tiếp theo theo tần suất.
+   - Khi lịch `ONCE` hoàn thành/bỏ qua hoặc lịch có `endDate` đã qua mốc chu kỳ cuối cùng: `COMPLETED`.
+   - Lịch **KHÔNG BAO GIỜ** nhận trạng thái `SKIPPED` (`SKIPPED` chỉ là trạng thái của bản ghi trong bảng `care_logs`).
+8. **Quy tắc hiển thị Lịch hôm nay (`GET /api/v1/schedules/today`):**
+   - Lịch cần thực hiện: Chỉ các lịch có trạng thái `ACTIVE` mà đến hạn thực hiện trong ngày hôm nay hoặc đã quá hạn (`next_scheduled_at` <= cuối ngày hôm nay theo giờ hệ thống).
+   - Cờ `isOverdue`: Được gán `true` khi `next_scheduled_at` nhỏ hơn thời điểm hiện tại (`NOW()`).
+   - Lịch có trạng thái `PAUSED`, `CANCELLED`, hoặc `COMPLETED` tuyệt đối không xuất hiện trong danh sách lịch cần thực hiện hôm nay.
+9. **Hoạt động `/complete`:**
+   - Tạo một bản ghi trong `care_logs` với `status = 'COMPLETED'`, `performed_at = NOW()`, `schedule_id = schedule.id`, `task_type = schedule.task_type`.
+   - Khi complete một lịch quá hạn: Chỉ tạo một bản ghi `CareLog` duy nhất cho lần xử lý hiện tại. Tính toán `next_scheduled_at` tiếp theo theo chu kỳ và đưa lịch trở lại mốc thời gian hợp lệ tiếp theo trong tương lai (không tạo dồn dập nhiều CareLog cho các mốc đã lỡ).
+   - Cập nhật `care_schedules.updated_at = NOW()`.
    - Nếu có `endDate` và `next_scheduled_at` mới vượt quá `endDate`, chuyển trạng thái lịch thành `COMPLETED`.
-9. **Hoạt động `/skip`:**
-   - Tạo một bản ghi trong `care_logs` với `status = 'SKIPPED'`, `performed_at = NOW()`, `scheduled_at = lịch.next_scheduled_at`.
-   - Tính toán `care_schedules.next_scheduled_at` tiếp theo như khi complete.
-   - Không cập nhật `last_performed_at` (do thực tế chưa thực hiện hành động chăm sóc).
-   - Trạng thái lịch vẫn là `ACTIVE` (với lịch lặp) hoặc `COMPLETED` (với lịch `ONCE`).
-10. **Tương thích múi giờ (Timezone):**
-    - `reminderTime` lưu định dạng LocalTime (`HH:mm:ss`).
-    - `startDate`, `endDate` lưu định dạng LocalDate (`YYYY-MM-DD`).
-    - `next_scheduled_at`, `last_performed_at` lưu định dạng TIMESTAMPTZ (UTC).
-    - Thời điểm tính `next_scheduled_at` kết hợp ngày và `reminderTime` theo timezone của user/hệ thống (mặc định `Asia/Ho_Chi_Minh`: UTC+7).
-11. **Quan hệ với User Plant:**
-    - Khi một cây bị xóa (`DELETE /api/v1/plants/{plantId}`), toàn bộ `care_schedules` và `care_logs` của cây đó bị xóa theo (`ON DELETE CASCADE` đã được cấu hình chặt chẽ trong CSDL).
+10. **Hoạt động `/skip`:**
+    - Tạo một bản ghi trong `care_logs` với `status = 'SKIPPED'`, `performed_at = NOW()`, `schedule_id = schedule.id`, `task_type = schedule.task_type`.
+    - Khi skip một lịch quá hạn: Chỉ tạo một bản ghi `CareLog` duy nhất cho lần xử lý hiện tại và tính toán `next_scheduled_at` tiếp theo theo chu kỳ.
+    - Cập nhật `care_schedules.updated_at = NOW()`.
+    - Trạng thái lịch vẫn duy trì là `ACTIVE` (với lịch lặp) hoặc `COMPLETED` (với lịch `ONCE` hoặc khi vượt quá `endDate`).
+11. **Tương thích múi giờ và kiểu dữ liệu (Timezone & Data Types):**
+    - `reminderTime`: Định dạng `LocalTime` (`HH:mm:ss`), mặc định `08:00:00`.
+    - `startDate`, `endDate`: Định dạng `LocalDate` (`YYYY-MM-DD`).
+    - `next_scheduled_at`: Định dạng `OffsetDateTime` / `TIMESTAMPTZ` (lưu trữ theo chuẩn UTC).
+    - Toàn bộ việc tính toán thời gian, ngày đến hạn và thời điểm nhắc nhở của hệ thống phải được thực hiện nhất quán theo múi giờ `Asia/Ho_Chi_Minh` (UTC+7) cho giai đoạn MVP.
+12. **Quan hệ với Cây trồng (User Plant):**
+    - Khi một cây bị xóa (`DELETE /api/v1/plants/{plantId}`), toàn bộ `care_schedules` và `care_logs` của cây đó sẽ tự động bị xóa theo (`ON DELETE CASCADE` đã được thiết lập chặt chẽ trong lược đồ CSDL).
 
 ---
 
@@ -655,6 +661,7 @@ Danh sách lịch cần thực hiện hôm nay của tất cả cây (của ngư
   "data": [
     {
       "scheduleId": "uuid",
+      "plantId": "uuid",
       "plantName": "Cà Chua Cherry",
       "gardenName": "Ban Công Tầng 3",
       "taskType": "WATERING",
@@ -730,7 +737,7 @@ Bỏ qua lượt thực hiện này.
 Rỗng hoặc kèm ghi chú lý do:
 ```json
 {
-  "notes": "Hôm nay không ở nhà."
+  "note": "Hôm nay không ở nhà."
 }
 ```
 
@@ -869,13 +876,14 @@ Danh sách tài khoản người dùng, có phân trang.
     "content": [
       {
         "id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
-        "email": "user@example.com",
         "fullName": "Nguyễn Văn A",
-        "role": "ROLE_USER",
+        "email": "user@example.com",
+        "phoneNumber": "0901234567",
         "status": "ACTIVE",
-        "createdAt": "2026-10-01T00:00:00Z",
-        "plantCount": 5,
-        "gardenCount": 2
+        "roles": [
+          "ROLE_USER"
+        ],
+        "createdAt": "2026-10-01T00:00:00Z"
       }
     ],
     "page": 0,

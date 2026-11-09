@@ -789,6 +789,7 @@ paths:
       tags:
         - Schedules
       summary: Danh sách lịch chăm sóc cần thực hiện trong ngày hôm nay
+      description: "Danh sách các lịch chăm sóc ACTIVE cần thực hiện trong ngày hôm nay hoặc đã quá hạn (isOverdue = true khi nextScheduledAt < hiện tại). Lịch PAUSED/CANCELLED không xuất hiện."
       operationId: getTodaySchedules
       security:
         - BearerAuth: []
@@ -2095,9 +2096,12 @@ components:
         intervalDays:
           type: integer
           nullable: true
+          description: "Số ngày giữa các lần lặp. Bắt buộc và > 0 khi frequency là CUSTOM; bắt buộc null với các frequency khác (ONCE, DAILY, EVERY_OTHER_DAY, WEEKLY)"
         reminderTime:
           type: string
           example: '08:00:00'
+          default: '08:00:00'
+          description: "Thời gian nhắc nhở trong ngày (định dạng HH:mm:ss, mặc định 08:00:00 theo múi giờ Asia/Ho_Chi_Minh)"
         startDate:
           type: string
           format: date
@@ -2106,6 +2110,7 @@ components:
           type: string
           format: date
           nullable: true
+          description: "Ngày kết thúc lịch (tính bao gồm cả ngày này). Nếu null thì lịch không có ngày kết thúc"
 
     UpdateScheduleRequest:
       type: object
@@ -2120,6 +2125,8 @@ components:
           enum: [ONCE, DAILY, EVERY_OTHER_DAY, WEEKLY, CUSTOM]
         intervalDays:
           type: integer
+          nullable: true
+          description: "Số ngày giữa các lần lặp. Bắt buộc và > 0 khi frequency là CUSTOM; bắt buộc null với các frequency khác"
         reminderTime:
           type: string
         startDate:
