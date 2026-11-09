@@ -62,6 +62,21 @@
 | `CONFLICT` | 409 | Xung đột dữ liệu (email đã tồn tại, v.v.) |
 | `INTERNAL_ERROR` | 500 | Lỗi server nội bộ |
 
+### 1.5. Mô hình phân quyền và bảo vệ quyền sở hữu (Security & Ownership Model)
+
+- **Các mức quyền truy cập chuẩn:**
+  1. `Public`: Công khai, không cần xác thực JWT.
+  2. `Authenticated`: Người dùng hợp lệ đã đăng nhập với JWT bearer token (`ROLE_USER` hoặc `ROLE_ADMIN`).
+  3. `Authenticated (owner)`: Người dùng đã đăng nhập và là chủ sở hữu hợp pháp của tài nguyên (`garden`, `plant`, `schedule`, `care_log`, `journal`, `camera`).
+  4. `ROLE_ADMIN`: Chỉ dành cho tài khoản quản trị viên hệ thống.
+
+- **Quy tắc bắt buộc về bảo vệ tài nguyên:**
+  Khi một người dùng hợp lệ cố gắng truy cập, chỉnh sửa hoặc xóa tài nguyên thuộc về người dùng khác:
+  - **HTTP Status:** `403 Forbidden`
+  - **Error Code:** `FORBIDDEN`
+  - **Message:** `"Bạn không có quyền truy cập tài nguyên này."` (hoặc thông báo tương đương)
+  - **TUYỆT ĐỐI KHÔNG** trả về `404 Not Found` trong trường hợp này. Quy tắc này đã được xác thực nghiêm ngặt trong `GardenSecurityIntegrationTest` và toàn bộ các Service bảo mật của hệ thống.
+
 ---
 
 ## 2. Nhóm Auth — `/api/v1/auth`
@@ -383,9 +398,38 @@ Xóa vườn. Cascade xóa tất cả cây trong vườn và dữ liệu liên q
 
 Danh sách tất cả cây của người dùng, có phân trang.
 
-**Query Parameters:** `keyword`, `gardenId`, `healthStatus`, `page`, `size`, `sort`
+**Query Parameters:**
+- `keyword` (string, tùy chọn): Tìm kiếm theo tên hiển thị cây (`displayName`) hoặc tên loài cây (`commonName`).
+- `gardenId` (UUID, tùy chọn): Lọc theo khu vườn.
+- `healthStatus` (string, tùy chọn): Lọc theo tình trạng sức khỏe (`HEALTHY`, `NEEDS_ATTENTION`, `CRITICAL`, `UNKNOWN`).
+- `page` (integer, tùy chọn, mặc định `0`): Chỉ số trang bắt đầu từ 0.
+- `size` (integer, tùy chọn, mặc định `20`): Số lượng bản ghi mỗi trang.
+- `sort` (string, tùy chọn, mặc định `createdAt,desc`): Sắp xếp theo định dạng `property,asc|desc`. Hỗ trợ: `displayName`, `createdAt`, `plantedAt`, `healthStatus`.
 
-**Response 200:** Danh sách phân trang với các trường tóm tắt.
+**Response 200:**
+```json
+{
+  "success": true,
+  "data": {
+    "content": [
+      {
+        "id": "c1f7a3e2-8b4d-4e9a-9c12-3f4a5b6c7d8e",
+        "displayName": "Cà Chua Cherry của tôi",
+        "speciesName": "Cà Chua Cherry",
+        "gardenName": "Ban Công Tầng 3",
+        "healthStatus": "HEALTHY",
+        "imageUrl": null,
+        "createdAt": "2026-10-01T08:00:00Z"
+      }
+    ],
+    "page": 0,
+    "size": 20,
+    "totalElements": 1,
+    "totalPages": 1,
+    "last": true
+  }
+}
+```
 
 ---
 
@@ -476,9 +520,36 @@ Xóa cây và tất cả lịch, nhật ký liên quan.
 
 Danh sách lịch chăm sóc của 1 cây.
 
-**Query Parameters:** `status` (`ACTIVE`/`PAUSED`/`COMPLETED`/`CANCELLED`), `page`, `size`
+**Query Parameters:**
+- `status` (string, tùy chọn): Lọc theo trạng thái vòng đời lịch (`ACTIVE`, `PAUSED`, `COMPLETED`, `CANCELLED`).
+- `page` (integer, tùy chọn, mặc định `0`): Chỉ số trang bắt đầu từ 0.
+- `size` (integer, tùy chọn, mặc định `20`): Số lượng bản ghi mỗi trang.
 
-**Response 200:** Danh sách phân trang.
+**Response 200:**
+```json
+{
+  "success": true,
+  "data": {
+    "content": [
+      {
+        "id": "e2a1b3c4-5d6e-7f8a-9b0c-1d2e3f4a5b6c",
+        "taskType": "WATERING",
+        "taskLabel": null,
+        "frequency": "DAILY",
+        "intervalDays": 1,
+        "reminderTime": "08:00:00",
+        "nextScheduledAt": "2026-11-10T08:00:00Z",
+        "status": "ACTIVE"
+      }
+    ],
+    "page": 0,
+    "size": 20,
+    "totalElements": 1,
+    "totalPages": 1,
+    "last": true
+  }
+}
+```
 
 ---
 
@@ -499,6 +570,57 @@ Nhật ký phát triển của 1 cây, phân trang.
 ---
 
 ## 7. Nhóm Schedules — `/api/v1/schedules`
+
+### 7.0. Quy tắc nghiệp vụ quản lý Lịch chăm sóc (Care Schedules Business Rules)
+
+1. **Một lần (`ONCE`):**
+   - Chỉ chạy 1 lần vào `startDate` lúc `reminderTime`.
+   - `intervalDays` bắt buộc phải là `NULL`.
+   - Khi gọi `/complete` hoặc `/skip`, trạng thái lịch chuyển thành `COMPLETED` (kết thúc vòng đời).
+2. **Lặp hàng ngày (`DAILY`):**
+   - `intervalDays` tự động là 1 (hoặc `NULL`, ngầm định 1).
+   - Khi hoàn thành/bỏ qua, `next_scheduled_at` = ngày thực hiện (hoặc ngày dự kiến) + 1 ngày vào lúc `reminderTime`.
+3. **Lặp cách ngày (`EVERY_OTHER_DAY`):**
+   - `intervalDays` tự động là 2.
+   - Khi hoàn thành/bỏ qua, `next_scheduled_at` cộng 2 ngày vào lúc `reminderTime`.
+4. **Lặp hàng tuần (`WEEKLY`):**
+   - `intervalDays` tự động là 7.
+   - Khi hoàn thành/bỏ qua, `next_scheduled_at` cộng 7 ngày vào lúc `reminderTime`.
+5. **Lặp tùy chỉnh (`CUSTOM`):**
+   - `intervalDays` bắt buộc phải được cung cấp và `>= 1`.
+   - Khi hoàn thành/bỏ qua, `next_scheduled_at` cộng `intervalDays` ngày vào lúc `reminderTime`.
+6. **Xác thực dữ liệu tạo lịch:**
+   - `taskType` bắt buộc thuộc: `WATERING`, `FERTILIZING`, `PRUNING`, `PEST_CONTROL`, `REPOTTING`, `CLEANING`, `MISTING`, `HARVESTING`, `OTHER`.
+   - Nếu `taskType` = `OTHER` thì `taskLabel` không được để trống (bắt buộc mô tả công việc khác). Nếu `taskType` != `OTHER` thì `taskLabel` có thể null (tùy chọn ghi thêm chi tiết).
+   - `startDate` không được là ngày trong quá khứ so với thời điểm tạo (cho phép ngày hôm nay).
+   - `endDate` nếu có phải sau `startDate`.
+7. **Trạng thái lịch (`care_schedules.status`):**
+   - Chỉ có 4 giá trị hợp lệ: `ACTIVE`, `PAUSED`, `COMPLETED`, `CANCELLED`.
+   - Lịch khi tạo mặc định là `ACTIVE`.
+   - Khi người dùng tạm ngưng: `PAUSED`.
+   - Khi tiếp tục: `ACTIVE`.
+   - Khi người dùng chủ động hủy: `CANCELLED`.
+   - Khi lịch `ONCE` hoàn thành/bỏ qua hoặc lịch có `endDate` đã qua: `COMPLETED`.
+   - Lịch **KHÔNG BAO GIỜ** nhận trạng thái `SKIPPED` (`SKIPPED` chỉ là trạng thái của bản ghi trong `care_logs`).
+8. **Hoạt động `/complete`:**
+   - Tạo một bản ghi trong `care_logs` với `status = 'COMPLETED'`, `performed_at = NOW()`, `scheduled_at = lịch.next_scheduled_at`.
+   - Cập nhật `care_schedules.last_performed_at = NOW()`.
+   - Tính toán `care_schedules.next_scheduled_at` tiếp theo theo tần suất.
+   - Nếu có `endDate` và `next_scheduled_at` mới vượt quá `endDate`, chuyển trạng thái lịch thành `COMPLETED`.
+9. **Hoạt động `/skip`:**
+   - Tạo một bản ghi trong `care_logs` với `status = 'SKIPPED'`, `performed_at = NOW()`, `scheduled_at = lịch.next_scheduled_at`.
+   - Tính toán `care_schedules.next_scheduled_at` tiếp theo như khi complete.
+   - Không cập nhật `last_performed_at` (do thực tế chưa thực hiện hành động chăm sóc).
+   - Trạng thái lịch vẫn là `ACTIVE` (với lịch lặp) hoặc `COMPLETED` (với lịch `ONCE`).
+10. **Tương thích múi giờ (Timezone):**
+    - `reminderTime` lưu định dạng LocalTime (`HH:mm:ss`).
+    - `startDate`, `endDate` lưu định dạng LocalDate (`YYYY-MM-DD`).
+    - `next_scheduled_at`, `last_performed_at` lưu định dạng TIMESTAMPTZ (UTC).
+    - Thời điểm tính `next_scheduled_at` kết hợp ngày và `reminderTime` theo timezone của user/hệ thống (mặc định `Asia/Ho_Chi_Minh`: UTC+7).
+11. **Quan hệ với User Plant:**
+    - Khi một cây bị xóa (`DELETE /api/v1/plants/{plantId}`), toàn bộ `care_schedules` và `care_logs` của cây đó bị xóa theo (`ON DELETE CASCADE` đã được cấu hình chặt chẽ trong CSDL).
+
+---
 
 ### POST `/api/v1/schedules`
 
@@ -605,11 +727,24 @@ Bỏ qua lượt thực hiện này.
 - Với lịch một lần (`ONCE`): trạng thái lịch chuyển sang `COMPLETED` (kết thúc vòng đời).
 
 **Request Body (tùy chọn):**
+Rỗng hoặc kèm ghi chú lý do:
 ```json
-{ "note": "Hôm nay không ở nhà." }
+{
+  "notes": "Hôm nay không ở nhà."
+}
 ```
 
-**Response 201:** Tương tự `/complete`.
+**Response 201:**
+```json
+{
+  "success": true,
+  "data": {
+    "careLogId": "uuid-cua-care-log-vua-tao",
+    "scheduleStatus": "ACTIVE",
+    "nextScheduledAt": "2026-04-12T08:00:00Z"
+  }
+}
+```
 
 ---
 
@@ -717,27 +852,77 @@ Xóa giống cây. Sẽ lỗi `409 CONFLICT` nếu còn cây trồng đang sử 
 
 ### GET `/api/v1/admin/users`
 
-Danh sách tài khoản người dùng. Phân trang.
+Danh sách tài khoản người dùng, có phân trang.
 
-**Query Parameters:** `keyword`, `status`, `role`, `page`, `size`
+**Query Parameters:**
+- `keyword` (string, tùy chọn): Tìm kiếm theo email hoặc họ tên người dùng.
+- `status` (string, tùy chọn): Lọc theo trạng thái tài khoản (`ACTIVE`, `INACTIVE`, `BANNED`).
+- `role` (string, tùy chọn): Lọc theo vai trò (`ROLE_USER`, `ROLE_ADMIN`).
+- `page` (integer, tùy chọn, mặc định `0`): Chỉ số trang bắt đầu từ 0.
+- `size` (integer, tùy chọn, mặc định `20`): Số lượng bản ghi mỗi trang.
+
+**Response 200:**
+```json
+{
+  "success": true,
+  "data": {
+    "content": [
+      {
+        "id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
+        "email": "user@example.com",
+        "fullName": "Nguyễn Văn A",
+        "role": "ROLE_USER",
+        "status": "ACTIVE",
+        "createdAt": "2026-10-01T00:00:00Z",
+        "plantCount": 5,
+        "gardenCount": 2
+      }
+    ],
+    "page": 0,
+    "size": 20,
+    "totalElements": 1,
+    "totalPages": 1,
+    "last": true
+  }
+}
+```
+
+---
 
 ### GET `/api/v1/admin/users/{userId}`
 
 Hồ sơ đầy đủ của 1 người dùng.
 
+**Response 200:** Trả về chi tiết người dùng (`AdminUserDetail`).
+
+---
+
 ### PATCH `/api/v1/admin/users/{userId}/status`
 
-Kích hoạt hoặc khoá tài khoản.
+Kích hoạt hoặc khoá tài khoản người dùng.
+
+> **Lưu ý MVP:** Request body chỉ nhận `status` (`ACTIVE`, `INACTIVE`, `BANNED`). Không nhận trường `reason` (do bảng `users` trong CSDL không có cột lưu reason; nếu cần lưu reason sẽ thiết kế hệ thống audit log riêng trong tương lai).
 
 **Request Body:**
 ```json
-{ "status": "BANNED", "reason": "Vi phạm điều khoản." }
+{
+  "status": "BANNED"
+}
 ```
 
 **Response 200:**
 ```json
-{ "success": true, "data": { "userId": "uuid", "newStatus": "BANNED" } }
+{
+  "success": true,
+  "data": {
+    "userId": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
+    "newStatus": "BANNED",
+    "message": "Trạng thái người dùng đã được cập nhật thành công"
+  }
+}
 ```
+
+> **Ghi chú về phân quyền người dùng (Role Management):** Endpoint `PATCH /api/v1/admin/users/{userId}/role` được quy hoạch là tính năng mở rộng trong tương lai (Backlog), không nằm trong 44 endpoints chuẩn của Giai đoạn 5.
 
 ---
 
@@ -775,6 +960,12 @@ Kích hoạt hoặc khoá tài khoản.
 
 ### 13.2. Danh sách chi tiết 44 endpoints (Đối chiếu trạng thái Giai đoạn 4 và Giai đoạn 5)
 
+#### Bảng quy ước định dạng quyền truy cập:
+- **`Public`**: Endpoint công khai, không yêu cầu xác thực JWT.
+- **`Authenticated`**: Người dùng đã đăng nhập hợp lệ với JWT bearer token.
+- **`Authenticated (owner)`**: Người dùng đã đăng nhập VÀ là chủ sở hữu hợp pháp của tài nguyên. Vi phạm trả về `403 Forbidden` (`FORBIDDEN`), tuyệt đối không trả về 404.
+- **`ROLE_ADMIN`**: Yêu cầu tài khoản có quyền quản trị viên (`ROLE_ADMIN`).
+
 | # | Method | Endpoint | Quyền truy cập | Phân loại | Trạng thái triển khai |
 |---|---|---|---|---|---|
 | 1 | POST | `/api/v1/auth/register` | Public | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
@@ -784,32 +975,32 @@ Kích hoạt hoặc khoá tài khoản.
 | 5 | PUT | `/api/v1/users/me/password` | Authenticated | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
 | 6 | GET | `/api/v1/species` | Authenticated | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
 | 7 | GET | `/api/v1/species/{speciesId}` | Authenticated | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 8 | POST | `/api/v1/species/{speciesId}/favorite` | ROLE_USER | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 9 | DELETE | `/api/v1/species/{speciesId}/favorite` | ROLE_USER | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 10 | GET | `/api/v1/species/favorites` | ROLE_USER | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 11 | GET | `/api/v1/gardens` | ROLE_USER | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 12 | POST | `/api/v1/gardens` | ROLE_USER | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 13 | GET | `/api/v1/gardens/{gardenId}` | ROLE_USER (owner) | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 14 | PUT | `/api/v1/gardens/{gardenId}` | ROLE_USER (owner) | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 15 | DELETE | `/api/v1/gardens/{gardenId}` | ROLE_USER (owner) | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 16 | POST | `/api/v1/gardens/{gardenId}/plants` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 17 | GET | `/api/v1/plants` | ROLE_USER | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 18 | GET | `/api/v1/plants/{plantId}` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 19 | PUT | `/api/v1/plants/{plantId}` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 20 | DELETE | `/api/v1/plants/{plantId}` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 21 | GET | `/api/v1/plants/{plantId}/schedules` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 22 | GET | `/api/v1/plants/{plantId}/care-logs` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 23 | GET | `/api/v1/plants/{plantId}/journals` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 24 | POST | `/api/v1/schedules` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 25 | GET | `/api/v1/schedules/today` | ROLE_USER | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 26 | PUT | `/api/v1/schedules/{scheduleId}` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 27 | DELETE | `/api/v1/schedules/{scheduleId}` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 28 | POST | `/api/v1/schedules/{scheduleId}/complete` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 29 | POST | `/api/v1/schedules/{scheduleId}/skip` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 30 | POST | `/api/v1/care-logs` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 31 | POST | `/api/v1/journals` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 32 | PUT | `/api/v1/journals/{journalId}` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 33 | DELETE | `/api/v1/journals/{journalId}` | ROLE_USER (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 8 | POST | `/api/v1/species/{speciesId}/favorite` | Authenticated | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 9 | DELETE | `/api/v1/species/{speciesId}/favorite` | Authenticated | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 10 | GET | `/api/v1/species/favorites` | Authenticated | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 11 | GET | `/api/v1/gardens` | Authenticated | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 12 | POST | `/api/v1/gardens` | Authenticated | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 13 | GET | `/api/v1/gardens/{gardenId}` | Authenticated (owner) | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 14 | PUT | `/api/v1/gardens/{gardenId}` | Authenticated (owner) | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 15 | DELETE | `/api/v1/gardens/{gardenId}` | Authenticated (owner) | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
+| 16 | POST | `/api/v1/gardens/{gardenId}/plants` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 17 | GET | `/api/v1/plants` | Authenticated | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 18 | GET | `/api/v1/plants/{plantId}` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 19 | PUT | `/api/v1/plants/{plantId}` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 20 | DELETE | `/api/v1/plants/{plantId}` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 21 | GET | `/api/v1/plants/{plantId}/schedules` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 22 | GET | `/api/v1/plants/{plantId}/care-logs` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 23 | GET | `/api/v1/plants/{plantId}/journals` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 24 | POST | `/api/v1/schedules` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 25 | GET | `/api/v1/schedules/today` | Authenticated | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 26 | PUT | `/api/v1/schedules/{scheduleId}` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 27 | DELETE | `/api/v1/schedules/{scheduleId}` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 28 | POST | `/api/v1/schedules/{scheduleId}/complete` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 29 | POST | `/api/v1/schedules/{scheduleId}/skip` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 30 | POST | `/api/v1/care-logs` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 31 | POST | `/api/v1/journals` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 32 | PUT | `/api/v1/journals/{journalId}` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 33 | DELETE | `/api/v1/journals/{journalId}` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
 | 34 | GET | `/api/v1/admin/species` | ROLE_ADMIN | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
 | 35 | POST | `/api/v1/admin/species` | ROLE_ADMIN | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
 | 36 | PUT | `/api/v1/admin/species/{speciesId}` | ROLE_ADMIN | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
@@ -817,10 +1008,10 @@ Kích hoạt hoặc khoá tài khoản.
 | 38 | GET | `/api/v1/admin/users` | ROLE_ADMIN | MVP | ⏳ Kế hoạch Giai đoạn 5 |
 | 39 | GET | `/api/v1/admin/users/{userId}` | ROLE_ADMIN | MVP | ⏳ Kế hoạch Giai đoạn 5 |
 | 40 | PATCH | `/api/v1/admin/users/{userId}/status` | ROLE_ADMIN | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 41 | GET | `/api/v1/gardens/{gardenId}/cameras` | ROLE_USER (owner) | Backlog | 📋 Kế hoạch Backlog |
-| 42 | POST | `/api/v1/gardens/{gardenId}/cameras` | ROLE_USER (owner) | Backlog | 📋 Kế hoạch Backlog |
-| 43 | PUT | `/api/v1/cameras/{cameraId}` | ROLE_USER (owner) | Backlog | 📋 Kế hoạch Backlog |
-| 44 | DELETE | `/api/v1/cameras/{cameraId}` | ROLE_USER (owner) | Backlog | 📋 Kế hoạch Backlog |
+| 41 | GET | `/api/v1/gardens/{gardenId}/cameras` | Authenticated (owner) | Backlog | 📋 Kế hoạch Backlog |
+| 42 | POST | `/api/v1/gardens/{gardenId}/cameras` | Authenticated (owner) | Backlog | 📋 Kế hoạch Backlog |
+| 43 | PUT | `/api/v1/cameras/{cameraId}` | Authenticated (owner) | Backlog | 📋 Kế hoạch Backlog |
+| 44 | DELETE | `/api/v1/cameras/{cameraId}` | Authenticated (owner) | Backlog | 📋 Kế hoạch Backlog |
 
 > **Phạm vi mở rộng (ngoài 44 endpoints chuẩn):** Các tính năng Quên mật khẩu qua email (`POST /auth/forgot-password`), Cấp mới token (`POST /auth/refresh`), Đăng nhập Google/Zalo OAuth và Mã QR (`GET /plants/{id}/qr`) được xác định là Backlog mở rộng, không thuộc danh sách 44 endpoints của giai đoạn này.
 

@@ -171,7 +171,7 @@ paths:
             type: string
         - name: category
           in: query
-          description: Lọc theo danh mục cây trồng (VD: Cây cảnh, Rau củ)
+          description: "Lọc theo danh mục cây trồng (VD: Cây cảnh, Rau củ)"
           required: false
           schema:
             type: string
@@ -191,7 +191,7 @@ paths:
             default: 20
         - name: sort
           in: query
-          description: Sắp xếp theo cột (VD: common_name,asc)
+          description: "Sắp xếp theo cột (VD: common_name,asc)"
           required: false
           schema:
             type: string
@@ -522,6 +522,12 @@ paths:
           schema:
             type: integer
             default: 20
+        - name: sort
+          in: query
+          description: "Tiêu chí sắp xếp theo định dạng property,asc|desc (mặc định createdAt,desc)"
+          schema:
+            type: string
+            default: "createdAt,desc"
       responses:
         '200':
           description: Danh sách cây trồng phân trang
@@ -644,13 +650,25 @@ paths:
           schema:
             type: string
             enum: [ACTIVE, PAUSED, COMPLETED, CANCELLED]
+        - name: page
+          in: query
+          description: "Chỉ số trang (bắt đầu từ 0)"
+          schema:
+            type: integer
+            default: 0
+        - name: size
+          in: query
+          description: "Số lượng bản ghi mỗi trang"
+          schema:
+            type: integer
+            default: 20
       responses:
         '200':
-          description: Danh sách lịch chăm sóc
+          description: Danh sách lịch chăm sóc phân trang
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CareScheduleListWrapper'
+                $ref: '#/components/schemas/CareSchedulePageWrapper'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '403':
@@ -1186,6 +1204,12 @@ paths:
           schema:
             type: string
             enum: [ACTIVE, INACTIVE, BANNED]
+        - name: role
+          in: query
+          description: "Lọc theo vai trò (ROLE_USER, ROLE_ADMIN)"
+          schema:
+            type: string
+            enum: [ROLE_USER, ROLE_ADMIN]
         - name: page
           in: query
           schema:
@@ -1264,7 +1288,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SimpleMessageWrapper'
+                $ref: '#/components/schemas/AdminUserStatusResponseWrapper'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
@@ -2170,6 +2194,30 @@ components:
           items:
             $ref: '#/components/schemas/CareSchedule'
 
+    CareSchedulePageWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            content:
+              type: array
+              items:
+                $ref: '#/components/schemas/CareSchedule'
+            page:
+              type: integer
+            size:
+              type: integer
+            totalElements:
+              type: integer
+            totalPages:
+              type: integer
+            last:
+              type: boolean
+
     TodayScheduleItem:
       type: object
       properties:
@@ -2552,9 +2600,25 @@ components:
         status:
           type: string
           enum: [ACTIVE, INACTIVE, BANNED]
-        reason:
-          type: string
-          nullable: true
+
+    AdminUserStatusResponseWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            userId:
+              type: string
+              format: uuid
+            newStatus:
+              type: string
+              enum: [ACTIVE, INACTIVE, BANNED]
+            message:
+              type: string
+              example: "Trạng thái người dùng đã được cập nhật thành công"
 
     CreateCameraRequest:
       type: object
