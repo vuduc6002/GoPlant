@@ -566,31 +566,412 @@ class DatabaseSchemaIntegrationTest {
         }
     }
 
+    static final class Token {
+        enum Type {
+            STRING_LITERAL,
+            QUOTED_IDENTIFIER,
+            IDENTIFIER,
+            OPERATOR,
+            COMMA,
+            LPAREN,
+            RPAREN,
+            OTHER
+        }
+
+        final Type type;
+        final String text;
+
+        Token(Type type, String text) {
+            this.type = type;
+            this.text = text;
+        }
+
+        @Override
+        public String toString() {
+            return text;
+        }
+    }
+
+    private static final Set<String> KEYWORD_OPERATORS = Set.of(
+        "and", "or", "not", "is", "in", "like", "ilike", "where", "on", "as", "by", "from", "select", "case", "when", "then", "else"
+    );
+
+    static boolean isKeywordOperator(String text) {
+        return KEYWORD_OPERATORS.contains(text.toLowerCase());
+    }
+
+    static List<Token> tokenize(String sql) {
+        if (sql == null) {
+            return Collections.emptyList();
+        }
+        List<Token> tokens = new ArrayList<>();
+        int i = 0;
+        int n = sql.length();
+        while (i < n) {
+            char c = sql.charAt(i);
+
+            // 1. Whitespace outside literals
+            if (Character.isWhitespace(c)) {
+                i++;
+                continue;
+            }
+
+            // 2. String literal: '...' (supports '' escape)
+            if (c == '\'') {
+                int start = i;
+                i++;
+                while (i < n) {
+                    if (sql.charAt(i) == '\'') {
+                        if (i + 1 < n && sql.charAt(i + 1) == '\'') {
+                            i += 2; // skip escaped ''
+                        } else {
+                            i++; // consume closing quote
+                            break;
+                        }
+                    } else {
+                        i++;
+                    }
+                }
+                tokens.add(new Token(Token.Type.STRING_LITERAL, sql.substring(start, i)));
+                continue;
+            }
+
+            // 3. Quoted identifier: "..." (supports "" escape)
+            if (c == '"') {
+                int start = i;
+                i++;
+                while (i < n) {
+                    if (sql.charAt(i) == '"') {
+                        if (i + 1 < n && sql.charAt(i + 1) == '"') {
+                            i += 2; // skip escaped ""
+                        } else {
+                            i++; // consume closing quote
+                            break;
+                        }
+                    } else {
+                        i++;
+                    }
+                }
+                tokens.add(new Token(Token.Type.QUOTED_IDENTIFIER, sql.substring(start, i)));
+                continue;
+            }
+
+            // 4. PostgreSQL Typecast ::type outside literals/identifiers
+            if (c == ':' && i + 1 < n && sql.charAt(i + 1) == ':') {
+                int j = i + 2;
+                while (j < n && Character.isWhitespace(sql.charAt(j))) {
+                    j++;
+                }
+                String rest = sql.substring(j).toLowerCase();
+                if (rest.startsWith("character varying") || rest.startsWith("character  varying")) {
+                    int len = rest.startsWith("character  varying") ? "character  varying".length() : "character varying".length();
+                    int end = j + len;
+                    if (end >= n || (!Character.isLetterOrDigit(sql.charAt(end)) && sql.charAt(end) != '_')) {
+                        i = end;
+                        continue; // drop system cast
+                    }
+                } else if (rest.startsWith("varchar")) {
+                    int end = j + "varchar".length();
+                    if (end >= n || (!Character.isLetterOrDigit(sql.charAt(end)) && sql.charAt(end) != '_')) {
+                        i = end;
+                        continue; // drop system cast
+                    }
+                } else if (rest.startsWith("regconfig")) {
+                    int end = j + "regconfig".length();
+                    if (end >= n || (!Character.isLetterOrDigit(sql.charAt(end)) && sql.charAt(end) != '_')) {
+                        i = end;
+                        continue; // drop system cast
+                    }
+                } else if (rest.startsWith("text")) {
+                    int end = j + "text".length();
+                    if (end >= n || (!Character.isLetterOrDigit(sql.charAt(end)) && sql.charAt(end) != '_')) {
+                        i = end;
+                        continue; // drop system cast
+                    }
+                }
+                tokens.add(new Token(Token.Type.OPERATOR, "::"));
+                i += 2;
+                continue;
+            }
+
+            // 5. Parentheses and Comma
+            if (c == '(') {
+                tokens.add(new Token(Token.Type.LPAREN, "("));
+                i++;
+                continue;
+            }
+            if (c == ')') {
+                tokens.add(new Token(Token.Type.RPAREN, ")"));
+                i++;
+                continue;
+            }
+            if (c == ',') {
+                tokens.add(new Token(Token.Type.COMMA, ","));
+                i++;
+                continue;
+            }
+
+            // 6. Operators: ||, !=, <>, <=, >=, =, <, >
+            if (c == '|' && i + 1 < n && sql.charAt(i + 1) == '|') {
+                tokens.add(new Token(Token.Type.OPERATOR, "||"));
+                i += 2;
+                continue;
+            }
+            if ((c == '!' || c == '<') && i + 1 < n && sql.charAt(i + 1) == '=') {
+                tokens.add(new Token(Token.Type.OPERATOR, sql.substring(i, i + 2)));
+                i += 2;
+                continue;
+            }
+            if (c == '<' && i + 1 < n && sql.charAt(i + 1) == '>') {
+                tokens.add(new Token(Token.Type.OPERATOR, "<>"));
+                i += 2;
+                continue;
+            }
+            if (c == '>' && i + 1 < n && sql.charAt(i + 1) == '=') {
+                tokens.add(new Token(Token.Type.OPERATOR, ">="));
+                i += 2;
+                continue;
+            }
+            if (c == '=' || c == '<' || c == '>') {
+                tokens.add(new Token(Token.Type.OPERATOR, String.valueOf(c)));
+                i++;
+                continue;
+            }
+
+            // 7. Unquoted Identifier / Keyword / Number
+            if (Character.isLetterOrDigit(c) || c == '_') {
+                int start = i;
+                while (i < n && (Character.isLetterOrDigit(sql.charAt(i)) || sql.charAt(i) == '_')) {
+                    i++;
+                }
+                String word = sql.substring(start, i);
+                tokens.add(new Token(Token.Type.IDENTIFIER, word.toLowerCase()));
+                continue;
+            }
+
+            // 8. Other single symbol
+            tokens.add(new Token(Token.Type.OTHER, String.valueOf(c)));
+            i++;
+        }
+        return tokens;
+    }
+
+    static List<Token> stripOuterParentheses(List<Token> tokens) {
+        while (tokens.size() >= 2 && tokens.get(0).type == Token.Type.LPAREN && tokens.get(tokens.size() - 1).type == Token.Type.RPAREN) {
+            int depth = 0;
+            boolean wrapsAll = true;
+            for (int i = 0; i < tokens.size() - 1; i++) {
+                Token t = tokens.get(i);
+                if (t.type == Token.Type.LPAREN) depth++;
+                else if (t.type == Token.Type.RPAREN) depth--;
+                if (depth == 0) {
+                    wrapsAll = false;
+                    break;
+                }
+            }
+            if (wrapsAll) {
+                tokens = new ArrayList<>(tokens.subList(1, tokens.size() - 1));
+            } else {
+                break;
+            }
+        }
+        return tokens;
+    }
+
+    static List<Token> unwrapSingleIdentifierParentheses(List<Token> tokens) {
+        boolean modified;
+        do {
+            modified = false;
+            List<Token> result = new ArrayList<>();
+            int i = 0;
+            while (i < tokens.size()) {
+                if (tokens.get(i).type == Token.Type.LPAREN
+                    && i + 2 < tokens.size()
+                    && (tokens.get(i + 1).type == Token.Type.IDENTIFIER || tokens.get(i + 1).type == Token.Type.QUOTED_IDENTIFIER)
+                    && tokens.get(i + 2).type == Token.Type.RPAREN) {
+
+                    boolean isFunctionCall = false;
+                    if (!result.isEmpty()) {
+                        Token prev = result.get(result.size() - 1);
+                        if (prev.type == Token.Type.IDENTIFIER) {
+                            if (!isKeywordOperator(prev.text)) {
+                                isFunctionCall = true;
+                            }
+                        } else if (prev.type == Token.Type.QUOTED_IDENTIFIER) {
+                            isFunctionCall = true;
+                        }
+                    }
+
+                    if (!isFunctionCall) {
+                        result.add(tokens.get(i + 1));
+                        i += 3;
+                        modified = true;
+                        continue;
+                    }
+                }
+                result.add(tokens.get(i));
+                i++;
+            }
+            tokens = result;
+        } while (modified);
+        return tokens;
+    }
+
+    static int findMatchingParen(List<Token> tokens, int openIdx) {
+        int depth = 0;
+        for (int i = openIdx; i < tokens.size(); i++) {
+            if (tokens.get(i).type == Token.Type.LPAREN) depth++;
+            else if (tokens.get(i).type == Token.Type.RPAREN) {
+                depth--;
+                if (depth == 0) return i;
+            }
+        }
+        return tokens.size() - 1;
+    }
+
+    static class TermInfo {
+        final int startIdx;
+        final int endIdx;
+        final boolean isOperator;
+        final String opText;
+
+        TermInfo(int startIdx, int endIdx, boolean isOperator, String opText) {
+            this.startIdx = startIdx;
+            this.endIdx = endIdx;
+            this.isOperator = isOperator;
+            this.opText = opText;
+        }
+
+        boolean isOperator(String op) {
+            return isOperator && op.equals(opText);
+        }
+    }
+
+    static List<TermInfo> parseTermsAndOps(List<Token> tokens) {
+        List<TermInfo> list = new ArrayList<>();
+        int i = 0;
+        while (i < tokens.size()) {
+            Token t = tokens.get(i);
+            if (t.type == Token.Type.COMMA) {
+                list.add(new TermInfo(i, i + 1, false, ","));
+                i++;
+            } else if (t.type == Token.Type.OPERATOR && t.text.equals("||")) {
+                list.add(new TermInfo(i, i + 1, true, "||"));
+                i++;
+            } else if (t.type == Token.Type.LPAREN) {
+                int close = findMatchingParen(tokens, i);
+                list.add(new TermInfo(i, close + 1, false, null));
+                i = close + 1;
+            } else if (t.type == Token.Type.IDENTIFIER && i + 1 < tokens.size() && tokens.get(i + 1).type == Token.Type.LPAREN) {
+                int close = findMatchingParen(tokens, i + 1);
+                list.add(new TermInfo(i, close + 1, false, null));
+                i = close + 1;
+            } else {
+                list.add(new TermInfo(i, i + 1, false, null));
+                i++;
+            }
+        }
+        return list;
+    }
+
+    static List<Token> groupConcatChains(List<Token> tokens) {
+        if (tokens == null || tokens.isEmpty()) return tokens;
+
+        // 1. Recursively process all parenthesized sub-expressions
+        List<Token> processed = new ArrayList<>();
+        int i = 0;
+        while (i < tokens.size()) {
+            Token t = tokens.get(i);
+            if (t.type == Token.Type.LPAREN) {
+                int close = findMatchingParen(tokens, i);
+                List<Token> inside = tokens.subList(i + 1, close);
+                List<Token> groupedInside = groupConcatChains(inside);
+                processed.add(t);
+                processed.addAll(groupedInside);
+                processed.add(tokens.get(close));
+                i = close + 1;
+            } else {
+                processed.add(t);
+                i++;
+            }
+        }
+
+        // 2. Process at the current level
+        boolean changed;
+        do {
+            changed = false;
+            List<TermInfo> termsAndOps = parseTermsAndOps(processed);
+            for (int k = 0; k + 3 < termsAndOps.size(); k++) {
+                TermInfo t1 = termsAndOps.get(k);
+                TermInfo op1 = termsAndOps.get(k + 1);
+                TermInfo t2 = termsAndOps.get(k + 2);
+                TermInfo op2 = termsAndOps.get(k + 3);
+
+                if (!t1.isOperator && op1.isOperator("||") && !t2.isOperator && op2.isOperator("||")) {
+                    List<Token> next = new ArrayList<>();
+                    next.addAll(processed.subList(0, t1.startIdx));
+                    next.add(new Token(Token.Type.LPAREN, "("));
+                    next.addAll(processed.subList(t1.startIdx, t2.endIdx));
+                    next.add(new Token(Token.Type.RPAREN, ")"));
+                    next.addAll(processed.subList(t2.endIdx, processed.size()));
+                    processed = next;
+                    changed = true;
+                    break;
+                }
+            }
+        } while (changed);
+
+        return processed;
+    }
+
+    static String formatTokens(List<Token> tokens) {
+        if (tokens == null || tokens.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < tokens.size(); i++) {
+            Token t = tokens.get(i);
+            Token prev = (i > 0) ? tokens.get(i - 1) : null;
+
+            if (t.type == Token.Type.COMMA) {
+                sb.append(", ");
+            } else if (t.type == Token.Type.OPERATOR) {
+                if (sb.length() > 0 && sb.charAt(sb.length() - 1) != ' ' && sb.charAt(sb.length() - 1) != '(') {
+                    sb.append(' ');
+                }
+                sb.append(t.text);
+                sb.append(' ');
+            } else if (t.type == Token.Type.LPAREN) {
+                if (prev != null && prev.type == Token.Type.IDENTIFIER && !isKeywordOperator(prev.text)) {
+                    // Function call: no space before '(' (e.g. to_tsvector()
+                } else if (sb.length() > 0 && sb.charAt(sb.length() - 1) != ' ' && sb.charAt(sb.length() - 1) != '(') {
+                    sb.append(' ');
+                }
+                sb.append('(');
+            } else if (t.type == Token.Type.RPAREN) {
+                while (sb.length() > 0 && sb.charAt(sb.length() - 1) == ' ') {
+                    sb.deleteCharAt(sb.length() - 1);
+                }
+                sb.append(')');
+            } else {
+                // IDENTIFIER, QUOTED_IDENTIFIER, STRING_LITERAL, OTHER
+                if (sb.length() > 0 && sb.charAt(sb.length() - 1) != ' ' && sb.charAt(sb.length() - 1) != '(') {
+                    sb.append(' ');
+                }
+                sb.append(t.text);
+            }
+        }
+        return sb.toString().trim();
+    }
+
     static String normalizeSqlExpression(String sql) {
         if (sql == null) {
             return null;
         }
-
-        // 1. Remove known PostgreSQL system casts (non-semantic representation details)
-        String s = sql.replaceAll("::(?:character\\s+varying|varchar|regconfig|text)", "");
-
-        // 2. Simplify single-identifier parentheses introduced solely by PostgreSQL casting syntax: (col) -> col
-        String prev;
-        do {
-            prev = s;
-            s = s.replaceAll("\\(([a-zA-Z_][a-zA-Z0-9_]*)\\)", "$1");
-        } while (!s.equals(prev));
-
-        // 3. Normalize unparenthesized left-associative concatenation chains: a || b || c -> (a || b) || c
-        s = s.replaceAll("([a-zA-Z0-9_]+|'[^']*')\\s*\\|\\|\\s*('[^']*'|[a-zA-Z0-9_]+)\\s*\\|\\|\\s*([a-zA-Z0-9_]+|'[^']*')", "($1 || $2) || $3");
-
-        // 4. Strip outer enclosing redundant parentheses: ((expr)) -> expr
-        s = stripRedundantOuterParentheses(s.trim());
-
-        // 5. Normalize casing outside string literals and normalize whitespace
-        s = canonicalizeSqlTokens(s);
-
-        return s;
+        List<Token> tokens = tokenize(sql);
+        tokens = stripOuterParentheses(tokens);
+        tokens = unwrapSingleIdentifierParentheses(tokens);
+        tokens = stripOuterParentheses(tokens);
+        tokens = groupConcatChains(tokens);
+        return formatTokens(tokens);
     }
 
     static String normalizeSqlPredicate(String sql) {
@@ -598,86 +979,20 @@ class DatabaseSchemaIntegrationTest {
     }
 
     static String stripRedundantOuterParentheses(String s) {
-        if (s == null) return null;
-        s = s.trim();
-        while (s.startsWith("(") && s.endsWith(")")) {
-            int depth = 0;
-            boolean wrapsAll = true;
-            for (int i = 0; i < s.length() - 1; i++) {
-                char c = s.charAt(i);
-                if (c == '(') depth++;
-                else if (c == ')') depth--;
-                if (depth == 0) {
-                    wrapsAll = false;
-                    break;
-                }
-            }
-            if (wrapsAll) {
-                s = s.substring(1, s.length() - 1).trim();
-            } else {
-                break;
-            }
+        if (s == null) {
+            return null;
         }
-        return s;
+        List<Token> tokens = tokenize(s);
+        tokens = stripOuterParentheses(tokens);
+        return formatTokens(tokens);
     }
 
     static String canonicalizeSqlTokens(String s) {
-        if (s == null) return null;
-        StringBuilder sb = new StringBuilder();
-        boolean inQuote = false;
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (c == '\'') {
-                inQuote = !inQuote;
-                sb.append(c);
-            } else if (inQuote) {
-                sb.append(c);
-            } else {
-                sb.append(Character.toLowerCase(c));
-            }
+        if (s == null) {
+            return null;
         }
-
-        StringBuilder result = new StringBuilder();
-        inQuote = false;
-        for (int i = 0; i < sb.length(); i++) {
-            char c = sb.charAt(i);
-            if (c == '\'') {
-                inQuote = !inQuote;
-                result.append(c);
-            } else if (inQuote) {
-                result.append(c);
-            } else if (c == ',') {
-                while (result.length() > 0 && result.charAt(result.length() - 1) == ' ') {
-                    result.deleteCharAt(result.length() - 1);
-                }
-                result.append(", ");
-            } else if (c == '=' && (i == 0 || sb.charAt(i - 1) != '!') && (i + 1 == sb.length() || sb.charAt(i + 1) != '=')) {
-                while (result.length() > 0 && result.charAt(result.length() - 1) == ' ') {
-                    result.deleteCharAt(result.length() - 1);
-                }
-                result.append(" = ");
-            } else if (c == '|' && i + 1 < sb.length() && sb.charAt(i + 1) == '|') {
-                while (result.length() > 0 && result.charAt(result.length() - 1) == ' ') {
-                    result.deleteCharAt(result.length() - 1);
-                }
-                result.append(" || ");
-                i++; // skip second '|'
-            } else if (c == '(') {
-                result.append('(');
-            } else if (c == ')') {
-                while (result.length() > 0 && result.charAt(result.length() - 1) == ' ') {
-                    result.deleteCharAt(result.length() - 1);
-                }
-                result.append(')');
-            } else if (Character.isWhitespace(c)) {
-                if (result.length() > 0 && result.charAt(result.length() - 1) != ' ' && result.charAt(result.length() - 1) != '(') {
-                    result.append(' ');
-                }
-            } else {
-                result.append(c);
-            }
-        }
-        return result.toString().replaceAll("\\s+", " ").trim();
+        List<Token> tokens = tokenize(s);
+        return formatTokens(tokens);
     }
 
     @Test
@@ -708,6 +1023,30 @@ class DatabaseSchemaIntegrationTest {
         // 5. Partial predicates outer parens and casting normalized safely
         String rawPred = "((status)::text = 'ACTIVE'::text)";
         assertEquals("status = 'ACTIVE'", normalizeSqlPredicate(rawPred));
+
+        // 6. String literals containing typecast patterns or parentheses must NOT be altered
+        assertNotEquals(
+            normalizeSqlExpression("note = 'literal::text'"),
+            normalizeSqlExpression("note = 'literal'")
+        );
+        assertEquals("note = 'literal::text'", normalizeSqlExpression("note = 'literal::text'"));
+
+        assertNotEquals(
+            normalizeSqlExpression("name = '(status)'"),
+            normalizeSqlExpression("name = 'status'")
+        );
+        assertEquals("name = '(status)'", normalizeSqlExpression("name = '(status)'"));
+
+        // 7. Quoted identifiers must preserve case-sensitivity
+        assertNotEquals(
+            normalizeSqlExpression("\"MixedCase\""),
+            normalizeSqlExpression("\"mixedcase\"")
+        );
+        assertEquals("\"MixedCase\"", normalizeSqlExpression("\"MixedCase\""));
+        assertEquals("\"mixedcase\"", normalizeSqlExpression("\"mixedcase\""));
+
+        // 8. Escaped single quotes within literals must be preserved
+        assertEquals("note = 'it''s a plant'", normalizeSqlExpression("note = 'it''s a plant'"));
     }
 
     @Test
