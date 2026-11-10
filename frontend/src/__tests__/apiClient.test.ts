@@ -13,15 +13,32 @@ describe('apiClient & Authentication Interceptors', () => {
     vi.clearAllMocks();
   });
 
-  describe('isPublicEndpoint', () => {
-    it('identifies /auth/login as public', () => {
+  describe('isPublicEndpoint (Exact Route Matching)', () => {
+    it('identifies /auth/login and /auth/register as public', () => {
       expect(isPublicEndpoint('/auth/login')).toBe(true);
-      expect(isPublicEndpoint('http://localhost:8080/api/v1/auth/login')).toBe(true);
+      expect(isPublicEndpoint('/auth/register')).toBe(true);
+      expect(isPublicEndpoint('/auth/login/')).toBe(true);
+      expect(isPublicEndpoint('/auth/register/')).toBe(true);
     });
 
-    it('identifies /auth/register as public', () => {
-      expect(isPublicEndpoint('/auth/register')).toBe(true);
+    it('identifies /api/v1 prefix and full URLs as public', () => {
+      expect(isPublicEndpoint('/api/v1/auth/login')).toBe(true);
       expect(isPublicEndpoint('/api/v1/auth/register')).toBe(true);
+      expect(isPublicEndpoint('http://localhost:8080/api/v1/auth/login')).toBe(true);
+      expect(isPublicEndpoint('http://localhost:8080/api/v1/auth/register')).toBe(true);
+      expect(isPublicEndpoint('https://api.goplant.vn/api/v1/auth/login?source=mobile')).toBe(true);
+    });
+
+    it('rejects false-positive substrings like /auth/login-extra or /not-auth/login', () => {
+      expect(isPublicEndpoint('/auth/login-extra')).toBe(false);
+      expect(isPublicEndpoint('/api/v1/auth/login-extra')).toBe(false);
+      expect(isPublicEndpoint('/not-auth/login')).toBe(false);
+      expect(isPublicEndpoint('/api/v1/auth/register-partner')).toBe(false);
+    });
+
+    it('rejects URLs where public route is only in query string', () => {
+      expect(isPublicEndpoint('/plants?redirect=/auth/login')).toBe(false);
+      expect(isPublicEndpoint('/users/me?ref=/auth/register')).toBe(false);
     });
 
     it('identifies protected routes as non-public', () => {
@@ -29,6 +46,7 @@ describe('apiClient & Authentication Interceptors', () => {
       expect(isPublicEndpoint('/plants')).toBe(false);
       expect(isPublicEndpoint('/tasks/today')).toBe(false);
       expect(isPublicEndpoint(undefined)).toBe(false);
+      expect(isPublicEndpoint('')).toBe(false);
     });
   });
 
@@ -36,7 +54,6 @@ describe('apiClient & Authentication Interceptors', () => {
     it('does not attempt to read access token for public login/register endpoints', async () => {
       const getAccessTokenSpy = vi.spyOn(tokenStorage, 'getAccessToken');
 
-      // Axios adapter mock to intercept the call before network
       const mockAdapter = vi.fn().mockResolvedValue({
         status: 200,
         data: { success: true, data: { accessToken: 'new-token' } },
@@ -46,6 +63,22 @@ describe('apiClient & Authentication Interceptors', () => {
       apiClient.defaults.adapter = mockAdapter;
 
       await apiClient.post('/auth/login', { account: 'test', password: '123' });
+
+      expect(getAccessTokenSpy).not.toHaveBeenCalled();
+    });
+
+    it('does not attempt to read token when skipAuth is explicitly set to true', async () => {
+      const getAccessTokenSpy = vi.spyOn(tokenStorage, 'getAccessToken');
+
+      const mockAdapter = vi.fn().mockResolvedValue({
+        status: 200,
+        data: { success: true, data: { status: 'healthy' } },
+        headers: {},
+        config: {},
+      });
+      apiClient.defaults.adapter = mockAdapter;
+
+      await apiClient.get('/system/health', { skipAuth: true });
 
       expect(getAccessTokenSpy).not.toHaveBeenCalled();
     });
@@ -167,6 +200,31 @@ describe('apiClient & Authentication Interceptors', () => {
 
       await expect(
         apiClient.post('/auth/login', { account: 'test', password: 'wrong' })
+      ).rejects.toThrow(AppApiError);
+
+      expect(unauthorizedSpy).not.toHaveBeenCalled();
+      unregister();
+    });
+
+    it('does not trigger unauthorized listener when request has skipAuth: true even if status is 401', async () => {
+      const mockAdapter = vi.fn().mockRejectedValue({
+        isAxiosError: true,
+        response: {
+          status: 401,
+          data: {
+            success: false,
+            error: { code: 'UNAUTHORIZED', message: 'No auth allowed' },
+          },
+        },
+        config: { url: '/public/preview', skipAuth: true, isPublic: true },
+      });
+      apiClient.defaults.adapter = mockAdapter;
+
+      const unauthorizedSpy = vi.fn();
+      const unregister = registerUnauthorizedHandler(unauthorizedSpy);
+
+      await expect(
+        apiClient.get('/public/preview', { skipAuth: true })
       ).rejects.toThrow(AppApiError);
 
       expect(unauthorizedSpy).not.toHaveBeenCalled();

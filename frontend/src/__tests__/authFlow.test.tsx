@@ -1,7 +1,9 @@
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider, useAuth } from '../features/auth/AuthProvider';
+import { useUserProfile } from '../features/auth/authHooks';
 import type { AuthContextValue } from '../features/auth/authTypes';
 import * as tokenStorage from '../services/api/tokenStorage';
 import * as authService from '../features/auth/authService';
@@ -43,16 +45,25 @@ describe('Auth Flow, Session Recovery & Cache Isolation', () => {
   let root: ReturnType<typeof createRoot> | null = null;
   let container: HTMLDivElement | null = null;
   let auth: AuthContextValue | null = null;
+  let renderedProfile: UserProfileDto | undefined = undefined;
 
   function Consumer() {
     auth = useAuth();
-    return <div>{auth.status}</div>;
+    const { data: profile } = useUserProfile();
+    renderedProfile = profile;
+    return (
+      <div>
+        <span id="status">{auth.status}</span>
+        <span id="profile">{profile ? profile.fullName : 'No Profile'}</span>
+      </div>
+    );
   }
 
   beforeEach(() => {
     vi.clearAllMocks();
     queryClient.clear();
     auth = null;
+    renderedProfile = undefined;
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -75,9 +86,11 @@ describe('Auth Flow, Session Recovery & Cache Isolation', () => {
   async function mountProvider(waitMs = 60) {
     act(() => {
       root!.render(
-        <AuthProvider>
-          <Consumer />
-        </AuthProvider>
+        <QueryClientProvider client={queryClient}>
+          <AuthProvider>
+            <Consumer />
+          </AuthProvider>
+        </QueryClientProvider>
       );
     });
     // Allow initial loadSession async operations to complete
@@ -199,11 +212,11 @@ describe('Auth Flow, Session Recovery & Cache Isolation', () => {
     });
   });
 
-  describe('Login & Cache Isolation', () => {
-    it('saves session before setting authenticated state and does not fire duplicate GET /users/me', async () => {
+  describe('Login, Single Profile Fetch & Cache Isolation', () => {
+    it('executes exactly ONE getMeApi call upon login via useUserProfile and populates cache', async () => {
       vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(null);
       const saveSpy = vi.spyOn(tokenStorage, 'saveSession').mockResolvedValue();
-      const getMeSpy = vi.spyOn(authService, 'getMeApi');
+      const getMeSpy = vi.spyOn(authService, 'getMeApi').mockResolvedValue(mockProfile);
       vi.spyOn(authService, 'loginApi').mockResolvedValue({
         accessToken: 'new-token-login',
         tokenType: 'Bearer',
@@ -213,10 +226,16 @@ describe('Auth Flow, Session Recovery & Cache Isolation', () => {
 
       await mountProvider();
       expect(auth!.status).toBe('unauthenticated');
+      expect(getMeSpy).not.toHaveBeenCalled();
 
+      // Login
       await act(async () => {
         await auth!.login({ account: '0901234567', password: 'Password123@' });
-        await new Promise((resolve) => setTimeout(resolve, 60));
+      });
+
+      // Allow React Query useUserProfile to fetch and commit component re-render
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 120));
       });
 
       // Saved session
@@ -227,12 +246,19 @@ describe('Auth Flow, Session Recovery & Cache Isolation', () => {
         })
       );
 
-      // Authenticated
+      // Authenticated state
       expect(auth!.status).toBe('authenticated');
       expect(auth!.user?.fullName).toBe('Lê Văn C');
 
-      // Crucial: Login does NOT fire redundant background getMeApi()
-      expect(getMeSpy).not.toHaveBeenCalled();
+      // getMeApi was called EXACTLY ONCE via React Query
+      expect(getMeSpy).toHaveBeenCalledTimes(1);
+
+      // Rendered consumer received the profile
+      expect(renderedProfile?.fullName).toBe('Lê Văn C');
+
+      // Profile is cached in queryClient
+      const cached = queryClient.getQueryData(queryKeys.user.me);
+      expect(cached).toEqual(mockProfile);
     });
 
     it('does not transition to authenticated when saveSession fails', async () => {
@@ -292,8 +318,10 @@ describe('Auth Flow, Session Recovery & Cache Isolation', () => {
       expect(queryClient.getQueryData(queryKeys.user.me)).toBeUndefined();
       expect(auth!.status).toBe('unauthenticated');
     });
+  });
 
-    it('handles logout error when SecureStore delete fails and reports failure', async () => {
+  describe('Logout Failure, Storage Cleanup Error & Retry Mechanism', () => {
+    it('sets storage-cleanup-error when clearSession fails and does NOT transition to unauthenticated', async () => {
       vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(mockSession);
       vi.spyOn(authService, 'getMeApi').mockResolvedValue(mockProfile);
       vi.spyOn(tokenStorage, 'clearSession').mockRejectedValue(
@@ -319,12 +347,106 @@ describe('Auth Flow, Session Recovery & Cache Isolation', () => {
 
       expect(logoutError).toBeInstanceOf(StorageError);
       expect((logoutError as StorageError).code).toBe('DELETE_FAILED');
+
+      // Status must be storage-cleanup-error, NOT unauthenticated
+      expect(auth!.status).toBe('storage-cleanup-error');
       expect(auth!.storageError?.code).toBe('DELETE_FAILED');
-      expect(auth!.status).toBe('unauthenticated');
 
       // State is reset so user cannot access protected data
       expect(auth!.user).toBeNull();
       expect(auth!.profile).toBeNull();
+      // Cache was cleared immediately
+      expect(queryClient.getQueryData(queryKeys.user.me)).toBeUndefined();
+    });
+
+    it('allows retryClearSession to clear session and transition to unauthenticated on success', async () => {
+      vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(mockSession);
+      vi.spyOn(authService, 'getMeApi').mockResolvedValue(mockProfile);
+
+      const clearSessionSpy = vi
+        .spyOn(tokenStorage, 'clearSession')
+        .mockRejectedValueOnce(
+          new StorageError({
+            code: 'DELETE_FAILED',
+            operation: 'delete',
+            message: 'SecureStore delete failed initially',
+          })
+        )
+        .mockResolvedValueOnce(undefined); // Second try succeeds
+
+      const getSessionSpy = vi.spyOn(tokenStorage, 'getSession');
+
+      await mountProvider();
+      expect(auth!.status).toBe('authenticated');
+
+      // Initial logout fails to delete
+      await act(async () => {
+        try {
+          await auth!.logout();
+        } catch {
+          // Handled
+        }
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      });
+
+      expect(auth!.status).toBe('storage-cleanup-error');
+      expect(auth!.storageError?.code).toBe('DELETE_FAILED');
+
+      // Call retryClearSession
+      await act(async () => {
+        await auth!.retryClearSession();
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      });
+
+      // Now successfully transitioned to unauthenticated
+      expect(auth!.status).toBe('unauthenticated');
+      expect(auth!.storageError).toBeNull();
+      expect(clearSessionSpy).toHaveBeenCalledTimes(2);
+
+      // Crucial: retryClearSession must NOT call getSession or loadSession
+      expect(getSessionSpy).toHaveBeenCalledTimes(1); // Only the initial mount call
+    });
+
+    it('keeps storage-cleanup-error if retryClearSession fails again', async () => {
+      vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(mockSession);
+      vi.spyOn(authService, 'getMeApi').mockResolvedValue(mockProfile);
+
+      vi.spyOn(tokenStorage, 'clearSession').mockRejectedValue(
+        new StorageError({
+          code: 'DELETE_FAILED',
+          operation: 'delete',
+          message: 'Persistent delete error',
+        })
+      );
+
+      await mountProvider();
+
+      // Logout fails
+      await act(async () => {
+        try {
+          await auth!.logout();
+        } catch {
+          // Handled
+        }
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      });
+
+      expect(auth!.status).toBe('storage-cleanup-error');
+
+      // Retry fails again
+      let retryError: unknown = null;
+      await act(async () => {
+        try {
+          await auth!.retryClearSession();
+        } catch (err) {
+          retryError = err;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      });
+
+      expect(retryError).toBeInstanceOf(StorageError);
+      expect(auth!.status).toBe('storage-cleanup-error');
+      expect(auth!.storageError?.code).toBe('DELETE_FAILED');
     });
   });
 });

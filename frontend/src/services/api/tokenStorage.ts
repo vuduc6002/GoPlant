@@ -52,6 +52,14 @@ export function _resetWebMemorySession(): void {
 
 /**
  * Validates that an object conforms strictly to the AuthSession schema.
+ * - accessToken: non-empty string.
+ * - tokenType: non-empty string.
+ * - savedAt: finite positive number.
+ * - expiresIn: if defined, must be finite positive number.
+ * - user.id: non-empty string.
+ * - user.fullName: non-empty string.
+ * - user.roles: non-empty array of non-empty strings.
+ * - user.email: string, null, or undefined (supports phone registration).
  */
 export function isValidSession(data: unknown): data is AuthSession {
   if (!data || typeof data !== 'object') {
@@ -59,28 +67,60 @@ export function isValidSession(data: unknown): data is AuthSession {
   }
   const s = data as Record<string, unknown>;
 
+  // 1. accessToken: non-empty string
   if (typeof s.accessToken !== 'string' || !s.accessToken.trim()) {
     return false;
   }
+
+  // 2. tokenType: non-empty string
   if (typeof s.tokenType !== 'string' || !s.tokenType.trim()) {
     return false;
   }
+
+  // 3. savedAt: finite positive number
+  if (typeof s.savedAt !== 'number' || !Number.isFinite(s.savedAt) || s.savedAt <= 0) {
+    return false;
+  }
+
+  // 4. expiresIn: optional, but if present must be finite positive number
+  if (s.expiresIn !== undefined && s.expiresIn !== null) {
+    if (typeof s.expiresIn !== 'number' || !Number.isFinite(s.expiresIn) || s.expiresIn <= 0) {
+      return false;
+    }
+  }
+
+  // 5. user object
   if (!s.user || typeof s.user !== 'object') {
     return false;
   }
 
   const u = s.user as Record<string, unknown>;
+
+  // 6. user.id: non-empty string
   if (typeof u.id !== 'string' || !u.id.trim()) {
     return false;
   }
+
+  // 7. user.fullName: non-empty string
   if (typeof u.fullName !== 'string' || !u.fullName.trim()) {
     return false;
   }
-  if (!Array.isArray(u.roles)) {
+
+  // 8. user.roles: non-empty array of non-empty strings
+  if (!Array.isArray(u.roles) || u.roles.length === 0) {
     return false;
   }
-  if (u.email !== null && typeof u.email !== 'string' && u.email !== undefined) {
-    return false;
+  for (const role of u.roles) {
+    if (typeof role !== 'string' || !role.trim()) {
+      return false;
+    }
+  }
+
+  // 9. user.email: string, null, or undefined
+  if (u.email !== null && u.email !== undefined) {
+    if (typeof u.email !== 'string') {
+      return false;
+    }
   }
 
   return true;
@@ -222,6 +262,8 @@ export async function clearSession(): Promise<void> {
     webMemorySession = null;
     return;
   }
+
+  await assertNativeSecureStoreAvailable();
 
   try {
     await SecureStore.deleteItemAsync(SESSION_STORAGE_KEY);

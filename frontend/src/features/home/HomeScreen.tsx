@@ -48,7 +48,15 @@ export default function HomeScreen() {
           onPress: () => {
             Alert.alert('Xác nhận đăng xuất', 'Bạn có chắc chắn muốn đăng xuất không?', [
               { text: 'Hủy', style: 'cancel' },
-              { text: 'Đăng xuất', style: 'destructive', onPress: () => logout() },
+              {
+                text: 'Đăng xuất',
+                style: 'destructive',
+                onPress: () => {
+                  logout().catch(() => {
+                    // Handled: AuthProvider updates status to storage-cleanup-error
+                  });
+                },
+              },
             ]);
           },
         },

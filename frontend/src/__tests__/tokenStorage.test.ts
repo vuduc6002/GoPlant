@@ -65,16 +65,69 @@ describe('tokenStorage', () => {
       expect(isValidSession(validSessionWithNullEmail)).toBe(true);
     });
 
+    it('accepts valid session with undefined email', () => {
+      const sessionWithoutEmail = {
+        ...validSession,
+        user: { ...validSession.user, email: undefined },
+      };
+      expect(isValidSession(sessionWithoutEmail)).toBe(true);
+    });
+
     it('rejects session with missing accessToken or empty accessToken', () => {
       expect(isValidSession({ ...validSession, accessToken: '' })).toBe(false);
+      expect(isValidSession({ ...validSession, accessToken: '   ' })).toBe(false);
       expect(isValidSession({ ...validSession, accessToken: undefined })).toBe(false);
+    });
+
+    it('rejects session with missing tokenType or empty tokenType', () => {
+      expect(isValidSession({ ...validSession, tokenType: '' })).toBe(false);
+      expect(isValidSession({ ...validSession, tokenType: undefined })).toBe(false);
+    });
+
+    it('rejects session with invalid savedAt (missing, negative, zero, NaN, or non-finite)', () => {
+      expect(isValidSession({ ...validSession, savedAt: undefined })).toBe(false);
+      expect(isValidSession({ ...validSession, savedAt: -100 })).toBe(false);
+      expect(isValidSession({ ...validSession, savedAt: 0 })).toBe(false);
+      expect(isValidSession({ ...validSession, savedAt: NaN })).toBe(false);
+      expect(isValidSession({ ...validSession, savedAt: Infinity })).toBe(false);
+      expect(isValidSession({ ...validSession, savedAt: '1700000000000' as unknown as number })).toBe(false);
+    });
+
+    it('rejects session with invalid expiresIn when defined (negative, zero, NaN, or Infinity)', () => {
+      expect(isValidSession({ ...validSession, expiresIn: -3600 })).toBe(false);
+      expect(isValidSession({ ...validSession, expiresIn: 0 })).toBe(false);
+      expect(isValidSession({ ...validSession, expiresIn: NaN })).toBe(false);
+      expect(isValidSession({ ...validSession, expiresIn: Infinity })).toBe(false);
+      expect(isValidSession({ ...validSession, expiresIn: '86400' as unknown as number })).toBe(false);
+    });
+
+    it('accepts session without expiresIn (expiresIn is optional)', () => {
+      const { expiresIn: _, ...sessionWithoutExpiresIn } = validSession;
+      expect(isValidSession(sessionWithoutExpiresIn)).toBe(true);
     });
 
     it('rejects session with missing user or missing user fields', () => {
       expect(isValidSession({ ...validSession, user: null })).toBe(false);
       expect(isValidSession({ ...validSession, user: { ...validSession.user, id: '' } })).toBe(false);
       expect(isValidSession({ ...validSession, user: { ...validSession.user, fullName: '' } })).toBe(false);
+    });
+
+    it('rejects session if user.roles is not an array or is empty', () => {
       expect(isValidSession({ ...validSession, user: { ...validSession.user, roles: 'NOT_ARRAY' } })).toBe(false);
+      expect(isValidSession({ ...validSession, user: { ...validSession.user, roles: [] } })).toBe(false);
+    });
+
+    it('rejects session if user.roles contains non-string, empty string, or null elements', () => {
+      expect(isValidSession({ ...validSession, user: { ...validSession.user, roles: [123] } })).toBe(false);
+      expect(isValidSession({ ...validSession, user: { ...validSession.user, roles: [null] } })).toBe(false);
+      expect(isValidSession({ ...validSession, user: { ...validSession.user, roles: [''] } })).toBe(false);
+      expect(isValidSession({ ...validSession, user: { ...validSession.user, roles: ['   '] } })).toBe(false);
+      expect(isValidSession({ ...validSession, user: { ...validSession.user, roles: [{}] } })).toBe(false);
+    });
+
+    it('rejects session if user.email is of invalid type', () => {
+      expect(isValidSession({ ...validSession, user: { ...validSession.user, email: 12345 } })).toBe(false);
+      expect(isValidSession({ ...validSession, user: { ...validSession.user, email: {} } })).toBe(false);
     });
 
     it('rejects corrupt non-object data', () => {

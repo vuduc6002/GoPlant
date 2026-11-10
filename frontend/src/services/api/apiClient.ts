@@ -3,6 +3,13 @@ import { API_BASE_URL, API_TIMEOUT } from './apiConfig';
 import { AppApiError, normalizeApiError, normalizeBackendFailure } from './apiError';
 import { getAccessToken } from './tokenStorage';
 
+declare module 'axios' {
+  export interface AxiosRequestConfig {
+    skipAuth?: boolean;
+    isPublic?: boolean;
+  }
+}
+
 type UnauthorizedListener = () => void;
 let unauthorizedListener: UnauthorizedListener | null = null;
 
@@ -22,10 +29,46 @@ export function registerUnauthorizedHandler(handler: UnauthorizedListener): () =
 
 /**
  * Helper to identify public authentication endpoints that do not require JWT authorization.
+ * Uses exact route matching after stripping base URL prefix, query string, and hash.
+ * Only matches:
+ *   - /auth/login
+ *   - /auth/register
+ * Does NOT match false positives like /auth/login-extra or /not-auth/login.
  */
 export function isPublicEndpoint(url?: string): boolean {
   if (!url) return false;
-  return url.includes('/auth/login') || url.includes('/auth/register');
+
+  // 1. Strip query string and fragment
+  const clean = url.split('?')[0].split('#')[0].trim();
+
+  // 2. Extract pathname if absolute URL
+  let pathname = clean;
+  try {
+    if (clean.startsWith('http://') || clean.startsWith('https://')) {
+      const parsed = new URL(clean);
+      pathname = parsed.pathname;
+    }
+  } catch {
+    // Keep clean as fallback
+  }
+
+  // 3. Normalize leading slash
+  let normalized = pathname.startsWith('/') ? pathname : '/' + pathname;
+
+  // 4. Strip /api/v1 or /api prefix
+  if (normalized.startsWith('/api/v1/')) {
+    normalized = normalized.substring('/api/v1'.length);
+  } else if (normalized.startsWith('/api/')) {
+    normalized = normalized.substring('/api'.length);
+  }
+
+  // 5. Clean trailing slash
+  if (normalized.length > 1 && normalized.endsWith('/')) {
+    normalized = normalized.slice(0, -1);
+  }
+
+  // 6. Exact match on public routes only
+  return normalized === '/auth/login' || normalized === '/auth/register';
 }
 
 export const apiClient: AxiosInstance = axios.create({
@@ -43,6 +86,9 @@ apiClient.interceptors.request.use(
     const isPublic =
       isPublicEndpoint(config.url) ||
       ((config as unknown) as Record<string, unknown>).skipAuth === true;
+
+    // Persist authentication metadata onto config so Response Interceptor reuses exact decision
+    ((config as unknown) as Record<string, unknown>).isPublic = isPublic;
 
     // Public endpoints do not require token inspection
     if (isPublic) {
@@ -91,8 +137,10 @@ apiClient.interceptors.response.use(
 
     // Handle genuine HTTP 401 Unauthorized from backend on protected routes
     if (normalizedError.statusCode === 401) {
+      const reqConfig = error?.config as (Record<string, unknown> | undefined);
+      const isAuthSkipped = reqConfig?.isPublic === true || reqConfig?.skipAuth === true;
       const requestUrl = error?.config?.url || '';
-      const isAuthEndpoint = isPublicEndpoint(requestUrl);
+      const isAuthEndpoint = isAuthSkipped || isPublicEndpoint(requestUrl);
 
       // Only notify AuthProvider if this is a genuine 401 from a protected API call
       if (!isAuthEndpoint && unauthorizedListener) {

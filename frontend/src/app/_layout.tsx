@@ -18,23 +18,31 @@ import { queryClient } from '@/services/query/queryClient';
 
 SplashScreen.preventAutoHideAsync();
 
-function StorageErrorView({ onRetry }: { onRetry: () => void }) {
+function StorageErrorView({
+  title,
+  message,
+  buttonText,
+  onRetry,
+}: {
+  title: string;
+  message: string;
+  buttonText: string;
+  onRetry: () => void;
+}) {
   return (
     <View style={styles.errorContainer}>
       <Text style={styles.errorIcon}>🔒</Text>
-      <Text style={styles.errorTitle}>Không thể truy cập dữ liệu</Text>
-      <Text style={styles.errorMessage}>
-        Ứng dụng tạm thời không thể đọc dữ liệu phiên đăng nhập trên thiết bị. Vui lòng bấm thử lại.
-      </Text>
+      <Text style={styles.errorTitle}>{title}</Text>
+      <Text style={styles.errorMessage}>{message}</Text>
       <Pressable style={styles.retryButton} onPress={onRetry}>
-        <Text style={styles.retryButtonText}>Thử lại</Text>
+        <Text style={styles.retryButtonText}>{buttonText}</Text>
       </Pressable>
     </View>
   );
 }
 
 function NavigationGuard({ fontsLoaded, fontError }: { fontsLoaded: boolean; fontError: Error | null }) {
-  const { status, retryLoadSession } = useAuth();
+  const { status, retryLoadSession, retryClearSession } = useAuth();
   const segments = useSegments();
   const router = useRouter();
 
@@ -64,7 +72,27 @@ function NavigationGuard({ fontsLoaded, fontError }: { fontsLoaded: boolean; fon
   }
 
   if (status === 'storage-error') {
-    return <StorageErrorView onRetry={retryLoadSession} />;
+    return (
+      <StorageErrorView
+        title="Không thể truy cập dữ liệu"
+        message="Ứng dụng tạm thời không thể đọc dữ liệu phiên đăng nhập trên thiết bị. Vui lòng bấm thử đọc lại."
+        buttonText="Thử đọc lại"
+        onRetry={retryLoadSession}
+      />
+    );
+  }
+
+  if (status === 'storage-cleanup-error') {
+    return (
+      <StorageErrorView
+        title="Xóa phiên đăng nhập thất bại"
+        message="Không thể xóa phiên đăng nhập khỏi thiết bị. Vui lòng thử xóa lại để đảm bảo an toàn."
+        buttonText="Thử xóa lại"
+        onRetry={() => {
+          retryClearSession().catch(() => {});
+        }}
+      />
+    );
   }
 
   return (

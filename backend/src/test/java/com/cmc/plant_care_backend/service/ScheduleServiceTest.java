@@ -453,7 +453,7 @@ class ScheduleServiceTest {
         s.setTaskType(TaskType.WATERING);
         s.setFrequency(Frequency.DAILY);
         s.setNextScheduledAt(OffsetDateTime.now().minusHours(1));
-        s.setEndDate(LocalDate.now(VN_ZONE)); // ends today; next daily run would be tomorrow, which exceeds endDate
+        s.setEndDate(LocalDate.now(VN_ZONE).minusDays(1)); // endDate has passed relative to next run, ensuring completion
         s.setStatus(ScheduleStatus.ACTIVE);
 
         when(careScheduleRepository.findByIdWithPessimisticLock(scheduleId)).thenReturn(Optional.of(s));

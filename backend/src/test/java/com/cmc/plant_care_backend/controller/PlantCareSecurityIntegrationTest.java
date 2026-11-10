@@ -176,7 +176,7 @@ class PlantCareSecurityIntegrationTest {
                 "taskType": "WATERING",
                 "frequency": "DAILY",
                 "startDate": "%s",
-                "reminderTime": "08:00:00"
+                "reminderTime": "00:00:00"
             }
             """, plantA.getId(), todayVn);
 

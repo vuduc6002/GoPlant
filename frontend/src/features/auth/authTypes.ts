@@ -12,7 +12,8 @@ export type AuthStatus =
   | 'initializing'
   | 'authenticated'
   | 'unauthenticated'
-  | 'storage-error';
+  | 'storage-error'
+  | 'storage-cleanup-error';
 
 export interface AuthContextValue {
   status: AuthStatus;
@@ -24,4 +25,5 @@ export interface AuthContextValue {
   logout: () => Promise<void>;
   refreshProfile: () => Promise<UserProfileDto | null>;
   retryLoadSession: () => Promise<void>;
+  retryClearSession: () => Promise<void>;
 }

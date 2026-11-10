@@ -58,6 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // Step 2: Clear stored session from SecureStore
       try {
         await clearSession();
+        setStatus('unauthenticated');
       } catch (err) {
         deleteError =
           err instanceof StorageError
@@ -69,9 +70,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 cause: err,
               });
         setStorageError(deleteError);
+        // Do NOT transition to unauthenticated on delete failure: require user retry
+        setStatus('storage-cleanup-error');
       }
     } finally {
-      setStatus('unauthenticated');
       isLoggingOutRef.current = false;
     }
 
@@ -80,11 +82,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const retryClearSession = useCallback(async (): Promise<void> => {
+    try {
+      await clearSession();
+      setStorageError(null);
+      setStatus('unauthenticated');
+    } catch (err) {
+      const deleteError =
+        err instanceof StorageError
+          ? err
+          : new StorageError({
+              code: 'DELETE_FAILED',
+              operation: 'delete',
+              message: 'Xóa phiên đăng nhập khỏi SecureStore thất bại.',
+              cause: err,
+            });
+      setStorageError(deleteError);
+      setStatus('storage-cleanup-error');
+      throw deleteError;
+    }
+  }, []);
+
   // Listen for 401 Unauthorized signals from protected API calls
   useEffect(() => {
     const unregister = registerUnauthorizedHandler(() => {
       performLogout().catch(() => {
-        // Handled silently for automated 401 logout
+        // Handled: if clearSession fails, status is already 'storage-cleanup-error'
       });
     });
     return unregister;
@@ -226,8 +249,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       logout: performLogout,
       refreshProfile,
       retryLoadSession: loadSession,
+      retryClearSession,
     }),
-    [status, user, profile, storageError, login, register, performLogout, refreshProfile, loadSession]
+    [
+      status,
+      user,
+      profile,
+      storageError,
+      login,
+      register,
+      performLogout,
+      refreshProfile,
+      loadSession,
+      retryClearSession,
+    ]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
