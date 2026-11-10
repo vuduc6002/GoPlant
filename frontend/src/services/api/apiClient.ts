@@ -59,7 +59,9 @@ function parseHttpBaseUrl(baseUrl: string): URL | null {
       (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
       parsed.hostname &&
       parsed.origin &&
-      parsed.origin !== 'null'
+      parsed.origin !== 'null' &&
+      !parsed.username &&
+      !parsed.password
     ) {
       return parsed;
     }
@@ -254,6 +256,52 @@ function isSameTrustedOrigin(candidateBaseUrl: string, trustedBaseUrl: string): 
   return Boolean(candidate && trusted && candidate.origin === trusted.origin);
 }
 
+/**
+ * Resolves and validates the effective baseURL for a request.
+ * Only falls back to defaultBaseURL when requestBaseURL is strictly `undefined`.
+ * Explicit empty strings (''), whitespace ('   '), null, non-strings,
+ * protocol-relative URLs, credentials, or malformed URLs return null (never fallback).
+ */
+export function resolveEffectiveBaseURL(
+  requestBaseURL: unknown,
+  defaultBaseURL: unknown
+): string | null {
+  const candidate = requestBaseURL === undefined ? defaultBaseURL : requestBaseURL;
+
+  if (typeof candidate !== 'string') {
+    return null;
+  }
+
+  if (!candidate || hasControlCharacters(candidate) || /\s/.test(candidate)) {
+    return null;
+  }
+
+  if (candidate.startsWith('//') || candidate.includes('\\')) {
+    return null;
+  }
+
+  const parsed = parseHttpBaseUrl(candidate);
+  if (!parsed) {
+    return null;
+  }
+
+  return candidate;
+}
+
+/**
+ * Verifies that an effective baseURL is non-null, valid HTTP/HTTPS,
+ * and matches the exact scheme, hostname, and port of API_BASE_URL.
+ */
+export function isTrustedBaseURL(
+  effectiveBaseURL: string | null,
+  trustedBaseUrl: string = API_BASE_URL
+): boolean {
+  if (typeof effectiveBaseURL !== 'string' || !effectiveBaseURL) {
+    return false;
+  }
+  return isSameTrustedOrigin(effectiveBaseURL, trustedBaseUrl);
+}
+
 export const apiClient: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
   timeout: API_TIMEOUT,
@@ -263,12 +311,22 @@ export const apiClient: AxiosInstance = axios.create({
   },
 });
 
-// Request Interceptor: Enforce trusted API origin before reading storage or attaching JWT
+// Request Interceptor: Enforce trusted effective baseURL & API URL before reading storage or attaching JWT
 apiClient.interceptors.request.use(
   async (config: InternalAxiosRequestConfig) => {
     const reqMeta = (config as unknown) as Record<string, unknown>;
-    const isBaseTrusted = !config.baseURL || isSameTrustedOrigin(config.baseURL, API_BASE_URL);
-    const inspection = classifyApiUrl(config.url, API_BASE_URL);
+    const rawRequestBaseUrl = Object.prototype.hasOwnProperty.call(reqMeta, 'baseURL')
+      ? reqMeta.baseURL
+      : undefined;
+
+    const effectiveBaseUrl = resolveEffectiveBaseURL(
+      rawRequestBaseUrl,
+      apiClient.defaults.baseURL
+    );
+    const isBaseTrusted = isTrustedBaseURL(effectiveBaseUrl, API_BASE_URL);
+    const inspection = effectiveBaseUrl
+      ? classifyApiUrl(config.url, effectiveBaseUrl)
+      : { isTrusted: false, isPublic: false, normalizedRoute: null };
 
     if (!isBaseTrusted || !inspection.isTrusted) {
       reqMeta.isTrustedUrl = false;
@@ -336,10 +394,20 @@ apiClient.interceptors.response.use(
     if (normalizedError.statusCode === 401) {
       const reqConfig = error?.config as (Record<string, unknown> | undefined);
       const requestUrl = typeof reqConfig?.url === 'string' ? reqConfig.url : undefined;
-      const requestBaseUrl = typeof reqConfig?.baseURL === 'string' ? reqConfig.baseURL : undefined;
+      const rawRequestBaseUrl =
+        reqConfig && Object.prototype.hasOwnProperty.call(reqConfig, 'baseURL')
+          ? reqConfig.baseURL
+          : undefined;
 
-      const isBaseTrusted = !requestBaseUrl || isSameTrustedOrigin(requestBaseUrl, API_BASE_URL);
-      const inspection = classifyApiUrl(requestUrl, API_BASE_URL);
+      const effectiveBaseUrl = resolveEffectiveBaseURL(
+        rawRequestBaseUrl,
+        apiClient.defaults.baseURL
+      );
+      const isBaseTrusted = isTrustedBaseURL(effectiveBaseUrl, API_BASE_URL);
+      const inspection = effectiveBaseUrl
+        ? classifyApiUrl(requestUrl, effectiveBaseUrl)
+        : { isTrusted: false, isPublic: false, normalizedRoute: null };
+
       const isTrusted =
         isBaseTrusted && reqConfig?.isTrustedUrl !== false && inspection.isTrusted;
       const isAuthSkipped =

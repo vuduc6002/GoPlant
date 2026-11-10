@@ -5,6 +5,8 @@ import {
   isPublicEndpoint,
   isTrustedApiUrl,
   classifyApiUrl,
+  resolveEffectiveBaseURL,
+  isTrustedBaseURL,
 } from '../services/api/apiClient';
 import * as tokenStorage from '../services/api/tokenStorage';
 import { StorageError } from '../services/api/tokenStorage';
@@ -12,6 +14,7 @@ import { AppApiError } from '../services/api/apiError';
 
 describe('apiClient & Authentication Interceptors', () => {
   const originalAdapter = apiClient.defaults.adapter;
+  const originalDefaultBaseURL = apiClient.defaults.baseURL;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -19,6 +22,7 @@ describe('apiClient & Authentication Interceptors', () => {
 
   afterEach(() => {
     apiClient.defaults.adapter = originalAdapter;
+    apiClient.defaults.baseURL = originalDefaultBaseURL;
   });
 
   describe('URL Trust Boundary & Route Classification (isTrustedApiUrl / isPublicEndpoint)', () => {
@@ -517,6 +521,232 @@ describe('apiClient & Authentication Interceptors', () => {
       expect(caughtError?.code).toBe('PLANT_NOT_FOUND');
       expect(caughtError?.field).toBe('plantId');
       expect(caughtError?.message).toBe('Không tìm thấy thông tin cây trồng');
+    });
+  });
+
+  describe('Effective BaseURL Override Guard (G5.2.1.1.4)', () => {
+    it('resolveEffectiveBaseURL & isTrustedBaseURL enforce strict fallback and origin rules', () => {
+      const defaultBase = 'http://localhost:8080/api/v1';
+
+      // Falls back ONLY when requestBaseURL is strictly undefined
+      expect(resolveEffectiveBaseURL(undefined, defaultBase)).toBe(defaultBase);
+      expect(isTrustedBaseURL(resolveEffectiveBaseURL(undefined, defaultBase))).toBe(true);
+
+      // Explicit same-origin overrides (including custom path prefix)
+      expect(resolveEffectiveBaseURL('http://localhost:8080/gateway/api/v1', defaultBase)).toBe(
+        'http://localhost:8080/gateway/api/v1'
+      );
+      expect(
+        isTrustedBaseURL(
+          resolveEffectiveBaseURL('http://localhost:8080/gateway/api/v1', defaultBase)
+        )
+      ).toBe(true);
+
+      // Explicit invalid values MUST NOT fallback to defaultBase
+      expect(resolveEffectiveBaseURL('', defaultBase)).toBeNull();
+      expect(resolveEffectiveBaseURL('   ', defaultBase)).toBeNull();
+      expect(resolveEffectiveBaseURL(null, defaultBase)).toBeNull();
+      expect(resolveEffectiveBaseURL(123, defaultBase)).toBeNull();
+      expect(resolveEffectiveBaseURL('//evil.com', defaultBase)).toBeNull();
+      expect(resolveEffectiveBaseURL('not-a-valid-url', defaultBase)).toBeNull();
+      expect(resolveEffectiveBaseURL('http://user:pass@localhost:8080/api/v1', defaultBase)).toBeNull();
+
+      // Scheme or port mismatch must be untrusted even with same hostname
+      expect(isTrustedBaseURL('https://localhost:8080/api/v1')).toBe(false);
+      expect(isTrustedBaseURL('http://localhost:9090/api/v1')).toBe(false);
+      expect(isTrustedBaseURL('https://evil.com')).toBe(false);
+      expect(isTrustedBaseURL(null)).toBe(false);
+    });
+
+    it('Nhóm A: allows instance default baseURL and valid same-origin baseURL overrides with prefixes', async () => {
+      const getAccessTokenSpy = vi
+        .spyOn(tokenStorage, 'getAccessToken')
+        .mockResolvedValue('valid-jwt-base-test');
+
+      const captured: { baseURL?: string; url?: string; auth?: string }[] = [];
+      const mockAdapter = vi.fn().mockImplementation((config) => {
+        captured.push({
+          baseURL: config.baseURL,
+          url: config.url,
+          auth: config.headers?.Authorization as string | undefined,
+        });
+        return Promise.resolve({
+          status: 200,
+          data: { success: true, data: { ok: true } },
+          headers: {},
+          config,
+        });
+      });
+      apiClient.defaults.adapter = mockAdapter;
+
+      // Default instance baseURL - public
+      await apiClient.post('/auth/login', { account: 'u1', password: 'pw' });
+      expect(getAccessTokenSpy).not.toHaveBeenCalled();
+
+      // Explicit same-origin baseURL - public
+      await apiClient.post(
+        '/auth/register',
+        { fullName: 'User', account: 'u@example.com', password: 'pw' },
+        { baseURL: 'http://localhost:8080/api/v1' }
+      );
+      expect(getAccessTokenSpy).not.toHaveBeenCalled();
+
+      // Default instance baseURL - protected
+      await apiClient.get('/users/me');
+
+      // Explicit same-origin custom prefix baseURL - protected
+      await apiClient.get('/users/me', { baseURL: 'http://localhost:8080/custom/api/v1' });
+
+      expect(getAccessTokenSpy).toHaveBeenCalledTimes(2);
+      expect(mockAdapter).toHaveBeenCalledTimes(4);
+      expect(captured).toEqual([
+        { baseURL: 'http://localhost:8080/api/v1', url: '/auth/login', auth: undefined },
+        { baseURL: 'http://localhost:8080/api/v1', url: '/auth/register', auth: undefined },
+        {
+          baseURL: 'http://localhost:8080/api/v1',
+          url: '/users/me',
+          auth: 'Bearer valid-jwt-base-test',
+        },
+        {
+          baseURL: 'http://localhost:8080/custom/api/v1',
+          url: '/users/me',
+          auth: 'Bearer valid-jwt-base-test',
+        },
+      ]);
+    });
+
+    it('Nhóm B: blocks empty, whitespace, null, external, protocol-relative, and scheme/port-mismatched baseURL overrides before reading token or sending network request', async () => {
+      const getAccessTokenSpy = vi
+        .spyOn(tokenStorage, 'getAccessToken')
+        .mockResolvedValue('secret-jwt-must-not-leak');
+
+      const mockAdapter = vi.fn();
+      apiClient.defaults.adapter = mockAdapter;
+
+      const unauthorizedSpy = vi.fn();
+      const unregister = registerUnauthorizedHandler(unauthorizedSpy);
+
+      const invalidBaseURLs: unknown[] = [
+        '',
+        '   ',
+        null,
+        'https://evil.com',
+        '//evil.com',
+        'https://localhost:8080/api/v1',
+        'http://localhost:9090/api/v1',
+        'http://user:pass@localhost:8080/api/v1',
+        '/api/v1',
+      ];
+
+      for (const badBase of invalidBaseURLs) {
+        const protectedHeaders: Record<string, string> = {};
+        // Protected endpoint must be rejected
+        await expect(
+          apiClient.get('/users/me', {
+            baseURL: badBase as string,
+            headers: protectedHeaders,
+          })
+        ).rejects.toMatchObject({ code: 'UNTRUSTED_API_URL' });
+        expect(protectedHeaders.Authorization).toBeUndefined();
+
+        // Public route with invalid baseURL override must also be rejected
+        await expect(
+          apiClient.post('/auth/login', { account: 'a', password: 'b' }, { baseURL: badBase as string })
+        ).rejects.toMatchObject({ code: 'UNTRUSTED_API_URL' });
+
+        // Even with skipAuth: true, invalid baseURL override must be rejected
+        await expect(
+          apiClient.get('/health', { baseURL: badBase as string, skipAuth: true })
+        ).rejects.toMatchObject({ code: 'UNTRUSTED_API_URL' });
+      }
+
+      // Also verify mutated empty/undefined defaults.baseURL cannot slip through
+      apiClient.defaults.baseURL = '';
+      await expect(apiClient.get('/users/me')).rejects.toMatchObject({
+        code: 'UNTRUSTED_API_URL',
+      });
+
+      apiClient.defaults.baseURL = undefined;
+      await expect(apiClient.get('/users/me')).rejects.toMatchObject({
+        code: 'UNTRUSTED_API_URL',
+      });
+
+      expect(getAccessTokenSpy).not.toHaveBeenCalled();
+      expect(mockAdapter).not.toHaveBeenCalled();
+      expect(unauthorizedSpy).not.toHaveBeenCalled();
+      unregister();
+    });
+
+    it('Nhóm C: Response Interceptor rejects false 401 triggers when config baseURL is empty, null, whitespace, external, protocol-relative, or missing default baseURL', async () => {
+      const unauthorizedSpy = vi.fn();
+      const unregister = registerUnauthorizedHandler(unauthorizedSpy);
+
+      const responseHandlers = (
+        apiClient.interceptors.response as unknown as {
+          handlers: { rejected?: (error: unknown) => Promise<unknown> }[];
+        }
+      ).handlers;
+      const rejectedHandler = responseHandlers[0]?.rejected;
+      expect(rejectedHandler).toBeDefined();
+
+      const build401 = (config: Record<string, unknown>) => ({
+        isAxiosError: true,
+        response: {
+          status: 401,
+          data: {
+            success: false,
+            error: { code: 'UNAUTHORIZED', message: 'Unauthorized' },
+          },
+        },
+        config,
+      });
+
+      const untrusted401Configs: Record<string, unknown>[] = [
+        { url: '/users/me', baseURL: '' },
+        { url: '/users/me', baseURL: '   ' },
+        { url: '/users/me', baseURL: null },
+        { url: '/users/me', baseURL: 'https://evil.com' },
+        { url: '/users/me', baseURL: '//evil.com' },
+        { url: '/users/me', baseURL: 'https://localhost:8080/api/v1' },
+        { url: '/auth/login', baseURL: 'http://localhost:8080/api/v1' },
+        { url: '/users/me', skipAuth: true, baseURL: 'http://localhost:8080/api/v1' },
+      ];
+
+      for (const cfg of untrusted401Configs) {
+        let err: AppApiError | null = null;
+        try {
+          await rejectedHandler!(build401(cfg));
+        } catch (caught) {
+          err = caught as AppApiError;
+        }
+        expect(err).toBeInstanceOf(AppApiError);
+        expect(err?.statusCode).toBe(401);
+        expect(unauthorizedSpy).not.toHaveBeenCalled();
+      }
+
+      // Missing baseURL on both config and instance defaults MUST NOT automatically assume trusted
+      apiClient.defaults.baseURL = undefined;
+      await expect(rejectedHandler!(build401({ url: '/users/me' }))).rejects.toMatchObject({
+        statusCode: 401,
+      });
+      expect(unauthorizedSpy).not.toHaveBeenCalled();
+
+      // Restore valid default baseURL: genuine 401 on protected endpoint SHOULD trigger unauthorized listener
+      apiClient.defaults.baseURL = originalDefaultBaseURL;
+      await expect(rejectedHandler!(build401({ url: '/users/me' }))).rejects.toMatchObject({
+        statusCode: 401,
+      });
+      expect(unauthorizedSpy).toHaveBeenCalledTimes(1);
+
+      // Explicit same-origin valid baseURL + protected endpoint ALSO triggers unauthorized listener
+      await expect(
+        rejectedHandler!(
+          build401({ url: '/users/me', baseURL: 'http://localhost:8080/api/v1' })
+        )
+      ).rejects.toMatchObject({ statusCode: 401 });
+      expect(unauthorizedSpy).toHaveBeenCalledTimes(2);
+
+      unregister();
     });
   });
 });
