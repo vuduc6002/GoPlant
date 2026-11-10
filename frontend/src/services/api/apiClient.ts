@@ -7,14 +7,29 @@ declare module 'axios' {
   export interface AxiosRequestConfig {
     skipAuth?: boolean;
     isPublic?: boolean;
+    isTrustedUrl?: boolean;
   }
 }
+
+export interface ApiUrlClassification {
+  isTrusted: boolean;
+  isPublic: boolean;
+  normalizedRoute: string | null;
+  reason?:
+    | 'empty'
+    | 'malformed'
+    | 'protocol_relative'
+    | 'untrusted_scheme'
+    | 'untrusted_origin';
+}
+
+const PUBLIC_AUTH_ROUTES = new Set<string>(['/auth/login', '/auth/register']);
 
 type UnauthorizedListener = () => void;
 let unauthorizedListener: UnauthorizedListener | null = null;
 
 /**
- * Register a listener to be notified when a protected endpoint returns genuine HTTP 401.
+ * Register a listener to be notified when a protected, trusted endpoint returns genuine HTTP 401.
  * AuthProvider subscribes to this to handle session cleanup and navigation state transition.
  * Returns an unregister function.
  */
@@ -27,48 +42,216 @@ export function registerUnauthorizedHandler(handler: UnauthorizedListener): () =
   };
 }
 
-/**
- * Helper to identify public authentication endpoints that do not require JWT authorization.
- * Uses exact route matching after stripping base URL prefix, query string, and hash.
- * Only matches:
- *   - /auth/login
- *   - /auth/register
- * Does NOT match false positives like /auth/login-extra or /not-auth/login.
- */
-export function isPublicEndpoint(url?: string): boolean {
-  if (!url) return false;
-
-  // 1. Strip query string and fragment
-  const clean = url.split('?')[0].split('#')[0].trim();
-
-  // 2. Extract pathname if absolute URL
-  let pathname = clean;
-  try {
-    if (clean.startsWith('http://') || clean.startsWith('https://')) {
-      const parsed = new URL(clean);
-      pathname = parsed.pathname;
+function hasControlCharacters(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) {
+      return true;
     }
-  } catch {
-    // Keep clean as fallback
   }
+  return false;
+}
 
-  // 3. Normalize leading slash
+function parseHttpBaseUrl(baseUrl: string): URL | null {
+  try {
+    const parsed = new URL(baseUrl);
+    if (
+      (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+      parsed.hostname &&
+      parsed.origin &&
+      parsed.origin !== 'null'
+    ) {
+      return parsed;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeRouteFromPathname(pathname: string, trustedBasePathname: string): string {
   let normalized = pathname.startsWith('/') ? pathname : '/' + pathname;
 
-  // 4. Strip /api/v1 or /api prefix
-  if (normalized.startsWith('/api/v1/')) {
+  const cleanBasePath =
+    trustedBasePathname && trustedBasePathname !== '/'
+      ? trustedBasePathname.replace(/\/+$/, '')
+      : '';
+
+  if (cleanBasePath && normalized === cleanBasePath) {
+    normalized = '/';
+  } else if (cleanBasePath && normalized.startsWith(cleanBasePath + '/')) {
+    normalized = normalized.substring(cleanBasePath.length);
+  } else if (normalized.startsWith('/api/v1/')) {
     normalized = normalized.substring('/api/v1'.length);
+  } else if (normalized === '/api/v1') {
+    normalized = '/';
   } else if (normalized.startsWith('/api/')) {
     normalized = normalized.substring('/api'.length);
+  } else if (normalized === '/api') {
+    normalized = '/';
   }
 
-  // 5. Clean trailing slash
   if (normalized.length > 1 && normalized.endsWith('/')) {
     normalized = normalized.slice(0, -1);
   }
 
-  // 6. Exact match on public routes only
-  return normalized === '/auth/login' || normalized === '/auth/register';
+  return normalized;
+}
+
+/**
+ * Single source of truth for classifying API request URLs against the trusted backend origin (API_BASE_URL).
+ * Distinguishes:
+ * - Relative API paths (e.g. /auth/login, /api/v1/auth/login) -> trusted, classified by route
+ * - Absolute URLs with matching HTTP/HTTPS origin as API_BASE_URL -> trusted, classified by route
+ * - External origins, protocol-relative URLs (//evil.com), non-HTTP(S) schemes, or malformed URLs -> untrusted (rejected)
+ */
+export function classifyApiUrl(
+  url?: string,
+  trustedBaseUrl: string = API_BASE_URL
+): ApiUrlClassification {
+  if (typeof url !== 'string') {
+    return { isTrusted: false, isPublic: false, normalizedRoute: null, reason: 'empty' };
+  }
+
+  if (hasControlCharacters(url)) {
+    return { isTrusted: false, isPublic: false, normalizedRoute: null, reason: 'malformed' };
+  }
+
+  const trimmed = url.trim();
+  if (!trimmed) {
+    return { isTrusted: false, isPublic: false, normalizedRoute: null, reason: 'empty' };
+  }
+
+  // Explicitly block protocol-relative URLs (e.g. //evil.com/auth/login)
+  if (trimmed.startsWith('//')) {
+    return {
+      isTrusted: false,
+      isPublic: false,
+      normalizedRoute: null,
+      reason: 'protocol_relative',
+    };
+  }
+
+  const queryIdx = trimmed.indexOf('?');
+  const hashIdx = trimmed.indexOf('#');
+  const cutIdx =
+    queryIdx === -1 ? hashIdx : hashIdx === -1 ? queryIdx : Math.min(queryIdx, hashIdx);
+  const pathAndAuthorityPart = cutIdx === -1 ? trimmed : trimmed.slice(0, cutIdx);
+
+  if (!pathAndAuthorityPart) {
+    return { isTrusted: false, isPublic: false, normalizedRoute: null, reason: 'malformed' };
+  }
+
+  // Reject raw whitespace or backslashes inside scheme/authority/path
+  if (/[\s\\]/.test(pathAndAuthorityPart)) {
+    return { isTrusted: false, isPublic: false, normalizedRoute: null, reason: 'malformed' };
+  }
+
+  const trustedBase = parseHttpBaseUrl(trustedBaseUrl);
+  if (!trustedBase) {
+    return { isTrusted: false, isPublic: false, normalizedRoute: null, reason: 'malformed' };
+  }
+
+  // Case 1: Absolute http:// or https:// URL
+  if (/^https?:\/\//i.test(trimmed)) {
+    let parsed: URL;
+    try {
+      parsed = new URL(trimmed);
+    } catch {
+      return { isTrusted: false, isPublic: false, normalizedRoute: null, reason: 'malformed' };
+    }
+
+    if (
+      (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') ||
+      !parsed.hostname ||
+      !parsed.origin ||
+      parsed.origin === 'null'
+    ) {
+      return { isTrusted: false, isPublic: false, normalizedRoute: null, reason: 'malformed' };
+    }
+
+    if (parsed.username || parsed.password) {
+      return { isTrusted: false, isPublic: false, normalizedRoute: null, reason: 'malformed' };
+    }
+
+    if (parsed.origin !== trustedBase.origin) {
+      return {
+        isTrusted: false,
+        isPublic: false,
+        normalizedRoute: null,
+        reason: 'untrusted_origin',
+      };
+    }
+
+    const normalizedRoute = normalizeRouteFromPathname(parsed.pathname, trustedBase.pathname);
+    return {
+      isTrusted: true,
+      isPublic: PUBLIC_AUTH_ROUTES.has(normalizedRoute),
+      normalizedRoute,
+    };
+  }
+
+  // Case 2: Reject malformed protocols missing ':' (e.g. http//evil.com) or explicit non-HTTP(S) schemes / host:port
+  if (/^https?\/\//i.test(pathAndAuthorityPart)) {
+    return { isTrusted: false, isPublic: false, normalizedRoute: null, reason: 'malformed' };
+  }
+
+  if (pathAndAuthorityPart.includes('://') || /^[^/]*:/.test(pathAndAuthorityPart)) {
+    return {
+      isTrusted: false,
+      isPublic: false,
+      normalizedRoute: null,
+      reason: 'untrusted_scheme',
+    };
+  }
+
+  // Case 3: Relative path resolved safely against the trusted backend origin
+  const relativeWithLeadingSlash = trimmed.startsWith('/') ? trimmed : '/' + trimmed;
+  let resolved: URL;
+  try {
+    resolved = new URL(relativeWithLeadingSlash, trustedBase.origin);
+  } catch {
+    return { isTrusted: false, isPublic: false, normalizedRoute: null, reason: 'malformed' };
+  }
+
+  if (resolved.origin !== trustedBase.origin) {
+    return {
+      isTrusted: false,
+      isPublic: false,
+      normalizedRoute: null,
+      reason: 'untrusted_origin',
+    };
+  }
+
+  const normalizedRoute = normalizeRouteFromPathname(resolved.pathname, trustedBase.pathname);
+  return {
+    isTrusted: true,
+    isPublic: PUBLIC_AUTH_ROUTES.has(normalizedRoute),
+    normalizedRoute,
+  };
+}
+
+/**
+ * Returns true strictly when url is either a valid relative path or an absolute URL
+ * matching the configured backend origin (API_BASE_URL).
+ */
+export function isTrustedApiUrl(url?: string, trustedBaseUrl: string = API_BASE_URL): boolean {
+  return classifyApiUrl(url, trustedBaseUrl).isTrusted;
+}
+
+/**
+ * Returns true ONLY when url is trusted AND points to an allowed public auth route (/auth/login or /auth/register).
+ * External, protocol-relative, and malformed URLs ALWAYS return false.
+ */
+export function isPublicEndpoint(url?: string, trustedBaseUrl: string = API_BASE_URL): boolean {
+  const result = classifyApiUrl(url, trustedBaseUrl);
+  return result.isTrusted && result.isPublic;
+}
+
+function isSameTrustedOrigin(candidateBaseUrl: string, trustedBaseUrl: string): boolean {
+  const candidate = parseHttpBaseUrl(candidateBaseUrl);
+  const trusted = parseHttpBaseUrl(trustedBaseUrl);
+  return Boolean(candidate && trusted && candidate.origin === trusted.origin);
 }
 
 export const apiClient: AxiosInstance = axios.create({
@@ -80,15 +263,29 @@ export const apiClient: AxiosInstance = axios.create({
   },
 });
 
-// Request Interceptor: Inject JWT token on protected endpoints, abort on storage error
+// Request Interceptor: Enforce trusted API origin before reading storage or attaching JWT
 apiClient.interceptors.request.use(
   async (config: InternalAxiosRequestConfig) => {
-    const isPublic =
-      isPublicEndpoint(config.url) ||
-      ((config as unknown) as Record<string, unknown>).skipAuth === true;
+    const reqMeta = (config as unknown) as Record<string, unknown>;
+    const isBaseTrusted = !config.baseURL || isSameTrustedOrigin(config.baseURL, API_BASE_URL);
+    const inspection = classifyApiUrl(config.url, API_BASE_URL);
 
-    // Persist authentication metadata onto config so Response Interceptor reuses exact decision
-    ((config as unknown) as Record<string, unknown>).isPublic = isPublic;
+    if (!isBaseTrusted || !inspection.isTrusted) {
+      reqMeta.isTrustedUrl = false;
+      reqMeta.isPublic = false;
+      return Promise.reject(
+        new AppApiError({
+          message: 'Địa chỉ API không hợp lệ hoặc không thuộc máy chủ tin cậy.',
+          code: 'UNTRUSTED_API_URL',
+        })
+      );
+    }
+
+    const isPublic = inspection.isPublic || reqMeta.skipAuth === true;
+
+    // Persist trust & auth metadata onto config so Response Interceptor shares the exact decision
+    reqMeta.isTrustedUrl = true;
+    reqMeta.isPublic = isPublic;
 
     // Public endpoints do not require token inspection
     if (isPublic) {
@@ -135,15 +332,20 @@ apiClient.interceptors.response.use(
   async (error) => {
     const normalizedError = normalizeApiError(error);
 
-    // Handle genuine HTTP 401 Unauthorized from backend on protected routes
+    // Handle genuine HTTP 401 Unauthorized only for trusted, protected backend endpoints
     if (normalizedError.statusCode === 401) {
       const reqConfig = error?.config as (Record<string, unknown> | undefined);
-      const isAuthSkipped = reqConfig?.isPublic === true || reqConfig?.skipAuth === true;
-      const requestUrl = error?.config?.url || '';
-      const isAuthEndpoint = isAuthSkipped || isPublicEndpoint(requestUrl);
+      const requestUrl = typeof reqConfig?.url === 'string' ? reqConfig.url : undefined;
+      const requestBaseUrl = typeof reqConfig?.baseURL === 'string' ? reqConfig.baseURL : undefined;
 
-      // Only notify AuthProvider if this is a genuine 401 from a protected API call
-      if (!isAuthEndpoint && unauthorizedListener) {
+      const isBaseTrusted = !requestBaseUrl || isSameTrustedOrigin(requestBaseUrl, API_BASE_URL);
+      const inspection = classifyApiUrl(requestUrl, API_BASE_URL);
+      const isTrusted =
+        isBaseTrusted && reqConfig?.isTrustedUrl !== false && inspection.isTrusted;
+      const isAuthSkipped =
+        reqConfig?.isPublic === true || reqConfig?.skipAuth === true || inspection.isPublic;
+
+      if (isTrusted && !isAuthSkipped && unauthorizedListener) {
         unauthorizedListener();
       }
     }

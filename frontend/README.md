@@ -6,12 +6,13 @@ GoPlant là ứng dụng di động hỗ trợ người dùng khám phá và s�
 
 Mã nguồn Frontend được xây dựng trên nền tảng **React Native 0.86 + Expo SDK 57**, sử dụng **Expo Router** để định tuyến theo cấu trúc file và **TypeScript Strict Mode**.
 
-Sau các lượt nâng cấp **G5.2.1**, **G5.2.1.1** và **G5.2.1.1.2**, ứng dụng đã hoàn thiện nền tảng kết nối Backend REST API và bảo mật phiên:
-- **API Client**: Axios Client tập trung với bộ chuẩn hóa lỗi `AppApiError`, phân định rõ ràng giữa lỗi local (storage, unauthenticated) và lỗi backend (401, 403, 400, 5xx, timeout, network error).
-- **Phân loại endpoint chuẩn xác**: Cơ chế so khớp route chính xác cho các endpoint công khai (`/auth/login`, `/auth/register`) và hỗ trợ cờ `skipAuth: true` xuyên suốt cả Request và Response Interceptor.
+Sau các lượt nâng cấp **G5.2.1**, **G5.2.1.1**, **G5.2.1.1.2** và **G5.2.1.1.3**, ứng dụng đã hoàn thiện nền tảng kết nối Backend REST API và bảo mật phiên:
+- **API Client & Trusted Origin Boundary**: Axios Client tập trung với kiểm soát ranh giới nguồn tin cậy (`API_BASE_URL`), từ chối URL thuộc origin bên ngoài, URL protocol-relative (`//...`) và URL sai định dạng trước khi đọc SecureStore hoặc gửi JWT ra mạng; chuẩn hóa lỗi `AppApiError`, phân định rõ ràng giữa lỗi local (storage, unauthenticated, untrusted URL) và lỗi backend (401, 403, 400, 5xx, timeout, network error).
+- **Phân loại endpoint chuẩn xác**: Cơ chế phân loại thống nhất cho relative path và absolute URL cùng backend origin; endpoint công khai (`/auth/login`, `/auth/register`) và cờ `skipAuth: true` được lưu giữ xuyên suốt cả Request và Response Interceptor; 401 từ nguồn ngoài hoặc public route tuyệt đối không kích hoạt đăng xuất.
 - **Xác thực thật**: Tích hợp các API `POST /api/v1/auth/login`, `POST /api/v1/auth/register`, `GET /api/v1/users/me`. Hệ thống Mock Auth đã được loại bỏ hoàn toàn.
 - **Bảo mật phiên đăng nhập (Storage Hardening & Recovery)**:
-  - Sử dụng `expo-secure-store` với cơ chế bảo vệ do nền tảng cung cấp (Android Keystore / iOS Keychain khi khả dụng).
+  - Sử dụng `expo-secure-store` với cơ chế bảo vệ dữ liệu do nền tảng hệ điều hành cung cấp (Android Keystore / iOS Keychain tùy hỗ trợ thiết bị).
+  - Kiểm định chặt schema `AuthSession`: `accessToken`, `tokenType`, `savedAt` (số dương hữu hạn), `expiresIn` (tùy chọn `number`, không chấp nhận `null`), `user.id` (`string`), `user.fullName`, `user.roles` (mảng chuỗi không rỗng), `user.email` (`string | null`, bắt buộc tồn tại trường `email`; không có `refreshToken` hay `username`).
   - Phân loại lỗi `StorageError`: `STORAGE_UNAVAILABLE`, `READ_FAILED`, `WRITE_FAILED`, `DELETE_FAILED`.
   - Phân tách cơ chế xử lý và Retry độc lập:
     - Khi lỗi đọc (`READ_FAILED`): chuyển trạng thái `storage-error`, giữ nguyên dữ liệu, hiển thị nút **Thử đọc lại** (`retryLoadSession`).
@@ -19,7 +20,7 @@ Sau các lượt nâng cấp **G5.2.1**, **G5.2.1.1** và **G5.2.1.1.2**, ứng 
 - **An toàn Request API**: Request Interceptor tự động ngăn chặn việc gửi request được bảo vệ khi SecureStore gặp lỗi đọc, không kích hoạt logout 401 giả.
 - **Loại bỏ trùng lặp Request Profile**: React Query đóng vai trò nguồn dữ liệu duy nhất cho `GET /api/v1/users/me`, loại bỏ hoàn toàn tình trạng gọi 2 request profile song song khi đăng nhập.
 - **Quản lý Server State**: Tích hợp **TanStack React Query v5** quản lý cache hồ sơ người dùng (`staleTime: 2 phút` theo `queryClient.ts`), phân lập cache chống rò rỉ dữ liệu giữa các tài khoản, và chính sách retry nghiêm ngặt (chỉ retry network/timeout/5xx tối đa 2 lần).
-- **Kiểm thử tự động toàn diện**: Bộ kiểm thử Vitest với **70 bài test** bao phủ toàn bộ các tình huống lưu trữ, request interceptor, retry policy, single profile query và auth flow.
+- **Kiểm thử tự động toàn diện**: Bộ kiểm thử **Vitest** với **79 bài test** trên 4 file kiểm thử bao phủ lưu trữ phiên & schema, trusted origin & interceptor, chuẩn hóa lỗi & retry policy, và auth flow.
 
 Các phân hệ nghiệp vụ tiếp theo (Loài cây, Khu vườn, Cây trồng, Lịch chăm sóc, Nhật ký) hiện tại vẫn giữ giao diện xem trước và sẽ lần lượt được tích hợp REST API từ Giai đoạn G5.3+.
 
@@ -44,7 +45,7 @@ Các phân hệ nghiệp vụ tiếp theo (Loài cây, Khu vườn, Cây trồng
 
 ## 3. Giao diện và trạng thái tích hợp
 
-| Khu vực | Trạng thái tích hợp G5.2.1.1.2 |
+| Khu vực | Trạng thái tích hợp G5.2.1.1.3 |
 |---|---|
 | **Chào mừng** | Giao diện giới thiệu tính năng, điều hướng sang Đăng ký hoặc Đăng nhập. |
 | **Đăng nhập** | **Đã kết nối API thật** (`POST /api/v1/auth/login`) qua `useLoginMutation()`. Kiểm tra tài khoản, hiển thị lỗi 401/mạng, lưu JWT an toàn và điều hướng sang Trang chủ. |
@@ -63,18 +64,25 @@ Các phân hệ nghiệp vụ tiếp theo (Loài cây, Khu vườn, Cây trồng
 
 ## 4. Kiến trúc Xác thực, Bảo mật JWT và Quản lý Cache
 
-### 4.1. Quản lý JWT và Giới hạn Web Storage
-- **Android / iOS (Thiết bị chính)**: Sử dụng `expo-secure-store` lưu trữ chuỗi mã hóa phiên dựa trên cơ chế bảo vệ do nền tảng cung cấp (Android Keystore / iOS Keychain khi khả dụng).
+### 4.1. Quản lý JWT, Schema AuthSession và Giới hạn Web Storage
+- **Android / iOS (Thiết bị chính)**: Sử dụng `expo-secure-store` lưu trữ chuỗi phiên dựa trên cơ chế bảo vệ do nền tảng hệ điều hành cung cấp (Android Keystore / iOS Keychain tùy theo khả năng hỗ trợ của thiết bị).
+  - Hợp đồng dữ liệu `AuthSession`:
+    - `accessToken` (`string` không rỗng), `tokenType` (`string` không rỗng), `savedAt` (`number` dương hữu hạn), `expiresIn` (optional `number` dương hữu hạn; `undefined` hợp lệ, `null` bị từ chối).
+    - `user` (`AuthUserSummary`): `id` (`string` không rỗng), `fullName` (`string` không rỗng), `email` (`string | null`, bắt buộc tồn tại thuộc tính để đồng bộ contract và hỗ trợ tài khoản SĐT có `email: null`), `roles` (mảng `string` không rỗng). Không sử dụng `refreshToken` hay `username` trong contract hiện tại.
   - Phân loại lỗi `StorageError`: `STORAGE_UNAVAILABLE`, `READ_FAILED`, `WRITE_FAILED`, `DELETE_FAILED`.
-  - Phân biệt rõ lỗi dữ liệu JSON hỏng (tự dọn dẹp) với lỗi I/O phần cứng (giữ nguyên dữ liệu, chuyển trạng thái `storage-error` và cung cấp nút Thử đọc lại).
+  - Phân biệt rõ lỗi dữ liệu JSON/schema hỏng (tự dọn dẹp) với lỗi I/O từ lớp lưu trữ nền tảng (giữ nguyên dữ liệu, chuyển trạng thái `storage-error` và cung cấp nút Thử đọc lại).
   - Lỗi khi xóa session (`DELETE_FAILED`): chuyển trạng thái `storage-cleanup-error`, xóa bộ nhớ đệm và cung cấp nút Thử xóa lại, ngăn chặn việc báo đăng xuất thành công khi session vẫn còn trên máy.
 - **Nền tảng Web**: Để ngăn chặn hoàn toàn rủi ro tấn công XSS đánh cắp JWT lâu dài, ứng dụng **tuyệt đối không sử dụng `window.localStorage` hoặc `sessionStorage`** để lưu Access Token. Trên môi trường Web, phiên được lưu tạm thời trong RAM (in-memory) phục vụ mục đích kiểm thử/demo và sẽ tự giải phóng khi tải lại trang hoặc đóng tab.
 
-### 4.2. An toàn Request Interceptor và Metadata
-- Endpoint công khai (`/auth/login`, `/auth/register`) được phân loại bằng phương pháp so khớp đường dẫn chính xác (bỏ qua query string và hash, chuẩn hóa prefix `/api/v1`).
-- Endpoint có cờ `skipAuth: true` được lưu metadata xuyên suốt, ngăn chặn Response Interceptor phát tín hiệu 401 đăng xuất nhầm.
-- Endpoint được bảo vệ: nếu SecureStore gặp lỗi đọc, request bị hủy ngay lập tức, không gửi request ra mạng và không phát sinh sự kiện logout 401 giả.
-- Chỉ khi nhận mã HTTP 401 thật từ máy chủ backend trên endpoint thực sự yêu cầu bảo vệ thì hệ thống mới kích hoạt luồng tự động đăng xuất.
+### 4.2. Ranh giới tin cậy URL (Trusted Origin) & An toàn Request Interceptor
+- **Kiểm soát Trusted Origin**: Mọi request đi qua `apiClient` đều được kiểm định thông qua một nguồn logic thống nhất dựa trên origin của `API_BASE_URL`:
+  - Chấp nhận relative path hợp lệ (như `/auth/login`, `/api/v1/auth/login`, `/users/me`) và absolute URL có cùng scheme, host, port với `API_BASE_URL`.
+  - Từ chối ngay lập tức (`UNTRUSTED_API_URL`) trước khi đọc SecureStore hay gọi mạng đối với mọi URL trỏ sang origin bên ngoài (`https://evil.com/...`), URL protocol-relative (`//evil.com/...`), scheme không phải HTTP/HTTPS (`javascript:`, `ftp://`), hoặc URL sai định dạng.
+- **Phân loại Endpoint công khai & `skipAuth`**: Chỉ cho phép bỏ qua JWT với endpoint tin cậy khớp chính xác `/auth/login`, `/auth/register` (sau chuẩn hóa prefix `/api/v1`, bỏ query/hash và dot-segments) hoặc request có cờ `skipAuth: true`.
+- **Bảo vệ chống rò rỉ & chống 401 giả**:
+  - Endpoint ngoài origin không bao giờ gọi `getAccessToken()` hay gắn `Authorization` header.
+  - Endpoint được bảo vệ: nếu SecureStore gặp lỗi đọc, request bị hủy ngay lập tức, không gửi request ra mạng và không phát sinh sự kiện logout 401 giả.
+  - Chỉ khi nhận mã HTTP 401 thật từ máy chủ backend tin cậy trên endpoint yêu cầu bảo vệ thì hệ thống mới kích hoạt luồng tự động đăng xuất; 401 từ public route hoặc external origin tuyệt đối không kích hoạt logout.
 
 ### 4.3. Loại bỏ trùng lặp Request Profile & Cách ly Cache
 - **Loại bỏ request GET `/users/me` trùng**: Khi đăng nhập, hồ sơ được nạp và quản lý độc quyền qua React Query cache (`queryKeys.user.me`), không gọi API trực tiếp song song.
@@ -105,8 +113,8 @@ frontend/
 │   │   ├── api/                 # apiClient, apiConfig, apiError, apiTypes, tokenStorage
 │   │   └── query/               # queryClient, queryKeys
 │   ├── __tests__/               # Automated Test Suite (Vitest)
-│   │   ├── tokenStorage.test.ts # Kiểm thử lưu trữ an toàn & phân loại lỗi (29 tests)
-│   │   ├── apiClient.test.ts    # Kiểm thử request interceptor, route match & HTTP 401 (14 tests)
+│   │   ├── tokenStorage.test.ts # Kiểm thử lưu trữ an toàn, AuthSession schema & phân loại lỗi (31 tests)
+│   │   ├── apiClient.test.ts    # Kiểm thử trusted origin, request interceptor, route match & HTTP 401 (21 tests)
 │   │   ├── apiErrorAndRetry.test.ts # Kiểm thử chuẩn hóa lỗi & chính sách retry (15 tests)
 │   │   ├── authFlow.test.tsx    # Kiểm thử khôi phục session, cleanup error, retry, login, logout (12 tests)
 │   │   └── setup.ts             # Cấu hình môi trường mock cho Vitest
@@ -158,7 +166,7 @@ npm.cmd run typecheck
 # 3. Phân tích mã nguồn với ESLint (0 errors)
 npm.cmd run lint
 
-# 4. Chạy toàn bộ kiểm thử tự động với Vitest (70/70 PASS)
+# 4. Chạy toàn bộ kiểm thử tự động với Vitest (79/79 PASS)
 npm.cmd test
 
 # 5. Xác minh cấu hình Expo hợp lệ
@@ -179,7 +187,7 @@ cd E:\GoPlant
 - [x] Tích hợp TanStack React Query v5 với cơ chế cách ly cache và retry nghiêm ngặt.
 - [x] Kết nối API Xác thực thật: Đăng ký, Đăng nhập, Lấy hồ sơ cá nhân, Đăng xuất, Route Guard.
 - [x] Cấu hình ESLint v9 và hoàn thành kiểm tra chất lượng không lỗi.
-- [x] **G5.2.1.1 & G5.2.1.1.2**: Hoàn thiện phân loại lỗi lưu trữ, khôi phục session an toàn, xử lý lỗi xóa token (`storage-cleanup-error`), loại bỏ request `/users/me` trùng lặp, ổn định test Maven CI và phủ 70 tests frontend.
+- [x] **G5.2.1.1 – G5.2.1.1.3**: Hoàn thiện phân loại lỗi lưu trữ, khôi phục session an toàn, xử lý lỗi xóa token (`storage-cleanup-error`), loại bỏ request `/users/me` trùng lặp, siết chặt Trusted API Origin & `AuthSession` schema, ổn định test Maven CI và phủ 79 tests Vitest frontend.
 - [ ] **G5.3**: Tích hợp Backend REST API cho Loài cây (Species, Favorites) và Khu vườn (Gardens).
 - [ ] **G5.4**: Tích hợp Backend REST API cho Cây trồng (User Plants), Lịch chăm sóc (Schedules) và Nhật ký sinh trưởng (Growth Journals).
 - [ ] **G5.5**: Tích hợp các tính năng nâng cao (Chẩn đoán AI, Camera, Thông báo nhắc nhở).

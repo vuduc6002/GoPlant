@@ -1,73 +1,196 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   apiClient,
   registerUnauthorizedHandler,
   isPublicEndpoint,
+  isTrustedApiUrl,
+  classifyApiUrl,
 } from '../services/api/apiClient';
 import * as tokenStorage from '../services/api/tokenStorage';
 import { StorageError } from '../services/api/tokenStorage';
 import { AppApiError } from '../services/api/apiError';
 
 describe('apiClient & Authentication Interceptors', () => {
+  const originalAdapter = apiClient.defaults.adapter;
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  describe('isPublicEndpoint (Exact Route Matching)', () => {
-    it('identifies /auth/login and /auth/register as public', () => {
+  afterEach(() => {
+    apiClient.defaults.adapter = originalAdapter;
+  });
+
+  describe('URL Trust Boundary & Route Classification (isTrustedApiUrl / isPublicEndpoint)', () => {
+    it('identifies relative public routes /auth/login and /auth/register as trusted and public', () => {
+      expect(isTrustedApiUrl('/auth/login')).toBe(true);
       expect(isPublicEndpoint('/auth/login')).toBe(true);
+
+      expect(isTrustedApiUrl('/auth/register')).toBe(true);
       expect(isPublicEndpoint('/auth/register')).toBe(true);
+
       expect(isPublicEndpoint('/auth/login/')).toBe(true);
       expect(isPublicEndpoint('/auth/register/')).toBe(true);
-    });
-
-    it('identifies /api/v1 prefix and full URLs as public', () => {
       expect(isPublicEndpoint('/api/v1/auth/login')).toBe(true);
       expect(isPublicEndpoint('/api/v1/auth/register')).toBe(true);
+    });
+
+    it('accepts absolute same-origin public URLs matching backend origin (localhost:8080)', () => {
+      expect(isTrustedApiUrl('http://localhost:8080/api/v1/auth/login')).toBe(true);
       expect(isPublicEndpoint('http://localhost:8080/api/v1/auth/login')).toBe(true);
+
+      expect(isTrustedApiUrl('http://localhost:8080/api/v1/auth/register')).toBe(true);
       expect(isPublicEndpoint('http://localhost:8080/api/v1/auth/register')).toBe(true);
-      expect(isPublicEndpoint('https://api.goplant.vn/api/v1/auth/login?source=mobile')).toBe(true);
+
+      expect(isPublicEndpoint('http://localhost:8080/api/v1/auth/login?source=mobile')).toBe(true);
+
+      // Custom configured backend origin works cleanly when API_BASE_URL matches that origin
+      const customBase = 'https://api.goplant.vn/api/v1';
+      expect(
+        isTrustedApiUrl('https://api.goplant.vn/api/v1/auth/login?source=mobile', customBase)
+      ).toBe(true);
+      expect(
+        isPublicEndpoint('https://api.goplant.vn/api/v1/auth/login?source=mobile', customBase)
+      ).toBe(true);
     });
 
-    it('rejects false-positive substrings like /auth/login-extra or /not-auth/login', () => {
+    it('classifies same-origin protected routes and non-matching routes as trusted but protected (non-public)', () => {
+      expect(isTrustedApiUrl('http://localhost:8080/api/v1/users/me')).toBe(true);
+      expect(isPublicEndpoint('http://localhost:8080/api/v1/users/me')).toBe(false);
+
+      expect(isTrustedApiUrl('http://localhost:8080/api/v1/plants')).toBe(true);
+      expect(isPublicEndpoint('http://localhost:8080/api/v1/plants')).toBe(false);
+
+      expect(isTrustedApiUrl('/users/me')).toBe(true);
+      expect(isPublicEndpoint('/users/me')).toBe(false);
+
+      expect(isTrustedApiUrl('/auth/login-extra')).toBe(true);
       expect(isPublicEndpoint('/auth/login-extra')).toBe(false);
+
+      expect(isTrustedApiUrl('/api/v1/auth/login-extra')).toBe(true);
       expect(isPublicEndpoint('/api/v1/auth/login-extra')).toBe(false);
+
+      expect(isTrustedApiUrl('/not-auth/login')).toBe(true);
       expect(isPublicEndpoint('/not-auth/login')).toBe(false);
+
+      expect(isTrustedApiUrl('/api/v1/auth/register-partner')).toBe(true);
       expect(isPublicEndpoint('/api/v1/auth/register-partner')).toBe(false);
+
+      // Dot-segment normalization prevents path traversal from fooling route match
+      expect(isTrustedApiUrl('/auth/login/../users/me')).toBe(true);
+      expect(isPublicEndpoint('/auth/login/../users/me')).toBe(false);
     });
 
-    it('rejects URLs where public route is only in query string', () => {
+    it('rejects URLs where public route appears only in query string as protected', () => {
+      expect(isTrustedApiUrl('/plants?redirect=/auth/login')).toBe(true);
       expect(isPublicEndpoint('/plants?redirect=/auth/login')).toBe(false);
       expect(isPublicEndpoint('/users/me?ref=/auth/register')).toBe(false);
     });
 
-    it('identifies protected routes as non-public', () => {
-      expect(isPublicEndpoint('/users/me')).toBe(false);
-      expect(isPublicEndpoint('/plants')).toBe(false);
-      expect(isPublicEndpoint('/tasks/today')).toBe(false);
-      expect(isPublicEndpoint(undefined)).toBe(false);
-      expect(isPublicEndpoint('')).toBe(false);
+    it('rejects external origin URLs completely (neither trusted nor public)', () => {
+      expect(isTrustedApiUrl('https://evil.com/auth/login')).toBe(false);
+      expect(isPublicEndpoint('https://evil.com/auth/login')).toBe(false);
+
+      expect(isTrustedApiUrl('https://evil.com/api/v1/auth/register')).toBe(false);
+      expect(isPublicEndpoint('https://evil.com/api/v1/auth/register')).toBe(false);
+
+      expect(isTrustedApiUrl('https://evil.com/users/me')).toBe(false);
+      expect(isTrustedApiUrl('https://api.goplant.vn/api/v1/auth/login')).toBe(false);
+
+      // Scheme or port mismatch against http://localhost:8080 must also fail origin check
+      expect(isTrustedApiUrl('http://localhost:9090/auth/login')).toBe(false);
+      expect(isTrustedApiUrl('https://localhost:8080/auth/login')).toBe(false);
+    });
+
+    it('rejects protocol-relative URLs safely', () => {
+      expect(classifyApiUrl('//evil.com/auth/login').reason).toBe('protocol_relative');
+      expect(isTrustedApiUrl('//evil.com/auth/login')).toBe(false);
+      expect(isPublicEndpoint('//evil.com/auth/login')).toBe(false);
+
+      expect(isTrustedApiUrl('///evil.com/auth/login')).toBe(false);
+      expect(isTrustedApiUrl('//localhost:8080/auth/login')).toBe(false);
+    });
+
+    it('rejects malformed URLs and dangerous schemes safely', () => {
+      const invalidInputs: (string | undefined)[] = [
+        undefined,
+        '',
+        '   ',
+        '?redirect=/auth/login',
+        '#hash',
+        'http://',
+        'https://',
+        'http://local host/auth/login',
+        'http://user:pass@localhost:8080/auth/login',
+        'http:evil.com/auth/login',
+        'http//evil.com/auth/login',
+        'javascript:alert(1)',
+        'ftp://localhost:8080/auth/login',
+        'localhost:8080/auth/login',
+        '/\\evil.com/auth/login',
+        '\\evil.com/auth/login',
+        '/auth\n/login',
+      ];
+
+      for (const badUrl of invalidInputs) {
+        expect(isTrustedApiUrl(badUrl)).toBe(false);
+        expect(isPublicEndpoint(badUrl)).toBe(false);
+      }
     });
   });
 
-  describe('Request Interceptor', () => {
-    it('does not attempt to read access token for public login/register endpoints', async () => {
-      const getAccessTokenSpy = vi.spyOn(tokenStorage, 'getAccessToken');
+  describe('Request Interceptor (Trusted Boundary & Token Injection)', () => {
+    it('does not read access token for relative /auth/login and preserves baseURL prefix /api/v1', async () => {
+      const getAccessTokenSpy = vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue('existing-jwt');
 
-      const mockAdapter = vi.fn().mockResolvedValue({
-        status: 200,
-        data: { success: true, data: { accessToken: 'new-token' } },
-        headers: {},
-        config: {},
+      let capturedConfig: Record<string, unknown> | undefined;
+      const mockAdapter = vi.fn().mockImplementation((config) => {
+        capturedConfig = config as unknown as Record<string, unknown>;
+        return Promise.resolve({
+          status: 200,
+          data: { success: true, data: { accessToken: 'new-token' } },
+          headers: {},
+          config,
+        });
       });
       apiClient.defaults.adapter = mockAdapter;
 
       await apiClient.post('/auth/login', { account: 'test', password: '123' });
 
       expect(getAccessTokenSpy).not.toHaveBeenCalled();
+      expect(mockAdapter).toHaveBeenCalledTimes(1);
+      expect(capturedConfig?.baseURL).toBe('http://localhost:8080/api/v1');
+      expect(capturedConfig?.url).toBe('/auth/login');
+      const headers = capturedConfig?.headers as Record<string, unknown> | undefined;
+      expect(headers?.Authorization).toBeUndefined();
     });
 
-    it('does not attempt to read token when skipAuth is explicitly set to true', async () => {
+    it('does not read stale token for same-origin absolute login/register endpoints', async () => {
+      const getAccessTokenSpy = vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue('stale-jwt');
+
+      const mockAdapter = vi.fn().mockResolvedValue({
+        status: 200,
+        data: { success: true, data: { accessToken: 'fresh-token' } },
+        headers: {},
+        config: {},
+      });
+      apiClient.defaults.adapter = mockAdapter;
+
+      await apiClient.post('http://localhost:8080/api/v1/auth/login', {
+        account: 'test',
+        password: '123',
+      });
+      await apiClient.post('http://localhost:8080/api/v1/auth/register', {
+        fullName: 'Test User',
+        account: 'test@example.com',
+        password: 'Password123@',
+      });
+
+      expect(getAccessTokenSpy).not.toHaveBeenCalled();
+      expect(mockAdapter).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not attempt to read token when skipAuth is explicitly set to true on a trusted route', async () => {
       const getAccessTokenSpy = vi.spyOn(tokenStorage, 'getAccessToken');
 
       const mockAdapter = vi.fn().mockResolvedValue({
@@ -81,14 +204,15 @@ describe('apiClient & Authentication Interceptors', () => {
       await apiClient.get('/system/health', { skipAuth: true });
 
       expect(getAccessTokenSpy).not.toHaveBeenCalled();
+      expect(mockAdapter).toHaveBeenCalledTimes(1);
     });
 
-    it('attaches Authorization header for protected endpoint when token exists', async () => {
+    it('attaches Authorization header for trusted protected routes (relative, false-positive names, and same-origin absolute)', async () => {
       vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue('valid-jwt-token-999');
 
-      let capturedHeaders: Record<string, string> | undefined;
+      const capturedAuthHeaders: (string | undefined)[] = [];
       const mockAdapter = vi.fn().mockImplementation((config) => {
-        capturedHeaders = config.headers;
+        capturedAuthHeaders.push(config.headers?.Authorization as string | undefined);
         return Promise.resolve({
           status: 200,
           data: { success: true, data: { id: 'usr_001' } },
@@ -99,8 +223,99 @@ describe('apiClient & Authentication Interceptors', () => {
       apiClient.defaults.adapter = mockAdapter;
 
       await apiClient.get('/users/me');
+      await apiClient.get('http://localhost:8080/api/v1/users/me');
+      await apiClient.get('/auth/login-extra');
+      await apiClient.get('/not-auth/login');
 
-      expect(capturedHeaders?.Authorization).toBe('Bearer valid-jwt-token-999');
+      expect(mockAdapter).toHaveBeenCalledTimes(4);
+      expect(capturedAuthHeaders).toEqual([
+        'Bearer valid-jwt-token-999',
+        'Bearer valid-jwt-token-999',
+        'Bearer valid-jwt-token-999',
+        'Bearer valid-jwt-token-999',
+      ]);
+    });
+
+    it('blocks external origin requests BEFORE reading SecureStore, attaching JWT, or calling network', async () => {
+      const getAccessTokenSpy = vi
+        .spyOn(tokenStorage, 'getAccessToken')
+        .mockResolvedValue('super-secret-jwt');
+
+      const mockAdapter = vi.fn();
+      apiClient.defaults.adapter = mockAdapter;
+
+      const unauthorizedSpy = vi.fn();
+      const unregister = registerUnauthorizedHandler(unauthorizedSpy);
+
+      const externalUrls = [
+        'https://evil.com/auth/login',
+        'https://evil.com/api/v1/auth/register',
+        'https://evil.com/users/me',
+      ];
+
+      for (const externalUrl of externalUrls) {
+        let caughtError: AppApiError | null = null;
+        try {
+          await apiClient.get(externalUrl);
+        } catch (err) {
+          caughtError = err as AppApiError;
+        }
+
+        expect(caughtError).toBeInstanceOf(AppApiError);
+        expect(caughtError?.code).toBe('UNTRUSTED_API_URL');
+      }
+
+      // External request with skipAuth: true must also be blocked
+      await expect(
+        apiClient.get('https://evil.com/auth/login', { skipAuth: true })
+      ).rejects.toMatchObject({ code: 'UNTRUSTED_API_URL' });
+
+      expect(getAccessTokenSpy).not.toHaveBeenCalled();
+      expect(mockAdapter).not.toHaveBeenCalled();
+      expect(unauthorizedSpy).not.toHaveBeenCalled();
+      unregister();
+    });
+
+    it('blocks protocol-relative URLs (//evil.com/...) and malformed URLs BEFORE reading token or calling network', async () => {
+      const getAccessTokenSpy = vi
+        .spyOn(tokenStorage, 'getAccessToken')
+        .mockResolvedValue('super-secret-jwt');
+
+      const mockAdapter = vi.fn();
+      apiClient.defaults.adapter = mockAdapter;
+
+      const dangerousUrls = [
+        '//evil.com/auth/login',
+        '//evil.com/users/me',
+        'http://',
+        'javascript:alert(1)',
+        'http:evil.com/auth/login',
+        '',
+      ];
+
+      for (const badUrl of dangerousUrls) {
+        await expect(apiClient.get(badUrl)).rejects.toMatchObject({
+          code: 'UNTRUSTED_API_URL',
+        });
+      }
+
+      expect(getAccessTokenSpy).not.toHaveBeenCalled();
+      expect(mockAdapter).not.toHaveBeenCalled();
+    });
+
+    it('blocks per-request untrusted baseURL override before token read or network call', async () => {
+      const getAccessTokenSpy = vi
+        .spyOn(tokenStorage, 'getAccessToken')
+        .mockResolvedValue('super-secret-jwt');
+      const mockAdapter = vi.fn();
+      apiClient.defaults.adapter = mockAdapter;
+
+      await expect(
+        apiClient.get('/users/me', { baseURL: 'https://evil.com/api/v1' })
+      ).rejects.toMatchObject({ code: 'UNTRUSTED_API_URL' });
+
+      expect(getAccessTokenSpy).not.toHaveBeenCalled();
+      expect(mockAdapter).not.toHaveBeenCalled();
     });
 
     it('halts protected request and throws StorageError when reading token fails, without sending HTTP request', async () => {
@@ -116,7 +331,7 @@ describe('apiClient & Authentication Interceptors', () => {
       apiClient.defaults.adapter = mockAdapter;
 
       const unauthorizedSpy = vi.fn();
-      registerUnauthorizedHandler(unauthorizedSpy);
+      const unregister = registerUnauthorizedHandler(unauthorizedSpy);
 
       await expect(apiClient.get('/users/me')).rejects.toThrow(AppApiError);
 
@@ -125,6 +340,7 @@ describe('apiClient & Authentication Interceptors', () => {
 
       // Verify StorageError did NOT trigger unauthorized listener (no fake 401)
       expect(unauthorizedSpy).not.toHaveBeenCalled();
+      unregister();
     });
 
     it('halts protected request with UNAUTHENTICATED error when token is null', async () => {
@@ -134,7 +350,7 @@ describe('apiClient & Authentication Interceptors', () => {
       apiClient.defaults.adapter = mockAdapter;
 
       const unauthorizedSpy = vi.fn();
-      registerUnauthorizedHandler(unauthorizedSpy);
+      const unregister = registerUnauthorizedHandler(unauthorizedSpy);
 
       let caughtError: AppApiError | null = null;
       try {
@@ -152,6 +368,7 @@ describe('apiClient & Authentication Interceptors', () => {
 
       // Unauthorized listener was not triggered
       expect(unauthorizedSpy).not.toHaveBeenCalled();
+      unregister();
     });
   });
 
@@ -228,6 +445,45 @@ describe('apiClient & Authentication Interceptors', () => {
       ).rejects.toThrow(AppApiError);
 
       expect(unauthorizedSpy).not.toHaveBeenCalled();
+      unregister();
+    });
+
+    it('never triggers unauthorized listener if an external or protocol-relative 401 reaches response interceptor', async () => {
+      const unauthorizedSpy = vi.fn();
+      const unregister = registerUnauthorizedHandler(unauthorizedSpy);
+
+      const responseHandlers = (
+        apiClient.interceptors.response as unknown as {
+          handlers: { rejected?: (error: unknown) => Promise<unknown> }[];
+        }
+      ).handlers;
+      const rejectedHandler = responseHandlers[0]?.rejected;
+      expect(rejectedHandler).toBeDefined();
+
+      const external401 = {
+        isAxiosError: true,
+        response: {
+          status: 401,
+          data: {
+            success: false,
+            error: { code: 'UNAUTHORIZED', message: 'External 401' },
+          },
+        },
+        config: { url: 'https://evil.com/users/me' },
+      };
+
+      await expect(rejectedHandler!(external401)).rejects.toBeInstanceOf(AppApiError);
+      expect(unauthorizedSpy).not.toHaveBeenCalled();
+
+      const protocolRelative401 = {
+        isAxiosError: true,
+        response: { status: 401 },
+        config: { url: '//evil.com/users/me' },
+      };
+
+      await expect(rejectedHandler!(protocolRelative401)).rejects.toBeInstanceOf(AppApiError);
+      expect(unauthorizedSpy).not.toHaveBeenCalled();
+
       unregister();
     });
 

@@ -57,20 +57,27 @@ describe('tokenStorage', () => {
   });
 
   describe('Schema Validation (isValidSession)', () => {
-    it('accepts valid session with email', () => {
+    it('accepts valid session with string email and finite positive expiresIn', () => {
       expect(isValidSession(validSession)).toBe(true);
     });
 
-    it('accepts valid session with null email', () => {
+    it('accepts valid session with null email (phone registration)', () => {
       expect(isValidSession(validSessionWithNullEmail)).toBe(true);
     });
 
-    it('accepts valid session with undefined email', () => {
-      const sessionWithoutEmail = {
+    it('rejects session with undefined email or missing email field', () => {
+      const sessionWithUndefinedEmail = {
         ...validSession,
         user: { ...validSession.user, email: undefined },
       };
-      expect(isValidSession(sessionWithoutEmail)).toBe(true);
+      expect(isValidSession(sessionWithUndefinedEmail)).toBe(false);
+
+      const { email: _, ...userWithoutEmail } = validSession.user;
+      const sessionMissingEmail = {
+        ...validSession,
+        user: userWithoutEmail,
+      };
+      expect(isValidSession(sessionMissingEmail)).toBe(false);
     });
 
     it('rejects session with missing accessToken or empty accessToken', () => {
@@ -93,7 +100,14 @@ describe('tokenStorage', () => {
       expect(isValidSession({ ...validSession, savedAt: '1700000000000' as unknown as number })).toBe(false);
     });
 
-    it('rejects session with invalid expiresIn when defined (negative, zero, NaN, or Infinity)', () => {
+    it('accepts session with omitted or undefined expiresIn (optional number)', () => {
+      const { expiresIn: _, ...sessionWithoutExpiresIn } = validSession;
+      expect(isValidSession(sessionWithoutExpiresIn)).toBe(true);
+      expect(isValidSession({ ...validSession, expiresIn: undefined })).toBe(true);
+    });
+
+    it('rejects session with null or invalid expiresIn (negative, zero, NaN, Infinity, non-number)', () => {
+      expect(isValidSession({ ...validSession, expiresIn: null })).toBe(false);
       expect(isValidSession({ ...validSession, expiresIn: -3600 })).toBe(false);
       expect(isValidSession({ ...validSession, expiresIn: 0 })).toBe(false);
       expect(isValidSession({ ...validSession, expiresIn: NaN })).toBe(false);
@@ -101,14 +115,21 @@ describe('tokenStorage', () => {
       expect(isValidSession({ ...validSession, expiresIn: '86400' as unknown as number })).toBe(false);
     });
 
-    it('accepts session without expiresIn (expiresIn is optional)', () => {
-      const { expiresIn: _, ...sessionWithoutExpiresIn } = validSession;
-      expect(isValidSession(sessionWithoutExpiresIn)).toBe(true);
+    it('requires user.id to be a non-empty string and rejects number user.id', () => {
+      expect(
+        isValidSession({
+          ...validSession,
+          user: { ...validSession.user, id: '550e8400-e29b-41d4-a716-446655440000' },
+        })
+      ).toBe(true);
+      expect(isValidSession({ ...validSession, user: { ...validSession.user, id: 12345 } })).toBe(false);
+      expect(isValidSession({ ...validSession, user: { ...validSession.user, id: '' } })).toBe(false);
+      expect(isValidSession({ ...validSession, user: { ...validSession.user, id: '   ' } })).toBe(false);
     });
 
     it('rejects session with missing user or missing user fields', () => {
       expect(isValidSession({ ...validSession, user: null })).toBe(false);
-      expect(isValidSession({ ...validSession, user: { ...validSession.user, id: '' } })).toBe(false);
+      expect(isValidSession({ ...validSession, user: [] })).toBe(false);
       expect(isValidSession({ ...validSession, user: { ...validSession.user, fullName: '' } })).toBe(false);
     });
 
@@ -130,8 +151,9 @@ describe('tokenStorage', () => {
       expect(isValidSession({ ...validSession, user: { ...validSession.user, email: {} } })).toBe(false);
     });
 
-    it('rejects corrupt non-object data', () => {
+    it('rejects corrupt non-object data and arrays', () => {
       expect(isValidSession(null)).toBe(false);
+      expect(isValidSession([])).toBe(false);
       expect(isValidSession('string')).toBe(false);
       expect(isValidSession(12345)).toBe(false);
     });
@@ -219,6 +241,21 @@ describe('tokenStorage', () => {
 
       expect(session).toBeNull();
       expect(SecureStore.deleteItemAsync).toHaveBeenCalledWith(SESSION_STORAGE_KEY);
+    });
+
+    it('cleans up stored session when expiresIn is null or user.email is missing', async () => {
+      const { email: _, ...userWithoutEmail } = validSession.user;
+      vi.mocked(SecureStore.getItemAsync).mockResolvedValueOnce(
+        JSON.stringify({ ...validSession, user: userWithoutEmail })
+      );
+      expect(await getSession()).toBeNull();
+      expect(SecureStore.deleteItemAsync).toHaveBeenCalledTimes(1);
+
+      vi.mocked(SecureStore.getItemAsync).mockResolvedValueOnce(
+        JSON.stringify({ ...validSession, expiresIn: null })
+      );
+      expect(await getSession()).toBeNull();
+      expect(SecureStore.deleteItemAsync).toHaveBeenCalledTimes(2);
     });
 
     it('deletes session successfully from SecureStore', async () => {

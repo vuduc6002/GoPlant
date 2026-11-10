@@ -37,8 +37,8 @@ export class StorageError extends Error {
 
 /**
  * In-memory session store strictly for Web demo execution.
- * Web does not provide hardware-backed SecureStore, and localStorage
- * is deliberately avoided to prevent persistent JWT exposure to XSS.
+ * Web does not provide native platform SecureStore (Android Keystore / iOS Keychain),
+ * and localStorage is deliberately avoided to prevent persistent JWT exposure to XSS.
  * This session is transient and automatically discarded on page refresh.
  */
 let webMemorySession: AuthSession | null = null;
@@ -51,18 +51,18 @@ export function _resetWebMemorySession(): void {
 }
 
 /**
- * Validates that an object conforms strictly to the AuthSession schema.
+ * Validates that an object conforms strictly to the AuthSession TypeScript contract:
  * - accessToken: non-empty string.
  * - tokenType: non-empty string.
  * - savedAt: finite positive number.
- * - expiresIn: if defined, must be finite positive number.
+ * - expiresIn: optional (undefined allowed; null or invalid number rejected); if present, must be finite positive number.
  * - user.id: non-empty string.
  * - user.fullName: non-empty string.
  * - user.roles: non-empty array of non-empty strings.
- * - user.email: string, null, or undefined (supports phone registration).
+ * - user.email: required property; value must strictly be a string or null (undefined / missing rejected).
  */
 export function isValidSession(data: unknown): data is AuthSession {
-  if (!data || typeof data !== 'object') {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
     return false;
   }
   const s = data as Record<string, unknown>;
@@ -82,15 +82,15 @@ export function isValidSession(data: unknown): data is AuthSession {
     return false;
   }
 
-  // 4. expiresIn: optional, but if present must be finite positive number
-  if (s.expiresIn !== undefined && s.expiresIn !== null) {
+  // 4. expiresIn: optional number (undefined allowed, null or non-finite/non-positive rejected)
+  if (s.expiresIn !== undefined) {
     if (typeof s.expiresIn !== 'number' || !Number.isFinite(s.expiresIn) || s.expiresIn <= 0) {
       return false;
     }
   }
 
   // 5. user object
-  if (!s.user || typeof s.user !== 'object') {
+  if (!s.user || typeof s.user !== 'object' || Array.isArray(s.user)) {
     return false;
   }
 
@@ -116,11 +116,12 @@ export function isValidSession(data: unknown): data is AuthSession {
     }
   }
 
-  // 9. user.email: string, null, or undefined
-  if (u.email !== null && u.email !== undefined) {
-    if (typeof u.email !== 'string') {
-      return false;
-    }
+  // 9. user.email: property must exist and strictly be string | null (undefined or missing rejected)
+  if (!Object.prototype.hasOwnProperty.call(u, 'email')) {
+    return false;
+  }
+  if (u.email !== null && typeof u.email !== 'string') {
+    return false;
   }
 
   return true;
@@ -151,7 +152,7 @@ async function assertNativeSecureStoreAvailable(): Promise<void> {
 
 /**
  * Persists an authenticated user session.
- * - On Native (Android/iOS): Saves to hardware-backed SecureStore.
+ * - On Native (Android/iOS): Saves via expo-secure-store using platform-provided secure storage (Android Keystore / iOS Keychain when supported by the device).
  * - On Web: Stores in RAM (in-memory) only. localStorage is never used.
  * Throws StorageError if saving fails.
  */
@@ -205,7 +206,7 @@ export async function getSession(): Promise<AuthSession | null> {
   try {
     raw = await SecureStore.getItemAsync(SESSION_STORAGE_KEY);
   } catch (err) {
-    // I/O or hardware failure: DO NOT delete user data, throw typed error to caller
+    // I/O or platform storage failure: DO NOT delete user data, throw typed error to caller
     throw new StorageError({
       code: 'READ_FAILED',
       operation: 'read',
