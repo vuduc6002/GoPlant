@@ -17,6 +17,18 @@ import { useAuth } from '@/features/auth/AuthProvider';
 import { getHealthStatusMeta } from '@/features/gardens/gardenTypes';
 import { useDeletePlantMutation, useUserPlantDetail } from '@/features/plants/plantHooks';
 import type { UserPlantDetailDto } from '@/features/plants/plantTypes';
+import {
+  DEFAULT_REMINDER_TIME,
+  formatNextScheduledAtVn,
+} from '@/features/schedule/scheduleApi';
+import { usePlantSchedules } from '@/features/schedule/scheduleHooks';
+import {
+  getFrequencyLabel,
+  getScheduleStatusMeta,
+  getTaskTypeMeta,
+  SCHEDULE_STATUS_OPTIONS,
+  type ScheduleStatus,
+} from '@/features/schedule/scheduleTypes';
 import { useFavoriteToggle, useSpeciesDetail } from '@/features/species/speciesHooks';
 import { AppApiError } from '@/services/api/apiError';
 import { getSessionGeneration } from '@/services/api/tokenStorage';
@@ -47,18 +59,49 @@ export default function PlantDetailScreen() {
 
   const { user } = useAuth();
   const currentUserId = typeof user?.id === 'string' ? user.id.trim() : '';
+  const currentSessionOwnerKey = currentUserId
+    ? `${currentUserId}:${getSessionGeneration()}`
+    : '';
   const currentUserIdRef = useRef(currentUserId);
   const prevUserIdRef = useRef(currentUserId);
 
   const isPlantMode = Boolean(cleanPlantId);
 
   const deletePlantMutation = useDeletePlantMutation();
-  const [isDeleted, setIsDeleted] = useState(false);
-  const [deletingSnapshot, setDeletingSnapshot] = useState<UserPlantDetailDto | null>(null);
+  const [deletedOwnerKey, setDeletedOwnerKey] = useState<string | null>(null);
+  const [deletingSnapshotState, setDeletingSnapshotState] = useState<{
+    ownerKey: string;
+    plant: UserPlantDetailDto;
+  } | null>(null);
+  const isDeleted =
+    Boolean(currentSessionOwnerKey) && deletedOwnerKey === currentSessionOwnerKey;
+  const deletingSnapshot =
+    currentSessionOwnerKey && deletingSnapshotState?.ownerKey === currentSessionOwnerKey
+      ? deletingSnapshotState.plant
+      : null;
+  const [scheduleStatusFilter, setScheduleStatusFilter] = useState<ScheduleStatus | ''>('');
+  const [schedulePage, setSchedulePage] = useState(0);
 
   const plantQuery = useUserPlantDetail(cleanPlantId, {
     enabled: isPlantMode && !isDeleted && !deletePlantMutation.isPending,
   });
+
+  const plantSchedulesQuery = usePlantSchedules(
+    cleanPlantId,
+    {
+      ...(scheduleStatusFilter ? { status: scheduleStatusFilter } : {}),
+      page: schedulePage,
+      size: 10,
+    },
+    {
+      enabled:
+        isPlantMode &&
+        Boolean(cleanPlantId) &&
+        !isDeleted &&
+        !deletePlantMutation.isPending &&
+        Boolean(plantQuery.data),
+    }
+  );
 
   const speciesQuery = useSpeciesDetail(cleanSpeciesId, {
     enabled: !isPlantMode && Boolean(cleanSpeciesId),
@@ -73,21 +116,65 @@ export default function PlantDetailScreen() {
     prevUserIdRef.current = currentUserId;
     currentUserIdRef.current = currentUserId;
     if (prevUserId && prevUserId !== currentUserId) {
-      setIsDeleted(false);
-      setDeletingSnapshot(null);
+      setDeletedOwnerKey(null);
+      setDeletingSnapshotState(null);
       setFavoriteError(null);
       setDeleteError(null);
+      setScheduleStatusFilter('');
+      setSchedulePage(0);
     }
   }, [currentUserId]);
 
   useEffect(() => {
-    setIsDeleted(false);
-    setDeletingSnapshot(null);
+    setDeletedOwnerKey(null);
+    setDeletingSnapshotState(null);
     setDeleteError(null);
+    setScheduleStatusFilter('');
+    setSchedulePage(0);
   }, [cleanPlantId]);
+
+  const schedulesData = plantSchedulesQuery.data;
+  const isSchedulesFetching = plantSchedulesQuery.isFetching;
+  const isSchedulesPlaceholder = plantSchedulesQuery.isPlaceholderData;
+  const isSchedulesError = plantSchedulesQuery.isError;
+  const hasPlantData = Boolean(plantQuery.data);
+
+  useEffect(() => {
+    if (!isPlantMode || !cleanPlantId || isDeleted || !hasPlantData) {
+      return;
+    }
+    if (isSchedulesFetching || isSchedulesPlaceholder || isSchedulesError || !schedulesData) {
+      return;
+    }
+    const rawTotalPages = schedulesData.totalPages;
+    if (typeof rawTotalPages !== 'number' || !Number.isFinite(rawTotalPages)) {
+      return;
+    }
+    const totalPages = Math.max(0, Math.trunc(rawTotalPages));
+    if (schedulePage < 0 || schedulePage >= totalPages) {
+      const nextPage = schedulePage < 0 || totalPages === 0 ? 0 : totalPages - 1;
+      if (nextPage !== schedulePage) {
+        setSchedulePage(nextPage);
+      }
+    }
+  }, [
+    isPlantMode,
+    cleanPlantId,
+    isDeleted,
+    hasPlantData,
+    schedulePage,
+    schedulesData,
+    isSchedulesFetching,
+    isSchedulesPlaceholder,
+    isSchedulesError,
+  ]);
 
   if (isPlantMode) {
     const plant = plantQuery.data ?? deletingSnapshot;
+    const visibleSchedules = schedulesData?.content ?? [];
+    const scheduleTotalElements = schedulesData?.totalElements ?? 0;
+    const scheduleTotalPages = schedulesData?.totalPages ?? 0;
+    const displayScheduleTotalPages = Math.max(1, scheduleTotalPages, schedulePage + 1);
 
     if (plantQuery.isLoading && !plant) {
       return (
@@ -205,8 +292,10 @@ export default function PlantDetailScreen() {
                 return;
               }
               setDeleteError(null);
-              setDeletingSnapshot(plant);
-              setIsDeleted(true);
+              setDeletingSnapshotState(
+                currentSessionOwnerKey ? { ownerKey: currentSessionOwnerKey, plant } : null
+              );
+              setDeletedOwnerKey(currentSessionOwnerKey || null);
               void deletePlantMutation
                 .mutateAsync(plant.id)
                 .then(() => {
@@ -219,8 +308,8 @@ export default function PlantDetailScreen() {
                   if (hasSwitchedSession()) {
                     return;
                   }
-                  setIsDeleted(false);
-                  setDeletingSnapshot(null);
+                  setDeletedOwnerKey(null);
+                  setDeletingSnapshotState(null);
                   if (err instanceof AppApiError) {
                     if (err.code === 'SESSION_USER_MISMATCH') {
                       return;
@@ -334,6 +423,230 @@ export default function PlantDetailScreen() {
               </Pressable>
             </View>
           ) : null}
+
+          <View style={d.card}>
+            <View style={d.scheduleSectionHeader}>
+              <View style={d.scheduleHeaderCopy}>
+                <Text style={d.sectionTitle}>Lịch chăm sóc của cây</Text>
+                <Text style={d.scheduleCountHint}>
+                  {plantSchedulesQuery.isLoading || (!schedulesData && !isSchedulesError)
+                    ? 'Đang tải...'
+                    : `${scheduleTotalElements} lịch`}
+                </Text>
+              </View>
+              <Pressable
+                disabled={deletePlantMutation.isPending}
+                onPress={() =>
+                  router.push({
+                    pathname: '/schedule/create',
+                    params: { plantId: plant.id },
+                  } as never)
+                }
+                accessibilityRole="button"
+                accessibilityLabel="Tạo lịch cho cây này"
+                accessibilityState={{ disabled: deletePlantMutation.isPending }}
+                style={[d.addScheduleBtn, deletePlantMutation.isPending && d.buttonDisabled]}
+              >
+                <Text style={d.addScheduleBtnText}>＋ Tạo lịch</Text>
+              </Pressable>
+            </View>
+
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={d.scheduleFilterRow}
+            >
+              <Pressable
+                onPress={() => {
+                  setScheduleStatusFilter('');
+                  setSchedulePage(0);
+                }}
+                accessibilityRole="button"
+                accessibilityState={{ selected: !scheduleStatusFilter }}
+                style={[d.filterPill, !scheduleStatusFilter && d.filterPillActive]}
+              >
+                <Text style={[d.filterPillText, !scheduleStatusFilter && d.filterPillTextActive]}>
+                  Tất cả
+                </Text>
+              </Pressable>
+              {SCHEDULE_STATUS_OPTIONS.map((opt) => {
+                const active = scheduleStatusFilter === opt.value;
+                return (
+                  <Pressable
+                    key={opt.value}
+                    onPress={() => {
+                      setScheduleStatusFilter(opt.value);
+                      setSchedulePage(0);
+                    }}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                    style={[d.filterPill, active && d.filterPillActive]}
+                  >
+                    <Text style={[d.filterPillText, active && d.filterPillTextActive]}>
+                      {opt.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            {plantSchedulesQuery.isLoading ? (
+              <View style={d.scheduleStateBox}>
+                <ActivityIndicator size="small" color={C.primary} />
+                <Text style={d.stateBody}>Đang tải lịch chăm sóc của cây...</Text>
+              </View>
+            ) : isSchedulesError ? (
+              <View style={d.scheduleStateBox} accessibilityRole="alert">
+                <Text style={d.stateBody}>
+                  {plantSchedulesQuery.error?.message || 'Không thể tải lịch chăm sóc của cây.'}
+                </Text>
+                <Pressable
+                  onPress={() => {
+                    void plantSchedulesQuery.refetch();
+                  }}
+                  accessibilityRole="button"
+                  style={d.secondaryButton}
+                >
+                  <Text style={d.secondaryText}>Thử lại</Text>
+                </Pressable>
+              </View>
+            ) : !schedulesData ? (
+              <View style={d.scheduleStateBox}>
+                <ActivityIndicator size="small" color={C.primary} />
+                <Text style={d.stateBody}>Đang tải lịch chăm sóc của cây...</Text>
+              </View>
+            ) : visibleSchedules.length === 0 ? (
+              scheduleTotalElements > 0 || isSchedulesFetching || isSchedulesPlaceholder ? (
+                <View style={d.scheduleStateBox}>
+                  <ActivityIndicator size="small" color={C.primary} />
+                  <Text style={d.stateBody}>Đang cập nhật lịch chăm sóc...</Text>
+                </View>
+              ) : (
+                <View style={d.scheduleStateBox}>
+                  <Text style={d.stateBody}>
+                    {scheduleStatusFilter
+                      ? 'Không có lịch nào thuộc trạng thái đang chọn.'
+                      : 'Chưa có lịch chăm sóc cho cây này.'}
+                  </Text>
+                  {scheduleStatusFilter ? (
+                    <Pressable
+                      onPress={() => {
+                        setScheduleStatusFilter('');
+                        setSchedulePage(0);
+                      }}
+                      accessibilityRole="button"
+                      style={d.secondaryButton}
+                    >
+                      <Text style={d.secondaryText}>Xem tất cả lịch</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+              )
+            ) : (
+              <>
+                {visibleSchedules.map((sched) => {
+                  const taskMeta = getTaskTypeMeta(sched.taskType);
+                  const schedStatus = getScheduleStatusMeta(sched.status);
+                  const nextTimeInfo = formatNextScheduledAtVn(sched.nextScheduledAt);
+                  const schedToneStyle =
+                    schedStatus.tone === 'peach'
+                      ? d.tagWarning
+                      : schedStatus.tone === 'danger'
+                        ? d.tagDanger
+                        : schedStatus.tone === 'plain'
+                          ? d.tagPlain
+                          : undefined;
+                  const schedTextToneStyle =
+                    schedStatus.tone === 'peach'
+                      ? d.tagWarningText
+                      : schedStatus.tone === 'danger'
+                        ? d.tagDangerText
+                        : schedStatus.tone === 'plain'
+                          ? d.tagPlainText
+                          : undefined;
+
+                  return (
+                    <View key={sched.id} style={d.scheduleRow}>
+                      <View style={d.scheduleRowTop}>
+                        <View style={d.scheduleRowCopy}>
+                          <Text style={d.scheduleRowTitle}>
+                            {taskMeta.icon} {taskMeta.label}
+                          </Text>
+                          {sched.taskLabel ? (
+                            <Text style={d.scheduleSubText}>{sched.taskLabel}</Text>
+                          ) : null}
+                        </View>
+                        <View style={d.scheduleBadges}>
+                          <Text style={[d.tag, schedToneStyle, schedTextToneStyle]}>
+                            {schedStatus.label}
+                          </Text>
+                          {sched.isOverdue && sched.status === 'ACTIVE' ? (
+                            <Text style={[d.tag, d.tagWarning, d.tagWarningText]}>Quá hạn</Text>
+                          ) : null}
+                        </View>
+                      </View>
+                      <Text style={d.scheduleSubText}>
+                        Chu kỳ: {getFrequencyLabel(sched.frequency, sched.intervalDays)} • Giờ nhắc:{' '}
+                        {sched.reminderTime ?? DEFAULT_REMINDER_TIME}
+                      </Text>
+                      <Text style={d.scheduleSubText}>
+                        Thời hạn: {sched.startDate}
+                        {sched.endDate ? ` → ${sched.endDate}` : ' (Không giới hạn)'}
+                      </Text>
+                      <Text style={d.scheduleSubText}>
+                        Kỳ tiếp theo: {nextTimeInfo.dateTimeLabel}
+                      </Text>
+                      <Pressable
+                        disabled={deletePlantMutation.isPending}
+                        onPress={() =>
+                          router.push({
+                            pathname: '/schedule/detail',
+                            params: { plantId: plant.id, scheduleId: sched.id },
+                          } as never)
+                        }
+                        accessibilityRole="button"
+                        accessibilityLabel={`Chi tiết lịch ${taskMeta.label}`}
+                        accessibilityState={{ disabled: deletePlantMutation.isPending }}
+                        style={d.inlineLinkButton}
+                      >
+                        <Text style={d.inlineLinkText}>Chi tiết / Sửa ›</Text>
+                      </Pressable>
+                    </View>
+                  );
+                })}
+
+                {scheduleTotalPages > 1 || schedulePage > 0 ? (
+                  <View style={d.paginationRow}>
+                    <Pressable
+                      disabled={schedulePage <= 0 || isSchedulesFetching}
+                      onPress={() => setSchedulePage(Math.max(0, schedulePage - 1))}
+                      style={[
+                        d.pageButton,
+                        (schedulePage <= 0 || isSchedulesFetching) && d.buttonDisabled,
+                      ]}
+                      accessibilityRole="button"
+                    >
+                      <Text style={d.pageButtonText}>Trang trước</Text>
+                    </Pressable>
+                    <Text style={d.scheduleSubText}>
+                      Trang {schedulePage + 1} / {displayScheduleTotalPages}
+                    </Text>
+                    <Pressable
+                      disabled={Boolean(schedulesData?.last) || isSchedulesFetching}
+                      onPress={() => setSchedulePage(schedulePage + 1)}
+                      style={[
+                        d.pageButton,
+                        (Boolean(schedulesData?.last) || isSchedulesFetching) && d.buttonDisabled,
+                      ]}
+                      accessibilityRole="button"
+                    >
+                      <Text style={d.pageButtonText}>Trang sau</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+              </>
+            )}
+          </View>
 
           <View style={d.actions}>
             <Pressable
@@ -742,4 +1055,54 @@ const d = StyleSheet.create({
   stateTitle: { color: C.forest, fontFamily: F.semiBold, fontSize: 15, textAlign: 'center' },
   stateBody: { color: C.secondaryText, fontFamily: F.regular, fontSize: 12, textAlign: 'center', lineHeight: 18 },
   stateActions: { flexDirection: 'row', gap: 10, marginTop: 4 },
+  scheduleSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  scheduleHeaderCopy: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  scheduleCountHint: { color: C.mutedText, fontFamily: F.regular, fontSize: 11 },
+  addScheduleBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: C.primary,
+  },
+  addScheduleBtnText: { color: C.surface, fontFamily: F.semiBold, fontSize: 11 },
+  scheduleFilterRow: { flexDirection: 'row', gap: 6, paddingVertical: 4 },
+  filterPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 99,
+    backgroundColor: C.softSurface,
+  },
+  filterPillActive: { backgroundColor: C.forest },
+  filterPillText: { color: C.secondaryText, fontFamily: F.regular, fontSize: 10 },
+  filterPillTextActive: { color: C.surface, fontFamily: F.semiBold },
+  scheduleStateBox: { paddingVertical: 12, alignItems: 'center', gap: 8 },
+  scheduleRow: {
+    paddingVertical: 9,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#E2EAE3',
+    gap: 3,
+  },
+  scheduleRowTop: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  scheduleRowCopy: { flex: 1, gap: 2 },
+  scheduleRowTitle: { color: C.forest, fontFamily: F.semiBold, fontSize: 12 },
+  scheduleBadges: { flexDirection: 'row', flexWrap: 'wrap', gap: 4 },
+  scheduleSubText: { color: C.secondaryText, fontFamily: F.regular, fontSize: 11, lineHeight: 16 },
+  paginationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: 8,
+  },
+  pageButton: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8, backgroundColor: C.softSurface },
+  pageButtonText: { color: C.forest, fontFamily: F.semiBold, fontSize: 11 },
 });

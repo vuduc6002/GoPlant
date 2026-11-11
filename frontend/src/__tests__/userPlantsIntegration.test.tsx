@@ -624,6 +624,17 @@ describe('G5.4.1 User Plants REST API Integration (Mocked Axios HTTP Adapter)', 
             config,
           });
         }
+        if (
+          (config.url === '/plants/plt-1/schedules' || config.url === '/plants/plt-no-code/schedules') &&
+          config.method === 'get'
+        ) {
+          return Promise.resolve({
+            status: 200,
+            data: { success: true, data: { content: [], page: 0, size: 10, totalElements: 0, totalPages: 0, last: true } },
+            headers: {},
+            config,
+          });
+        }
         throw new Error(`Unexpected API call: ${config.url}`);
       });
 
@@ -729,6 +740,14 @@ describe('G5.4.1 User Plants REST API Integration (Mocked Axios HTTP Adapter)', 
             throw new Error('Spurious GET /plants/plt-1 after delete!');
           }
           return { status: 200, data: { success: true, data: plantDetailOne }, headers: {}, config };
+        }
+        if (config.url === '/plants/plt-1/schedules' && config.method === 'get') {
+          return {
+            status: 200,
+            data: { success: true, data: { content: [], page: 0, size: 10, totalElements: 0, totalPages: 0, last: true } },
+            headers: {},
+            config,
+          };
         }
         if (config.url === '/plants/plt-1' && config.method === 'delete') {
           deleteCount += 1;
@@ -1780,6 +1799,14 @@ describe('G5.4.1 User Plants REST API Integration (Mocked Axios HTTP Adapter)', 
           return {
             status: 200,
             data: { success: true, data: isB ? bPlantShared : aPlantShared },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/plants/plt-shared-1/schedules' && config.method === 'get') {
+          return {
+            status: 200,
+            data: { success: true, data: { content: [], page: 0, size: 10, totalElements: 0, totalPages: 0, last: true } },
             headers: {},
             config,
           };

@@ -1,4 +1,5 @@
 import type { HealthStatus } from '@/features/gardens/gardenTypes';
+import type { ScheduleStatus } from '@/features/schedule/scheduleTypes';
 
 /**
  * Centralized React Query Keys
@@ -23,6 +24,12 @@ export interface UserPlantListQueryKeyParams {
   page: number;
   size: number;
   sort: string;
+}
+
+export interface PlantScheduleListQueryKeyParams {
+  status?: ScheduleStatus;
+  page: number;
+  size: number;
 }
 
 export const queryKeys = {
@@ -57,13 +64,20 @@ export const queryKeys = {
       ['plants', userId, 'list', params] as const,
     details: (userId: string) => ['plants', userId, 'detail'] as const,
     detail: (userId: string, id: string) => ['plants', userId, 'detail', id] as const,
-    schedules: (userId: string, plantId: string) =>
+    schedulesBase: (userId: string, plantId: string) =>
       ['plants', userId, 'detail', plantId, 'schedules'] as const,
+    schedules: (
+      userId: string,
+      plantId: string,
+      params?: PlantScheduleListQueryKeyParams
+    ) =>
+      params
+        ? (['plants', userId, 'detail', plantId, 'schedules', params] as const)
+        : (['plants', userId, 'detail', plantId, 'schedules'] as const),
   },
   schedules: {
-    all: ['schedules'] as const,
-    today: ['schedules', 'today'] as const,
-    detail: (id: string) => ['schedules', id] as const,
+    all: (userId: string) => ['schedules', userId] as const,
+    today: (userId: string) => ['schedules', userId, 'today'] as const,
   },
   journals: {
     all: ['journals'] as const,

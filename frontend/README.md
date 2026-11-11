@@ -6,7 +6,7 @@ GoPlant là ứng dụng di động hỗ trợ người dùng khám phá và s�
 
 Mã nguồn Frontend được xây dựng trên nền tảng **React Native 0.86 + Expo SDK 57**, sử dụng **Expo Router** để định tuyến theo cấu trúc file và **TypeScript Strict Mode**.
 
-Sau các lượt hoàn thiện nền tảng **G5.2.1 – G5.2.1.1.4**, tích hợp nghiệp vụ **G5.3 – G5.3.1.2** và **G5.4.1**, ứng dụng đã hoàn thiện kết nối Backend REST API cho Xác thực, Hồ sơ, Loài cây, Yêu thích, Khu vườn và Cây trồng cá nhân (User Plants):
+Sau các lượt hoàn thiện nền tảng **G5.2.1 – G5.2.1.1.4**, tích hợp nghiệp vụ **G5.3 – G5.3.1.2**, **G5.4.1 – G5.4.1.1.2** và **G5.4.2**, ứng dụng đã hoàn thiện kết nối Backend REST API cho Xác thực, Hồ sơ, Loài cây, Yêu thích, Khu vườn, Cây trồng cá nhân (User Plants) và Lịch chăm sóc (Care Schedules):
 - **API Client & Trusted Origin / BaseURL Guard**: Axios Client tập trung với kiểm soát ranh giới nguồn tin cậy (`API_BASE_URL`), từ chối URL thuộc origin bên ngoài, URL protocol-relative (`//...`), URL sai định dạng và `baseURL` override rỗng/không hợp lệ trước khi đọc SecureStore hoặc gửi JWT ra mạng; chuẩn hóa lỗi `AppApiError`, phân định rõ ràng giữa lỗi local (storage, unauthenticated, untrusted URL) và lỗi backend (401, 403, 400, 404, 409, 5xx, timeout, network error).
 - **Phân loại endpoint chuẩn xác**: Cơ chế phân loại thống nhất cho relative path và absolute URL cùng backend origin; endpoint công khai (`/auth/login`, `/auth/register`) và cờ `skipAuth: true` được lưu giữ xuyên suốt cả Request và Response Interceptor; 401 từ nguồn ngoài hoặc public route tuyệt đối không kích hoạt đăng xuất.
 - **Xác thực thật**: Tích hợp các API `POST /api/v1/auth/login`, `POST /api/v1/auth/register`, `GET /api/v1/users/me`. Hệ thống Mock Auth đã được loại bỏ hoàn toàn.
@@ -21,10 +21,11 @@ Sau các lượt hoàn thiện nền tảng **G5.2.1 – G5.2.1.1.4**, tích h�
 - **Loại bỏ trùng lặp Request Profile**: React Query đóng vai trò nguồn dữ liệu duy nhất cho `GET /api/v1/users/me`, loại bỏ hoàn toàn tình trạng gọi 2 request profile song song khi đăng nhập.
 - **Quản lý Server State**: Tích hợp **TanStack React Query v5** quản lý cache (`staleTime: 2 phút` theo `queryClient.ts`), auth-gating chỉ query khi `status === 'authenticated'`, phân lập cache chống rò rỉ dữ liệu giữa các tài khoản, và chính sách retry nghiêm ngặt (chỉ retry network/timeout/5xx tối đa 2 lần).
 - **Phân hệ Species, Favorites & Gardens (G5.3)**: Kết nối REST API thật cho thư viện loài cây (`GET /species`, `GET /species/{speciesId}`), danh sách yêu thích (`POST/DELETE /species/{speciesId}/favorite`, `GET /species/favorites`) và CRUD khu vườn (`GET/POST /gardens`, `GET/PUT/DELETE /gardens/{gardenId}`) với phân trang 0-based, đồng bộ cache nhiều cấp, chống race-condition/double-tap khi thả tim, validation enum `SpaceType` và xác nhận cascade delete.
-- **Phân hệ User Plants (G5.4.1)**: Kết nối REST API thật cho quản lý cây trồng cá nhân (`GET /api/v1/plants`, `POST /api/v1/gardens/{gardenId}/plants`, `GET/PUT/DELETE /api/v1/plants/{plantId}`): lọc theo từ khóa/`gardenId`/`HealthStatus`, sort allowlist (`displayName`, `createdAt`, `plantedAt`, `healthStatus`), phân trang 0-based, thêm cây chọn khu vườn & loài cây thật từ Backend, chỉnh sửa giữ nguyên khu vườn/loài cây (cho phép xóa trắng field tùy chọn, bỏ qua `plantedAt` rỗng cho Jackson `LocalDate`), hiển thị có điều kiện `plantCode` nếu server trả về, xác nhận cascade delete (`Care Schedules`, `Care Logs`, `Growth Journals`) và đồng bộ cache chéo sang `gardens.*` (`plantCount`, `GardenDetail.plants`).
-- **Kiểm thử tự động toàn diện**: Bộ kiểm thử **Vitest** (với Axios adapter mock trong `happy-dom`, chưa bao gồm E2E trên máy chủ/Emulator thật) gồm **149 bài test** trên 7 file kiểm thử bao phủ lưu trữ phiên & schema, trusted origin/`baseURL` & session identity guard, chuẩn hóa lỗi & retry policy, auth flow, Species & Favorites (bao gồm concurrency lock, rollback isolation & owner-scoped placeholder data), Gardens CRUD, và User Plants CRUD (bao gồm validation, cache sync chéo, tự điều chỉnh phân trang & bảo vệ trạng thái đồng bộ khi refetch xóa trang cuối, và cách ly tài khoản A → B khi query/mutation đang pending).
+- **Phân hệ User Plants (G5.4.1 – G5.4.1.1.2)**: Kết nối REST API thật cho quản lý cây trồng cá nhân (`GET /api/v1/plants`, `POST /api/v1/gardens/{gardenId}/plants`, `GET/PUT/DELETE /api/v1/plants/{plantId}`): lọc theo từ khóa/`gardenId`/`HealthStatus`, sort allowlist (`displayName`, `createdAt`, `plantedAt`, `healthStatus`), phân trang 0-based, thêm cây chọn khu vườn & loài cây thật từ Backend, chỉnh sửa giữ nguyên khu vườn/loài cây (cho phép xóa trắng field tùy chọn, bỏ qua `plantedAt` rỗng cho Jackson `LocalDate`), hiển thị có điều kiện `plantCode` nếu server trả về, xác nhận cascade delete (`Care Schedules`, `Care Logs`, `Growth Journals`) và đồng bộ cache chéo sang `gardens.*` (`plantCount`, `GardenDetail.plants`) cùng guard tự điều chỉnh phân trang trang cuối không nhảy Empty State giả.
+- **Phân hệ Care Schedules (G5.4.2)**: Kết nối REST API thật cho Lịch chăm sóc (`GET /schedules/today`, `GET /plants/{plantId}/schedules`, `POST/PUT/DELETE /schedules`, `POST /schedules/{scheduleId}/complete`, `POST /schedules/{scheduleId}/skip`), chuẩn múi giờ Việt Nam `Asia/Ho_Chi_Minh`, payload cập nhật tri-state giữ/xóa trường, xử lý `Complete`/`Skip` + `409 Conflict` + kết thúc `ONCE`/`endDate`, đồng bộ cascade cache với `plants.*`/`gardens.*`, và cô lập phiên đăng nhập xuyên suốt các query/mutation đang pending.
+- **Kiểm thử tự động toàn diện**: Bộ kiểm thử **Vitest** (với Axios adapter mock trong `happy-dom`, chưa bao gồm E2E trên máy chủ/Emulator thật) gồm **175 bài test** trên **8 file kiểm thử** bao phủ lưu trữ phiên & schema, trusted origin/`baseURL` & session identity guard, chuẩn hóa lỗi & retry policy, auth flow, Species & Favorites (bao gồm concurrency lock, rollback isolation & owner-scoped placeholder data), Gardens CRUD, User Plants CRUD (bao gồm validation, cache sync chéo, tự điều chỉnh phân trang & bảo vệ trạng thái đồng bộ khi refetch xóa trang cuối), và Care Schedules CRUD/Complete/Skip/Timezone/Cascade/Account Isolation A → B.
 
-Các phân hệ nghiệp vụ kế tiếp (**Lịch chăm sóc / Care Schedules**, **Lịch sử chăm sóc / Care Logs**, **Nhật ký phát triển / Growth Journals**, Camera/Upload ảnh, AI & Push Notification) vẫn giữ giao diện xem trước và sẽ được triển khai ở các giai đoạn tiếp theo (**G5.4.2**, **G5.4.3**, **G5.5**).
+Các phân hệ nghiệp vụ kế tiếp (**Lịch sử chăm sóc / Care Logs**, **Nhật ký phát triển / Growth Journals**, Camera/Upload ảnh, AI & Push Notification) vẫn giữ giao diện xem trước và sẽ được triển khai ở các giai đoạn tiếp theo (**G5.4.3**, **G5.5**).
 
 ---
 
@@ -47,19 +48,20 @@ Các phân hệ nghiệp vụ kế tiếp (**Lịch chăm sóc / Care Schedules*
 
 ## 3. Giao diện và trạng thái tích hợp
 
-| Khu vực | Trạng thái tích hợp (G5.4.1) |
+| Khu vực | Trạng thái tích hợp (G5.4.2) |
 |---|---|
 | **Chào mừng** | Giao diện giới thiệu tính năng, điều hướng sang Đăng ký hoặc Đăng nhập. |
 | **Đăng nhập** | **Đã kết nối API thật** (`POST /api/v1/auth/login`) qua `useLoginMutation()`. Kiểm tra tài khoản, hiển thị lỗi 401/mạng, lưu JWT an toàn và điều hướng sang Trang chủ. |
 | **Đăng ký** | **Đã kết nối API thật** (`POST /api/v1/auth/register`) qua `useRegisterMutation()`. Hỗ trợ đăng ký bằng Email hoặc Số điện thoại (hỗ trợ `email: null`). Xử lý lỗi validation (400) và tài khoản trùng lặp (409). |
-| **Trang chủ** | **Đã kết nối API hồ sơ, khu vườn & cây trồng** (`GET /api/v1/users/me`, `GET /api/v1/gardens`, `GET /api/v1/plants`). Hiển thị tên/Avatar, *"Vườn của bạn"* (`HomeGardensSection`) và *"Cây trồng của bạn"* (`HomePlantsSection`) đồng bộ số lượng thực tế và mở chi tiết/tạo mới. Thời tiết và thẻ lịch giữ xem trước giao diện. |
+| **Trang chủ** | **Đã kết nối API hồ sơ, khu vườn, cây trồng & CTA Lịch chăm sóc** (`GET /api/v1/users/me`, `GET /api/v1/gardens`, `GET /api/v1/plants`). Hiển thị tên/Avatar, *"Vườn của bạn"*, *"Cây trồng của bạn"* và thẻ điều hướng **Lịch hôm nay** (`/schedule`) / **Tạo lịch ngay** (`/schedule/create`) mà không tự gọi `/schedules/today` tại Home hay giả lập Push Notification. Thời tiết giữ xem trước giao diện. |
 | **Khôi phục lỗi Đọc / Xóa Storage** | Màn hình `StorageErrorView` với **Thử đọc lại** (`retryLoadSession`) và **Thử xóa lại** (`retryClearSession`), không xóa oan session hoặc đăng xuất giả. |
 | **Tìm kiếm & Lọc Loài cây / Cây của tôi** | **Đã kết nối API thật** cho cả tab **Thư viện loài cây** (`GET /api/v1/species`) với nút `＋ Thêm vào cây của tôi` điều hướng `/garden/add-plant?speciesId=...` và tab **Cây của tôi** (`GET /api/v1/plants`) với lọc theo từ khóa, khu vườn, `HealthStatus`, sắp xếp và phân trang 0-based. |
-| **Chi tiết cây trồng & Chi tiết loài cây** | **Đã kết nối API thật** (`PlantDetailScreen`): chế độ `plantId` (`GET/DELETE /api/v1/plants/{plantId}`) hiển thị đầy đủ thông tin, `plantCode` có điều kiện (chỉ khi server trả về khác rỗng), liên kết khu vườn/loài, sửa và xác nhận cascade delete; chế độ `speciesId` (`GET /api/v1/species/{speciesId}`) hiển thị sinh thái, yêu thích và CTA thêm cây thật. Đã loại bỏ nhánh `ownedId` / `plantCatalog` demo. |
+| **Chi tiết cây trồng & Chi tiết loài cây** | **Đã kết nối API thật** (`PlantDetailScreen`): chế độ `plantId` (`GET/DELETE /api/v1/plants/{plantId}`) hiển thị đầy đủ thông tin, `plantCode` có điều kiện, liên kết khu vườn/loài, mục **Lịch chăm sóc của cây** (`GET /api/v1/plants/{plantId}/schedules`, lọc `ScheduleStatus`, phân trang, `＋ Tạo lịch`, `Chi tiết / Sửa`) và xác nhận cascade delete (`Care Schedules`, `Care Logs`, `Growth Journals`); chế độ `speciesId` (`GET /api/v1/species/{speciesId}`) hiển thị sinh thái, yêu thích và CTA thêm cây thật. |
 | **Loài cây yêu thích** | **Đã kết nối API thật** (`GET /api/v1/species/favorites`, `POST/DELETE /api/v1/species/{speciesId}/favorite`) hiển thị trong tab **Cây trồng** (`FavoritesSection`) với phân trang và đồng bộ cache tức thì. |
-| **Quản lý vườn** | **Đã kết nối API thật** (`GET/POST /api/v1/gardens`, `GET/PUT/DELETE /api/v1/gardens/{gardenId}`): lọc 5 loại `SpaceType`, xem chi tiết + danh sách `plants` bấm mở `/plant-detail?plantId=...`, nút `＋ Thêm cây` mở `/garden/add-plant?gardenId=...`, tạo/sửa (`SpaceType` enum, lỗi 409 `name`), xử lý 403/404 và cascade delete. |
-| **Cây đang sở hữu (`/plants` & `/garden/add-plant`)** | **Đã kết nối API thật (G5.4.1)**: `PlantsScreen` tải danh sách cây thật (`GET /plants`) với lọc từ khóa, khu vườn, `HealthStatus`, sắp xếp, phân trang, làm mới, lỗi+retry và cascade delete; `AddGardenPlantScreen` hỗ trợ tạo mới (`POST /gardens/{gardenId}/plants` chọn vườn & loài thật từ Backend) và chỉnh sửa (`?editPlantId=...`, `PUT /plants/{plantId}` giữ nguyên vườn/loài). |
-| **Nhật ký & Lịch chăm sóc & Theo dõi** | Giao diện xem trước (chờ tích hợp API Care Schedules ở G5.4.2, Care Logs & Growth Journals ở G5.4.3). |
+| **Quản lý vườn** | **Đã kết nối API thật** (`GET/POST /api/v1/gardens`, `GET/PUT/DELETE /api/v1/gardens/{gardenId}`): lọc 5 loại `SpaceType`, xem chi tiết + danh sách `plants` bấm mở `/plant-detail?plantId=...`, nút `＋ Thêm cây` mở `/garden/add-plant?gardenId=...`, tạo/sửa (`SpaceType` enum, lỗi 409 `name`), xử lý 403/404 và cascade delete (tự dọn cache cây và lịch của các cây trong vườn). |
+| **Cây đang sở hữu (`/plants` & `/garden/add-plant`)** | **Đã kết nối API thật (G5.4.1 – G5.4.1.1.2)**: `PlantsScreen` tải danh sách cây thật (`GET /plants`) với lọc từ khóa, khu vườn, `HealthStatus`, sắp xếp, phân trang, làm mới, lỗi+retry và cascade delete; `AddGardenPlantScreen` hỗ trợ tạo mới (`POST /gardens/{gardenId}/plants` chọn vườn & loài thật từ Backend) và chỉnh sửa (`?editPlantId=...`, `PUT /plants/{plantId}` giữ nguyên vườn/loài). |
+| **Lịch chăm sóc (`/schedule`, `/schedule/create`, `/schedule/detail`)** | **Đã kết nối API thật (G5.4.2)**: `ScheduleScreen` tải `GET /api/v1/schedules/today`, hiển thị tổng số việc hôm nay & quá hạn theo giờ VN, lọc `Quá hạn` / `Sắp tới`, thực hiện `Hoàn thành` (`POST /schedules/{id}/complete`) & `Bỏ qua` (`POST /schedules/{id}/skip`) kèm xử lý HTTP 409; `CreateScheduleScreen` tạo lịch mới (`POST /api/v1/schedules`) với cây thật, chu kỳ `CUSTOM` và validation `startDate`/`endDate`/`reminderTime`; `ScheduleDetailScreen` resolve lịch qua `GET /api/v1/plants/{plantId}/schedules` (không gọi `GET /schedules/{id}`), chỉnh sửa tri-state (`PUT /schedules/{id}`), `Tạm ngưng` / `Tiếp tục` / `Hủy (CANCELLED)`, thực thi lượt đến hạn và `Xóa vĩnh viễn` có cảnh báo bảo toàn Care Logs (`schedule_id = NULL`). |
+| **Nhật ký phát triển, Lịch sử chăm sóc & Theo dõi** | Giao diện xem trước (chờ tích hợp API Care Logs & Growth Journals ở **G5.4.3**). |
 
 ---
 
@@ -111,6 +113,22 @@ Các phân hệ nghiệp vụ kế tiếp (**Lịch chăm sóc / Care Schedules*
 - **Đồng bộ Cache Chéo & An toàn Xóa**: Tạo, sửa và xóa cây tự động đồng bộ `plants.detail`, `plants.list`, `gardens.list` (`plantCount`) và `gardens.detail` (`plants`). Thao tác xóa không optimistic update: bắt buộc xác nhận `Alert.alert` cảnh báo xóa cascade cả **Care Schedules**, **Care Logs** và **Growth Journals**, và gọi `cancelQueries` + `removeQueries` trên `plants.detail` để tránh refetch 404 ngoài ý muốn.
 - **Chống rò rỉ theo tài khoản**: `useUserPlantsList` áp dụng `useOwnerScopedPlaceholderData` theo `cacheOwnerId`; mọi mutation kiểm chứng `ownerUserId` + `sessionGeneration` và trạng thái phiên hiện tại trước khi ghi cache hoặc điều hướng/hiển thị lỗi UI; request trễ từ phiên cũ bị `apiClient` chặn với `SESSION_USER_MISMATCH`.
 
+### 4.6. Tích hợp Lịch chăm sóc – Care Schedules (G5.4.2)
+- **Endpoints thực tế & Auth Gating**: Toàn bộ endpoint Care Schedules đi qua `apiClient` và chỉ tự động fetch trong React Query hooks khi `status === 'authenticated'`:
+  - Hôm nay: `GET /api/v1/schedules/today`
+  - Lịch theo cây: `GET /api/v1/plants/{plantId}/schedules` (hỗ trợ `status?: ScheduleStatus`, `page` 0-based, `size`)
+  - Tạo, sửa & xóa vĩnh viễn: `POST /api/v1/schedules`, `PUT /api/v1/schedules/{scheduleId}`, `DELETE /api/v1/schedules/{scheduleId}`
+  - Thực thi lượt chăm sóc: `POST /api/v1/schedules/{scheduleId}/complete`, `POST /api/v1/schedules/{scheduleId}/skip` (tự động gửi JSON body `{}` khi không truyền `note`/`performedAt` để phù hợp `@RequestBody(required = false)` phía Spring Boot).
+  - Backend **không cung cấp** `GET /api/v1/schedules` tổng hay `GET /api/v1/schedules/{scheduleId}` riêng lẻ; `ScheduleDetailScreen` tra cứu từ cache (`schedules.today` / `plants.schedules`) hoặc scan phân trang `GET /api/v1/plants/{plantId}/schedules` mà tuyệt đối không gọi endpoint không tồn tại.
+- **Chuẩn múi giờ Việt Nam (`Asia/Ho_Chi_Minh`)**: Mọi kiểm tra ngày hiện tại (`startDate >= todayVN`, `endDate >= startDate`), định dạng thời gian nhắc kế tiếp (`nextScheduledAt`) và badge quá hạn (`isOverdue`) đều quy đổi nhất quán sang `Asia/Ho_Chi_Minh` thông qua `Intl.DateTimeFormat`, không lệ thuộc múi giờ máy/CI runner.
+- **Hợp đồng dữ liệu Tri-State `PUT` & Trạng thái `Complete` / `Skip`**:
+  - `buildUpdateSchedulePayload`: bảo toàn giá trị cũ khi field là `undefined`, xóa `taskLabel`/`endDate` khi gửi `null`, reset `reminderTime` về mặc định `08:00:00` khi gửi `null`, và buộc `intervalDays: null` khi `frequency !== 'CUSTOM'`.
+  - `Complete` / `Skip`: chỉ khả dụng khi `status === 'ACTIVE'` và `nextScheduledAt <= now` (chặn sẵn ở UI đồng thời xử lý `HTTP 409 Conflict` từ server); chu kỳ `ONCE` hoặc vượt `endDate` sẽ tự chuyển `COMPLETED` và rời khỏi danh sách hôm nay; thao tác `Skip` ghi nhận `CareLogStatus.SKIPPED` ở server nhưng giữ `ScheduleStatus` là `ACTIVE` (hoặc `COMPLETED`), tuyệt đối không gán `SKIPPED` cho lịch hay giả lập danh sách Care Logs.
+- **Bảo toàn dữ liệu khi xóa & Đồng bộ Cache chéo**:
+  - `DELETE /schedules/{scheduleId}` chỉ thực hiện sau hộp thoại xác nhận nêu rõ Care Logs trước đó vẫn được bảo toàn (`schedule_id = NULL`), ngắt refetch 404 sau khi xóa thành công và làm sạch cache `plants.schedulesBase` & `schedules.today`.
+  - Chỉnh sửa/xóa cây (`useUpdatePlantMutation`, `useDeletePlantMutation`) và xóa vườn (`useDeleteGardenMutation`) tự động dọn/invalidate các cache `plants.schedulesBase` và `schedules.today` tương ứng.
+- **Chống rò rỉ tài khoản (Account A → B Isolation)**: Query keys phân lập theo `userId` (`queryKeys.schedules.*`, `queryKeys.plants.schedules*`), `usePlantSchedules` dùng `useOwnerAndPlantScopedPlaceholderData` kiểm tra cả `userId` và `plantId`; tất cả mutation hooks lọc trạng thái `isPending`/`error`/`data` theo phiên sở hữu (`ownerUserId` + `sessionGeneration`), đồng thời `ScheduleDetailScreen` & `PlantDetailScreen` gắn `isDeleted`/`deletingSnapshot`/`localSnapshot` theo `userId:sessionGeneration` để không bao giờ khóa hoặc rò rỉ dữ liệu tài khoản trước trên bất kỳ khung hình chuyển đổi nào.
+
 ---
 
 ## 5. Cấu trúc thư mục mã nguồn
@@ -119,7 +137,7 @@ Các phân hệ nghiệp vụ kế tiếp (**Lịch chăm sóc / Care Schedules*
 frontend/
 ├── assets/                      # Asset hình ảnh và icon SVG
 ├── src/
-│   ├── app/                     # Tuyến điều hướng Expo Router (_layout, index, home, search, filter, plants, gardens, garden-detail, plant-detail, auth/, garden/, ...)
+│   ├── app/                     # Tuyến điều hướng Expo Router (_layout, index, home, search, filter, plants, gardens, garden-detail, plant-detail, auth/, garden/, schedule/)
 │   ├── components/              # UI Component dùng chung
 │   ├── constants/theme.ts       # Bảng màu GoPlantColors và GoPlantTypography
 │   ├── features/
@@ -128,12 +146,13 @@ frontend/
 │   │   ├── species/             # Phân hệ Loài cây & Yêu thích: speciesTypes, speciesApi, speciesHooks, FavoritesSection
 │   │   ├── gardens/             # Phân hệ Khu vườn & Thêm/Sửa cây: gardenTypes, gardenApi, gardenHooks, GardenScreens
 │   │   ├── plants/              # Phân hệ Cây trồng cá nhân: plantTypes, plantApi, plantHooks, PlantDetailScreen (& @deprecated PlantDataStore)
+│   │   ├── schedule/            # Phân hệ Lịch chăm sóc: scheduleTypes, scheduleApi, scheduleHooks, ScheduleScreens (Overview, Create, Detail)
 │   │   ├── main/                # Các tab chính (GardensScreen, PlantsScreen, JournalScreen, ScheduleScreen, MonitoringScreen)
 │   │   └── ...
 │   ├── services/
 │   │   ├── api/                 # apiClient, apiConfig, apiError, apiTypes, tokenStorage
 │   │   └── query/               # queryClient, queryKeys
-│   ├── __tests__/               # Automated Test Suite (Vitest + Axios adapter mock — 149 tests)
+│   ├── __tests__/               # Automated Test Suite (Vitest + Axios adapter mock — 175 tests)
 │   │   ├── tokenStorage.test.ts         # Lưu trữ an toàn, AuthSession schema & phân loại lỗi (31 tests)
 │   │   ├── apiClient.test.ts            # Trusted origin, baseURL guard, session identity guard, interceptor & HTTP 401 (31 tests)
 │   │   ├── apiErrorAndRetry.test.ts     # Chuẩn hóa lỗi & chính sách retry (15 tests)
@@ -141,6 +160,7 @@ frontend/
 │   │   ├── speciesAndFavorites.test.tsx # Species API, Favorites serialization/concurrency, placeholder/account isolation & UI integration (23 tests)
 │   │   ├── gardensIntegration.test.tsx  # Gardens API, CRUD cache/account isolation & Home/Main/Garden/AddPlant UI (13 tests)
 │   │   ├── userPlantsIntegration.test.tsx # User Plants API, validation, CRUD, UI, cross-cache sync, last-page delete pagination/pending refetch & A→B pending isolation (24 tests)
+│   │   ├── schedulesIntegration.test.tsx # Care Schedules API, VN timezone, tri-state PUT, Complete/Skip 409, UI overview/create/detail, Plant/Garden cascade cleanup & A→B pending isolation (26 tests)
 │   │   └── setup.ts                     # Cấu hình môi trường mock cho Vitest
 ├── vitest.config.mjs            # Cấu hình Vitest runner (`happy-dom`, alias `@/assets` & `@ -> src`, stub `@/assets/*` require khi test)
 ├── eslint.config.js             # Cấu hình Flat Config ESLint v9
@@ -190,7 +210,7 @@ npm.cmd run typecheck
 # 3. Phân tích mã nguồn với ESLint (0 errors)
 npm.cmd run lint
 
-# 4. Chạy toàn bộ kiểm thử tự động với Vitest (149/149 PASS)
+# 4. Chạy toàn bộ kiểm thử tự động với Vitest (175/175 PASS)
 npm.cmd test
 
 # 5. Xác minh cấu hình Expo hợp lệ
@@ -218,5 +238,6 @@ cd E:\GoPlant
 - [x] **G5.4.1**: Tích hợp hoàn chỉnh Backend REST API cho Cây trồng cá nhân (`User Plants`: danh sách/lọc/phân trang, chi tiết + `plantCode` có điều kiện, tạo mới theo vườn & loài thật, cập nhật & cascade delete, đồng bộ cache chéo với `gardens.*`, phân lập A → B khi pending); đạt 140 tests Vitest.
 - [x] **G5.4.1.1**: Khắc phục lỗi phân trang khi xóa cây cuối trang cuối tại `PlantsScreen` (`PageContent`) và `SearchScreen` (`scope="owned"`) với guard `isFetching` / `isPlaceholderData`; bổ sung regression tests đạt 145 tests Vitest.
 - [x] **G5.4.1.1.2**: Sửa triệt để race condition khi GET refetch còn pending sau xóa cây trang cuối (`displayTotalPages` / `displayOwnedTotalPages` bảo toàn `Math.max(1, totalPages, page + 1)` và hiển thị trạng thái đồng bộ thay cho Empty State giả khi `totalElements > 0`); bổ sung regression tests đạt 149 tests Vitest.
-- [ ] **G5.4.2 – G5.4.3**: Tích hợp Backend REST API cho Lịch chăm sóc (`Care Schedules`), Lịch sử chăm sóc (`Care Logs`) và Nhật ký sinh trưởng (`Growth Journals`).
+- [x] **G5.4.2**: Tích hợp hoàn chỉnh Backend REST API cho Lịch chăm sóc (`Care Schedules`: tổng quan `/schedules/today`, lịch theo cây, tạo mới, chi tiết/sửa tri-state `PUT`, `Complete`/`Skip` + `409`, tạm ngưng/tiếp tục/`CANCELLED`/xóa bảo toàn Care Logs, chuẩn giờ VN `Asia/Ho_Chi_Minh`, đồng bộ cascade khi sửa/xóa cây & xóa vườn, cô lập phiên A → B); mở rộng lên 175 tests Vitest trên 8 file.
+- [ ] **G5.4.3**: Tích hợp Backend REST API cho Lịch sử chăm sóc (`Care Logs`) và Nhật ký sinh trưởng (`Growth Journals`).
 - [ ] **G5.5**: Tích hợp các tính năng nâng cao (Chẩn đoán AI, Camera/Upload ảnh, QR định danh, Thông báo nhắc nhở).

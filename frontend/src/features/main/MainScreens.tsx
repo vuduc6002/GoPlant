@@ -24,6 +24,8 @@ import {
   PLANT_SORT_OPTIONS,
   type UserPlantSummaryDto,
 } from '@/features/plants/plantTypes';
+import { ScheduleOverviewContent } from '@/features/schedule/ScheduleScreens';
+import { useTodaySchedules } from '@/features/schedule/scheduleHooks';
 import { FavoritesSection } from '@/features/species/FavoritesSection';
 import { useFavoriteSpecies } from '@/features/species/speciesHooks';
 import { AppApiError } from '@/services/api/apiError';
@@ -703,50 +705,7 @@ function PageBody({ kind }: { kind: PageKind }) {
       </>
     );
   }
-  return (
-    <>
-      <View style={s.scheduleBanner}>
-        <Text style={s.bannerIcon}>◷</Text>
-        <View style={s.cardCopy}>
-          <Text style={s.cardTitle}>Lịch chăm sóc của bạn</Text>
-          <Text style={s.body}>Theo dõi các công việc chăm cây sắp tới.</Text>
-        </View>
-      </View>
-      <View style={s.metrics}>
-        <View style={s.metric}>
-          <Text style={s.metricValue}>0%</Text>
-          <Text style={s.body}>Tiến độ hoàn thành</Text>
-        </View>
-        <View style={s.metric}>
-          <Text style={s.metricValue}>0</Text>
-          <Text style={s.body}>Lịch đang hoạt động</Text>
-        </View>
-      </View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.pills}>
-        {['Tất cả', 'Hôm nay', 'Tuần này'].map((x, i) => (
-          <Tag key={x} tone={i === 0 ? 'mint' : 'plain'}>
-            {x}
-          </Tag>
-        ))}
-      </ScrollView>
-      <Section title="Cây chưa có lịch" hint="0 cây">
-        <EmptyCard
-          icon="◷"
-          title="Chưa có lịch chăm sóc"
-          description="Tạo lịch để lên kế hoạch tưới nước, bón phân và chăm sóc cây."
-          action="＋  Tạo lịch đầu tiên"
-          onPress={() => router.push('/schedule/create' as never)}
-        />
-      </Section>
-      <Section title="Thiết lập lịch thủ công">
-        <View style={s.card}>
-          <Text style={s.cardTitle}>Tạo chu kỳ chăm sóc</Text>
-          <Text style={s.body}>Chọn cây, công việc và thời gian phù hợp.</Text>
-          <Action label="Thiết lập lịch" onPress={() => router.push('/schedule/create' as never)} />
-        </View>
-      </Section>
-    </>
-  );
+  return <ScheduleOverviewContent />;
 }
 
 function PageContent({ kind }: { kind: PageKind }) {
@@ -787,8 +746,10 @@ function PageContent({ kind }: { kind: PageKind }) {
   }, [plantQuery, debouncedKeyword]);
 
   const isPlantsTab = kind === 'plants';
+  const isScheduleTab = kind === 'schedule';
   const gardensQuery = useGardensList({ enabled: kind === 'gardens' || isPlantsTab });
   const favoritesQuery = useFavoriteSpecies({ page: 0, size: 20 }, { enabled: isPlantsTab });
+  const todaySchedulesQuery = useTodaySchedules({ enabled: isScheduleTab });
   const plantsQuery = useUserPlantsList(
     {
       keyword: debouncedKeyword || undefined,
@@ -830,6 +791,8 @@ function PageContent({ kind }: { kind: PageKind }) {
   const gardensCount = gardens.length;
   const favCount = favoritesQuery.data?.totalElements ?? 0;
   const plantsTotal = plantsQuery.data?.totalElements ?? 0;
+  const todayItems = todaySchedulesQuery.data ?? [];
+  const todayOverdueCount = todayItems.filter((item) => item.isOverdue).length;
   const hasActiveFilters = Boolean(
     debouncedKeyword || selectedGardenId || selectedHealthStatus
   );
@@ -853,7 +816,17 @@ function PageContent({ kind }: { kind: PageKind }) {
           : `${favCount} loài yêu thích • ${plantsTotal} cây sở hữu • ${gardensCount} khu vườn`,
     },
     journal: { title: 'Nhật ký', subtitle: 'Nhật ký phát triển', intro: 'Chưa có ghi nhận nào' },
-    schedule: { title: 'Lịch Chăm Sóc', subtitle: 'Lập lịch chăm sóc', intro: 'Chưa có lịch chăm sóc nào' },
+    schedule: {
+      title: 'Lịch Chăm Sóc',
+      subtitle: 'Lập lịch chăm sóc',
+      intro: todaySchedulesQuery.isLoading
+        ? 'Đang tải lịch chăm sóc hôm nay...'
+        : todaySchedulesQuery.isError
+          ? 'Không thể tải dữ liệu lịch hôm nay'
+          : todayItems.length > 0
+            ? `${todayItems.length} việc hôm nay • ${todayOverdueCount} việc quá hạn`
+            : 'Không có công việc cần làm trong hôm nay',
+    },
     monitoring: {
       title: 'Theo dõi & Ghi nhận',
       subtitle: 'Tổng quan sức khỏe vườn',

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, type MutableRefObject } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/features/auth/AuthProvider';
+import type { TodayScheduleItemDto } from '@/features/schedule/scheduleTypes';
 import { AppApiError } from '@/services/api/apiError';
 import type { SimpleMessageResponseDto } from '@/services/api/apiTypes';
 import { getSession, getSessionGeneration } from '@/services/api/tokenStorage';
@@ -468,6 +469,13 @@ export function useDeleteGardenMutation() {
       }
 
       const cleanId = vars.gardenId.trim();
+      const cachedDetail = qc.getQueryData<GardenDetailDto>(
+        queryKeys.gardens.detail(ownerUserId, cleanId)
+      );
+      const deletedPlantIds = new Set(
+        Array.isArray(cachedDetail?.plants) ? cachedDetail.plants.map((p) => p.id) : []
+      );
+
       await qc.cancelQueries({
         queryKey: queryKeys.gardens.detail(ownerUserId, cleanId),
         exact: true,
@@ -476,11 +484,34 @@ export function useDeleteGardenMutation() {
         queryKey: queryKeys.gardens.detail(ownerUserId, cleanId),
         exact: true,
       });
+      for (const plantId of deletedPlantIds) {
+        await qc.cancelQueries({
+          queryKey: queryKeys.plants.schedulesBase(ownerUserId, plantId),
+        });
+        qc.removeQueries({
+          queryKey: queryKeys.plants.schedulesBase(ownerUserId, plantId),
+        });
+        await qc.cancelQueries({
+          queryKey: queryKeys.plants.detail(ownerUserId, plantId),
+          exact: true,
+        });
+        qc.removeQueries({
+          queryKey: queryKeys.plants.detail(ownerUserId, plantId),
+          exact: true,
+        });
+      }
+      if (deletedPlantIds.size > 0) {
+        qc.setQueryData<TodayScheduleItemDto[]>(queryKeys.schedules.today(ownerUserId), (old) =>
+          Array.isArray(old) ? old.filter((item) => !deletedPlantIds.has(item.plantId)) : old
+        );
+      }
       qc.setQueryData<GardenSummaryDto[]>(queryKeys.gardens.list(ownerUserId), (old) => {
         if (!Array.isArray(old)) return old;
         return old.filter((item) => item.id !== cleanId);
       });
       qc.invalidateQueries({ queryKey: queryKeys.gardens.list(ownerUserId) });
+      qc.invalidateQueries({ queryKey: queryKeys.plants.lists(ownerUserId) });
+      qc.invalidateQueries({ queryKey: queryKeys.schedules.today(ownerUserId) });
     },
   });
 

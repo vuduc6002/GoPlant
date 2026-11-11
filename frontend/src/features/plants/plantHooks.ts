@@ -8,6 +8,7 @@ import {
 } from '@tanstack/react-query';
 import { useAuth } from '@/features/auth/AuthProvider';
 import type { GardenDetailDto, GardenSummaryDto } from '@/features/gardens/gardenTypes';
+import type { TodayScheduleItemDto } from '@/features/schedule/scheduleTypes';
 import { AppApiError } from '@/services/api/apiError';
 import type { PageResponse, SimpleMessageResponseDto } from '@/services/api/apiTypes';
 import { getSession, getSessionGeneration } from '@/services/api/tokenStorage';
@@ -91,6 +92,59 @@ function isHookAuthMatching(
     }
   }
   return true;
+}
+
+function isPlantMutationOwnedByCurrentSession(
+  variables: Partial<PlantMutationContext> | undefined,
+  currentUserId: string
+): boolean {
+  if (!variables) {
+    return true;
+  }
+  const activeGeneration = getSessionGeneration();
+  if (
+    typeof variables.sessionGeneration === 'number' &&
+    variables.sessionGeneration !== activeGeneration
+  ) {
+    return false;
+  }
+  const owner = variables.ownerUserId ?? '';
+  if (owner) {
+    return owner === currentUserId;
+  }
+  return !currentUserId;
+}
+
+function getSessionScopedPlantMutationFields<
+  TData,
+  TVariables extends Partial<PlantMutationContext>,
+>(
+  mutation: {
+    status: 'idle' | 'pending' | 'success' | 'error';
+    isIdle: boolean;
+    isPending: boolean;
+    isSuccess: boolean;
+    isError: boolean;
+    data: TData | undefined;
+    error: AppApiError | null;
+    variables: TVariables | undefined;
+  },
+  currentUserId: string
+) {
+  const belongsToSession = isPlantMutationOwnedByCurrentSession(
+    mutation.variables,
+    currentUserId
+  );
+  return {
+    status: belongsToSession ? mutation.status : ('idle' as const),
+    isIdle: belongsToSession ? mutation.isIdle : true,
+    isPending: belongsToSession ? mutation.isPending : false,
+    isSuccess: belongsToSession ? mutation.isSuccess : false,
+    isError: belongsToSession ? mutation.isError : false,
+    data: belongsToSession ? mutation.data : undefined,
+    error: belongsToSession ? mutation.error : null,
+    variables: belongsToSession ? mutation.variables : undefined,
+  };
 }
 
 async function resolveMutationSessionOwner(
@@ -418,8 +472,11 @@ export function useCreatePlantMutation() {
     [rawMutateAsync]
   );
 
+  const scopedFields = getSessionScopedPlantMutationFields(mutation, currentUserId);
+
   return {
     ...mutation,
+    ...scopedFields,
     mutate,
     mutateAsync,
   };
@@ -528,6 +585,8 @@ export function useUpdatePlantMutation() {
 
       qc.invalidateQueries({ queryKey: queryKeys.plants.lists(ownerUserId) });
       qc.invalidateQueries({ queryKey: queryKeys.gardens.all(ownerUserId) });
+      qc.invalidateQueries({ queryKey: queryKeys.plants.schedulesBase(ownerUserId, updated.id) });
+      qc.invalidateQueries({ queryKey: queryKeys.schedules.today(ownerUserId) });
     },
   });
 
@@ -566,8 +625,11 @@ export function useUpdatePlantMutation() {
     [rawMutateAsync]
   );
 
+  const scopedFields = getSessionScopedPlantMutationFields(mutation, currentUserId);
+
   return {
     ...mutation,
+    ...scopedFields,
     mutate,
     mutateAsync,
   };
@@ -635,6 +697,12 @@ export function useDeletePlantMutation() {
       );
 
       await qc.cancelQueries({
+        queryKey: queryKeys.plants.schedulesBase(ownerUserId, cleanId),
+      });
+      qc.removeQueries({
+        queryKey: queryKeys.plants.schedulesBase(ownerUserId, cleanId),
+      });
+      await qc.cancelQueries({
         queryKey: queryKeys.plants.detail(ownerUserId, cleanId),
         exact: true,
       });
@@ -642,6 +710,10 @@ export function useDeletePlantMutation() {
         queryKey: queryKeys.plants.detail(ownerUserId, cleanId),
         exact: true,
       });
+
+      qc.setQueryData<TodayScheduleItemDto[]>(queryKeys.schedules.today(ownerUserId), (old) =>
+        Array.isArray(old) ? old.filter((item) => item.plantId !== cleanId) : old
+      );
 
       qc.setQueriesData<PageResponse<UserPlantSummaryDto>>(
         { queryKey: queryKeys.plants.lists(ownerUserId) },
@@ -690,6 +762,7 @@ export function useDeletePlantMutation() {
 
       qc.invalidateQueries({ queryKey: queryKeys.plants.lists(ownerUserId) });
       qc.invalidateQueries({ queryKey: queryKeys.gardens.all(ownerUserId) });
+      qc.invalidateQueries({ queryKey: queryKeys.schedules.today(ownerUserId) });
     },
   });
 
@@ -728,8 +801,11 @@ export function useDeletePlantMutation() {
     [rawMutateAsync]
   );
 
+  const scopedFields = getSessionScopedPlantMutationFields(mutation, currentUserId);
+
   return {
     ...mutation,
+    ...scopedFields,
     mutate,
     mutateAsync,
   };

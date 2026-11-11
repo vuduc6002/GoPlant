@@ -360,14 +360,29 @@ export default function HomeScreen() {
             <Text style={styles.white}>▣</Text>
           </View>
           <View style={styles.flexCopy}>
-            <Text style={styles.scheduleTitle}>Lập lịch chăm sóc cây trồng</Text>
+            <Text style={styles.scheduleTitle}>Lịch chăm sóc cây trồng</Text>
             <Text style={styles.scheduleDescription}>
-              Tự động hóa chu kỳ tưới nước, bón phân & tỉa cành để cây luôn xanh tốt.
+              Theo dõi các việc cần làm hôm nay, hoàn thành hoặc thiết lập chu kỳ tưới nước & bón phân.
             </Text>
+            <View style={styles.scheduleCtaRow}>
+              <Pressable
+                onPress={() => navigate('/schedule')}
+                accessibilityRole="button"
+                accessibilityLabel="Mở lịch chăm sóc hôm nay"
+                style={styles.scheduleSecondaryButton}
+              >
+                <Text style={styles.scheduleSecondaryText}>Lịch hôm nay</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => navigate('/schedule/create')}
+                accessibilityRole="button"
+                accessibilityLabel="Tạo lịch chăm sóc mới"
+                style={styles.scheduleButton}
+              >
+                <Text style={styles.white}>Tạo lịch ngay →</Text>
+              </Pressable>
+            </View>
           </View>
-          <Pressable onPress={() => navigate('/schedule/create')} style={styles.scheduleButton}>
-            <Text style={styles.white}>Tạo lịch ngay →</Text>
-          </Pressable>
         </View>
 
         <View style={styles.searchBox}>
@@ -585,7 +600,17 @@ const styles = StyleSheet.create({
   },
   scheduleTitle: { color: C.forest, fontFamily: F.semiBold, fontSize: 13, lineHeight: 18 },
   scheduleDescription: { color: C.secondaryText, fontFamily: F.regular, fontSize: 10, lineHeight: 14 },
+  scheduleCtaRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 },
   scheduleButton: { paddingHorizontal: 10, paddingVertical: 8, borderRadius: 99, backgroundColor: C.primary },
+  scheduleSecondaryButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 99,
+    backgroundColor: C.surface,
+    borderWidth: 1,
+    borderColor: '#BCE6CD',
+  },
+  scheduleSecondaryText: { color: C.forest, fontFamily: F.semiBold, fontSize: 11 },
   searchBox: {
     minHeight: 46,
     marginTop: 2,

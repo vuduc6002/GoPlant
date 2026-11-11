@@ -1,0 +1,2680 @@
+import React, { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { Alert } from 'react-native';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { AuthProvider, useAuth } from '@/features/auth/AuthProvider';
+import { useDeleteGardenMutation } from '@/features/gardens/gardenHooks';
+import { type GardenSummaryDto } from '@/features/gardens/gardenTypes';
+import HomeScreen from '@/features/home/HomeScreen';
+import { ScheduleScreen } from '@/features/main/MainScreens';
+import PlantDetailScreen from '@/features/plants/PlantDetailScreen';
+import { PlantDataProvider } from '@/features/plants/PlantDataStore';
+import {
+  useDeletePlantMutation,
+  useUpdatePlantMutation,
+} from '@/features/plants/plantHooks';
+import {
+  type UserPlantDetailDto,
+  type UserPlantSummaryDto,
+} from '@/features/plants/plantTypes';
+import {
+  CreateScheduleScreen,
+  ScheduleDetailScreen,
+} from '@/features/schedule/ScheduleScreens';
+import {
+  buildCreateSchedulePayload,
+  buildUpdateSchedulePayload,
+  completeSchedule,
+  createSchedule,
+  deleteSchedule,
+  formatNextScheduledAtVn,
+  getPlantSchedules,
+  getTodaySchedules,
+  getTodayVnDateString,
+  getVnDateKeyFromIso,
+  isScheduleDueNow,
+  skipSchedule,
+  updateSchedule,
+} from '@/features/schedule/scheduleApi';
+import {
+  useCompleteScheduleMutation,
+  useCreateScheduleMutation,
+  useDeleteScheduleMutation,
+  usePlantSchedules,
+  useSkipScheduleMutation,
+  useTodaySchedules,
+  useUpdateScheduleMutation,
+} from '@/features/schedule/scheduleHooks';
+import {
+  type CareScheduleDto,
+  type TodayScheduleItemDto,
+} from '@/features/schedule/scheduleTypes';
+import { apiClient } from '@/services/api/apiClient';
+import { AppApiError } from '@/services/api/apiError';
+import type { AuthSession, PageResponse, UserProfileDto } from '@/services/api/apiTypes';
+import * as tokenStorage from '@/services/api/tokenStorage';
+import { shouldRetry } from '@/services/query/queryClient';
+import { queryKeys } from '@/services/query/queryKeys';
+
+/**
+ * NOTE ON TEST SCOPE:
+ * These automated unit & integration tests run in Vitest (happy-dom) using an Axios adapter mock
+ * and do NOT connect to a live Spring Boot socket or run real Android Emulator UI rendering.
+ */
+
+const { mockRouter, routeParamsState } = vi.hoisted(() => ({
+  mockRouter: {
+    push: vi.fn(),
+    replace: vi.fn(),
+    back: vi.fn(),
+    canGoBack: vi.fn(() => true),
+  },
+  routeParamsState: {
+    current: {} as Record<string, string | undefined>,
+  },
+}));
+
+vi.mock('expo-router', () => ({
+  router: mockRouter,
+  useLocalSearchParams: () => routeParamsState.current,
+}));
+
+vi.mock('expo-image', () => ({
+  Image: ({
+    source,
+    alt,
+  }: {
+    source?: { uri?: string } | number;
+    alt?: string;
+  }) =>
+    React.createElement('img', {
+      src: typeof source === 'object' && source !== null ? source.uri ?? '' : '',
+      alt: alt ?? '',
+    }),
+}));
+
+vi.mock('react-native-safe-area-context', () => ({
+  SafeAreaView: ({ children }: { children?: React.ReactNode }) =>
+    React.createElement('div', { 'data-testid': 'safe-area' }, children),
+}));
+
+const mockUserA = {
+  id: 'usr_sch_a',
+  fullName: 'Nguyễn Minh Khoa',
+  email: 'khoa@goplant.vn',
+  roles: ['ROLE_USER'],
+};
+
+const mockUserB = {
+  id: 'usr_sch_b',
+  fullName: 'Lê Thanh Hằng',
+  email: 'hang@goplant.vn',
+  roles: ['ROLE_USER'],
+};
+
+const sessionA: AuthSession = {
+  accessToken: 'jwt-schedule-token-user-a',
+  tokenType: 'Bearer',
+  expiresIn: 3600,
+  user: mockUserA,
+  savedAt: Date.now(),
+};
+
+const sessionB: AuthSession = {
+  accessToken: 'jwt-schedule-token-user-b',
+  tokenType: 'Bearer',
+  expiresIn: 3600,
+  user: mockUserB,
+  savedAt: Date.now(),
+};
+
+const profileA: UserProfileDto = {
+  id: mockUserA.id,
+  fullName: mockUserA.fullName,
+  email: mockUserA.email,
+  phoneNumber: null,
+  recoveryEmail: null,
+  preferredDevice: 'MOBILE',
+  status: 'ACTIVE',
+  avatarUrl: null,
+  roles: ['ROLE_USER'],
+  createdAt: '2026-01-01T00:00:00Z',
+};
+
+const profileB: UserProfileDto = {
+  ...profileA,
+  id: mockUserB.id,
+  fullName: mockUserB.fullName,
+  email: mockUserB.email,
+};
+
+const gardenSummaryOne: GardenSummaryDto = {
+  id: 'grd-1',
+  name: 'Ban công hướng Đông',
+  location: 'Tầng 4',
+  spaceType: 'BAN_CONG',
+  coverImageUrl: null,
+  plantCount: 1,
+  createdAt: '2026-01-02T00:00:00Z',
+};
+
+const plantSummaryOne: UserPlantSummaryDto = {
+  id: 'plt-1',
+  displayName: 'Monstera Cửa Sổ',
+  speciesName: 'Trầu bà lá xẻ',
+  scientificName: 'Monstera deliciosa',
+  category: 'Cây cảnh',
+  gardenName: 'Ban công hướng Đông',
+  healthStatus: 'HEALTHY',
+  imageUrl: null,
+  createdAt: '2026-01-10T08:00:00Z',
+};
+
+const plantSummaryTwo: UserPlantSummaryDto = {
+  id: 'plt-2',
+  displayName: 'Sen Đá Bàn Làm Việc',
+  speciesName: 'Sen đá nâu',
+  scientificName: 'Echeveria',
+  category: 'Sen đá',
+  gardenName: 'Góc bàn làm việc',
+  healthStatus: 'NEEDS_ATTENTION',
+  imageUrl: null,
+  createdAt: '2026-01-11T08:00:00Z',
+};
+
+const plantDetailOne: UserPlantDetailDto = {
+  id: 'plt-1',
+  displayName: 'Monstera Cửa Sổ',
+  location: 'Kệ gỗ tầng 2',
+  plantedAt: '2026-01-10',
+  note: 'Đặt nơi thoáng sáng',
+  healthStatus: 'HEALTHY',
+  plantCode: null,
+  imageUrl: null,
+  species: {
+    id: 'sp-1',
+    commonName: 'Trầu bà lá xẻ',
+    scientificName: 'Monstera deliciosa',
+    category: 'Cây cảnh',
+    difficulty: 'Dễ',
+    thumbnailUrl: null,
+  },
+  garden: {
+    id: 'grd-1',
+    name: 'Ban công hướng Đông',
+  },
+  createdAt: '2026-01-10T08:00:00Z',
+};
+
+const pastDueIso = '2026-01-10T01:00:00Z';
+const futureIso = '2099-12-31T16:30:00Z';
+
+const todayOverdueItem: TodayScheduleItemDto = {
+  scheduleId: 'sch-1',
+  plantId: 'plt-1',
+  plantName: 'Monstera Cửa Sổ',
+  gardenName: 'Ban công hướng Đông',
+  taskType: 'WATERING',
+  taskLabel: 'Tưới 300ml nước quanh gốc',
+  nextScheduledAt: pastDueIso,
+  isOverdue: true,
+  status: 'ACTIVE',
+};
+
+const todayOnceDueItem: TodayScheduleItemDto = {
+  scheduleId: 'sch-once',
+  plantId: 'plt-2',
+  plantName: 'Sen Đá Bàn Làm Việc',
+  gardenName: null,
+  taskType: 'FERTILIZING',
+  taskLabel: null,
+  nextScheduledAt: pastDueIso,
+  isOverdue: false,
+  status: 'ACTIVE',
+};
+
+const todayNotYetDueItem: TodayScheduleItemDto = {
+  scheduleId: 'sch-future',
+  plantId: 'plt-1',
+  plantName: 'Monstera Cửa Sổ',
+  gardenName: 'Ban công hướng Đông',
+  taskType: 'MISTING',
+  taskLabel: 'Phun sương tối',
+  nextScheduledAt: futureIso,
+  isOverdue: false,
+  status: 'ACTIVE',
+};
+
+const scheduleDetailOne: CareScheduleDto = {
+  id: 'sch-1',
+  userPlantId: 'plt-1',
+  plantName: 'Monstera Cửa Sổ',
+  taskType: 'WATERING',
+  taskLabel: 'Tưới 300ml nước quanh gốc',
+  frequency: 'CUSTOM',
+  intervalDays: 3,
+  reminderTime: '08:00:00',
+  startDate: '2026-11-11',
+  endDate: '2027-01-15',
+  nextScheduledAt: pastDueIso,
+  isOverdue: true,
+  status: 'ACTIVE',
+};
+
+const scheduleDetailPaused: CareScheduleDto = {
+  id: 'sch-2',
+  userPlantId: 'plt-1',
+  plantName: 'Monstera Cửa Sổ',
+  taskType: 'PRUNING',
+  taskLabel: null,
+  frequency: 'WEEKLY',
+  intervalDays: null,
+  reminderTime: '17:30:00',
+  startDate: '2026-11-11',
+  endDate: null,
+  nextScheduledAt: futureIso,
+  isOverdue: false,
+  status: 'PAUSED',
+};
+
+function createTestQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: shouldRetry,
+        retryDelay: 10,
+        gcTime: Infinity,
+      },
+      mutations: {
+        retry: false,
+      },
+    },
+  });
+}
+
+async function flushAsync(ms = 20) {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  });
+}
+
+async function waitFor(assertion: () => void, timeoutMs = 1500): Promise<void> {
+  const start = Date.now();
+  let lastError: unknown;
+  while (Date.now() - start < timeoutMs) {
+    try {
+      assertion();
+      return;
+    } catch (err) {
+      lastError = err;
+      await flushAsync(15);
+    }
+  }
+  assertion();
+  if (lastError) {
+    throw lastError;
+  }
+}
+
+function clickElement(el: Element | null | undefined) {
+  if (!el) throw new Error('Target element not found for click');
+  act(() => {
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  });
+}
+
+function changeInputValue(el: Element | null | undefined, nextValue: string) {
+  if (!el) throw new Error('Input element not found');
+  const tagName = el.tagName.toLowerCase();
+  const proto =
+    tagName === 'textarea' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+  act(() => {
+    descriptor?.set?.call(el, nextValue);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+
+function createDeferred<T = unknown>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+describe('G5.4.2 Care Schedules REST API Integration (Mocked Axios HTTP Adapter)', () => {
+  let qc: QueryClient;
+  let container: HTMLDivElement | null = null;
+  let root: ReturnType<typeof createRoot> | null = null;
+  let originalAdapter: typeof apiClient.defaults.adapter;
+
+  beforeEach(() => {
+    qc = createTestQueryClient();
+    originalAdapter = apiClient.defaults.adapter;
+    routeParamsState.current = {};
+    tokenStorage._resetWebMemorySession();
+    vi.clearAllMocks();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(async () => {
+    apiClient.defaults.adapter = originalAdapter;
+    if (root) {
+      await act(async () => {
+        root?.unmount();
+      });
+    }
+    container?.remove();
+    container = null;
+    root = null;
+    tokenStorage._resetWebMemorySession();
+    qc.clear();
+    vi.restoreAllMocks();
+  });
+
+  function mountWithProviders(ui: React.ReactElement) {
+    act(() => {
+      root!.render(
+        <QueryClientProvider client={qc}>
+          <AuthProvider>
+            <PlantDataProvider>{ui}</PlantDataProvider>
+          </AuthProvider>
+        </QueryClientProvider>
+      );
+    });
+  }
+
+  describe('1. scheduleApi Contract, Validation & Tri-State Semantics', () => {
+    it('calls only exact Backend Schedule endpoints and never GET /schedules or GET /schedules/{id}', async () => {
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+
+      const calledUrls: string[] = [];
+      const adapterSpy = vi.fn().mockImplementation((config) => {
+        calledUrls.push(`${String(config.method).toUpperCase()} ${config.url}`);
+        if (config.url === '/schedules/today' && config.method === 'get') {
+          return Promise.resolve({
+            status: 200,
+            data: { success: true, data: [todayOverdueItem, todayOnceDueItem] },
+            headers: {},
+            config,
+          });
+        }
+        if (config.url === '/plants/plt-1/schedules' && config.method === 'get') {
+          expect(config.params).toEqual({ status: 'ACTIVE', page: 0, size: 10 });
+          return Promise.resolve({
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: [scheduleDetailOne],
+                page: 0,
+                size: 10,
+                totalElements: 1,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          });
+        }
+        throw new Error(`Forbidden or unexpected endpoint: ${config.method} ${config.url}`);
+      });
+      apiClient.defaults.adapter = adapterSpy;
+
+      const today = await getTodaySchedules();
+      expect(today).toHaveLength(2);
+      expect(today[0].isOverdue).toBe(true);
+      expect(today[1].gardenName).toBeNull();
+      expect(today[1].taskLabel).toBeNull();
+
+      const page = await getPlantSchedules('plt-1', { status: 'ACTIVE', page: -2, size: 10 });
+      expect(page.content[0].intervalDays).toBe(3);
+
+      expect(calledUrls).not.toContain('GET /schedules');
+      expect(calledUrls).not.toContain('GET /schedules/sch-1');
+    });
+
+    it('validates create inputs locally (past dateVN, endDate < startDate, CUSTOM intervalDays, reminderTime, taskLabel length)', async () => {
+      const adapterSpy = vi.fn();
+      apiClient.defaults.adapter = adapterSpy;
+
+      const todayVn = getTodayVnDateString();
+      expect(() =>
+        buildCreateSchedulePayload(
+          {
+            userPlantId: ' ',
+            taskType: 'WATERING',
+            frequency: 'DAILY',
+            startDate: todayVn,
+          },
+          todayVn
+        )
+      ).toThrowError(AppApiError);
+
+      await expect(
+        createSchedule({
+          userPlantId: 'plt-1',
+          taskType: 'WATERING',
+          frequency: 'DAILY',
+          startDate: '2020-01-01',
+        })
+      ).rejects.toMatchObject({ field: 'startDate', statusCode: 400 });
+
+      await expect(
+        createSchedule({
+          userPlantId: 'plt-1',
+          taskType: 'WATERING',
+          frequency: 'DAILY',
+          startDate: '2099-05-10',
+          endDate: '2099-05-09',
+        })
+      ).rejects.toMatchObject({ field: 'endDate', statusCode: 400 });
+
+      await expect(
+        createSchedule({
+          userPlantId: 'plt-1',
+          taskType: 'WATERING',
+          frequency: 'CUSTOM',
+          intervalDays: 0,
+          startDate: '2099-05-10',
+        })
+      ).rejects.toMatchObject({ field: 'intervalDays', statusCode: 400 });
+
+      await expect(
+        createSchedule({
+          userPlantId: 'plt-1',
+          taskType: 'WATERING',
+          frequency: 'DAILY',
+          intervalDays: 3,
+          startDate: '2099-05-10',
+        })
+      ).rejects.toMatchObject({ field: 'intervalDays', statusCode: 400 });
+
+      await expect(
+        createSchedule({
+          userPlantId: 'plt-1',
+          taskType: 'WATERING',
+          frequency: 'DAILY',
+          reminderTime: '25:99:00',
+          startDate: '2099-05-10',
+        })
+      ).rejects.toMatchObject({ field: 'reminderTime', statusCode: 400 });
+
+      await expect(
+        createSchedule({
+          userPlantId: 'plt-1',
+          taskType: 'WATERING',
+          taskLabel: 'A'.repeat(201),
+          frequency: 'DAILY',
+          startDate: '2099-05-10',
+        })
+      ).rejects.toMatchObject({ field: 'taskLabel', statusCode: 400 });
+
+      expect(adapterSpy).not.toHaveBeenCalled();
+
+      const valid = buildCreateSchedulePayload(
+        {
+          userPlantId: 'plt-1',
+          taskType: 'PRUNING',
+          taskLabel: '   ',
+          frequency: 'EVERY_OTHER_DAY',
+          intervalDays: null,
+          reminderTime: '07:30',
+          startDate: todayVn,
+        },
+        todayVn
+      );
+      expect(valid).toEqual({
+        userPlantId: 'plt-1',
+        taskType: 'PRUNING',
+        frequency: 'EVERY_OTHER_DAY',
+        intervalDays: null,
+        reminderTime: '07:30:00',
+        startDate: todayVn,
+      });
+    });
+
+    it('builds tri-state UpdateScheduleRequest preserving omitted keys and sending explicit null clears', async () => {
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+
+      const partialPayload = buildUpdateSchedulePayload({
+        taskLabel: '  ',
+        reminderTime: null,
+        endDate: null,
+        frequency: 'WEEKLY',
+      });
+      expect(partialPayload).toEqual({
+        taskLabel: null,
+        reminderTime: null,
+        endDate: null,
+        frequency: 'WEEKLY',
+        intervalDays: null,
+      });
+      expect(Object.prototype.hasOwnProperty.call(partialPayload, 'startDate')).toBe(false);
+      expect(Object.prototype.hasOwnProperty.call(partialPayload, 'status')).toBe(false);
+
+      const onlyLabelPayload = buildUpdateSchedulePayload({ taskLabel: 'Tưới sương' });
+      expect(Object.keys(onlyLabelPayload)).toEqual(['taskLabel']);
+
+      let capturedPutBody: Record<string, unknown> | undefined;
+      apiClient.defaults.adapter = vi.fn().mockImplementation((config) => {
+        if (config.url === '/schedules/sch-1' && config.method === 'put') {
+          capturedPutBody = JSON.parse(String(config.data ?? '{}')) as Record<string, unknown>;
+          return Promise.resolve({
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                ...scheduleDetailOne,
+                taskLabel: null,
+                reminderTime: '08:00:00',
+                endDate: null,
+                frequency: 'DAILY',
+                intervalDays: null,
+              },
+            },
+            headers: {},
+            config,
+          });
+        }
+        throw new Error(`Unexpected call: ${config.url}`);
+      });
+
+      const updated = await updateSchedule('sch-1', {
+        taskLabel: null,
+        reminderTime: null,
+        endDate: null,
+        frequency: 'DAILY',
+        intervalDays: null,
+      });
+      expect(capturedPutBody).toEqual({
+        taskLabel: null,
+        reminderTime: null,
+        endDate: null,
+        frequency: 'DAILY',
+        intervalDays: null,
+      });
+      expect(capturedPutBody).not.toHaveProperty('userPlantId');
+      expect(updated.frequency).toBe('DAILY');
+      expect(updated.taskLabel).toBeNull();
+    });
+
+    it('surfaces server 400/403/404 validation/permission errors without retrying 4xx', async () => {
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+      let callCount = 0;
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation((config) => {
+        callCount += 1;
+        return Promise.reject({
+          isAxiosError: true,
+          response: {
+            status: 403,
+            data: {
+              success: false,
+              error: {
+                code: 'FORBIDDEN',
+                message: 'Bạn không có quyền thao tác trên lịch chăm sóc này',
+              },
+            },
+          },
+          config,
+        });
+      });
+
+      await expect(deleteSchedule('sch-foreign')).rejects.toMatchObject({
+        statusCode: 403,
+        isForbiddenError: true,
+      });
+      expect(callCount).toBe(1);
+    });
+  });
+
+  describe('2. Vietnam Timezone (Asia/Ho_Chi_Minh), Complete/Skip Payload & 409 Rules', () => {
+    it('formats UTC instants across UTC midnight into exact Asia/Ho_Chi_Minh date/time labels', () => {
+      // 2026-11-11T17:30:00Z is 2026-11-12 00:30 in Asia/Ho_Chi_Minh (+07:00)
+      const midnightBoundary = '2026-11-11T17:30:00Z';
+      expect(getVnDateKeyFromIso(midnightBoundary)).toBe('2026-11-12');
+
+      const refSameDay = new Date('2026-11-12T03:00:00Z'); // 10:00 VN on 2026-11-12
+      const sameDayFormatted = formatNextScheduledAtVn(midnightBoundary, refSameDay);
+      expect(sameDayFormatted.isTodayVn).toBe(true);
+      expect(sameDayFormatted.dateTimeLabel).toBe('Hôm nay, 00:30 (VN)');
+
+      const refPrevDay = new Date('2026-11-11T10:00:00Z'); // 17:00 VN on 2026-11-11
+      const nextDayFormatted = formatNextScheduledAtVn(midnightBoundary, refPrevDay);
+      expect(nextDayFormatted.isTodayVn).toBe(false);
+      expect(nextDayFormatted.dateTimeLabel).toBe('00:30 • 12/11/2026 (VN)');
+
+      // 2026-11-11T01:00:00Z = 08:00 VN on 2026-11-11
+      const morningVn = formatNextScheduledAtVn('2026-11-11T01:00:00Z', refPrevDay);
+      expect(morningVn.time).toBe('08:00');
+      expect(morningVn.dateKey).toBe('2026-11-11');
+    });
+
+    it('sends {} JSON body for complete/skip without fields and obeys isScheduleDueNow()', async () => {
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+
+      expect(isScheduleDueNow(todayOverdueItem)).toBe(true);
+      expect(isScheduleDueNow(todayNotYetDueItem)).toBe(false);
+      expect(isScheduleDueNow({ ...todayOverdueItem, status: 'PAUSED' })).toBe(false);
+
+      const capturedBodies: unknown[] = [];
+      apiClient.defaults.adapter = vi.fn().mockImplementation((config) => {
+        capturedBodies.push(JSON.parse(String(config.data)));
+        if (config.url === '/schedules/sch-once/complete') {
+          return Promise.resolve({
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                careLogId: 'log-1',
+                scheduleStatus: 'COMPLETED',
+                nextScheduledAt: pastDueIso,
+              },
+            },
+            headers: {},
+            config,
+          });
+        }
+        if (config.url === '/schedules/sch-1/skip') {
+          return Promise.resolve({
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                careLogId: 'log-2',
+                scheduleStatus: 'ACTIVE',
+                nextScheduledAt: futureIso,
+              },
+            },
+            headers: {},
+            config,
+          });
+        }
+        throw new Error(`Unexpected call: ${config.url}`);
+      });
+
+      const completeRes = await completeSchedule('sch-once');
+      expect(completeRes.scheduleStatus).toBe('COMPLETED');
+      expect(completeRes.careLogId).toBe('log-1');
+
+      const skipRes = await skipSchedule('sch-1');
+      expect(skipRes.scheduleStatus).toBe('ACTIVE');
+      expect(skipRes.nextScheduledAt).toBe(futureIso);
+
+      expect(capturedBodies).toEqual([{}, {}]);
+    });
+
+    it('handles HTTP 409 Conflict from complete/skip cleanly without fabricating success', async () => {
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation((config) =>
+        Promise.reject({
+          isAxiosError: true,
+          response: {
+            status: 409,
+            data: {
+              success: false,
+              error: {
+                code: 'CONFLICT',
+                message: 'Lượt chăm sóc chưa đến hạn hoặc đã được hoàn thành',
+              },
+            },
+          },
+          config,
+        })
+      );
+
+      await expect(completeSchedule('sch-future')).rejects.toMatchObject({
+        statusCode: 409,
+        message: 'Lượt chăm sóc chưa đến hạn hoặc đã được hoàn thành',
+      });
+    });
+  });
+
+  describe('3. ScheduleScreen (/schedule MainScreens) Integration', () => {
+    it('loads GET /schedules/today, replaces fake 0%/Tuần này mocks, filters Overdue vs Due Soon, and navigates cleanly', async () => {
+      vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(sessionA);
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+
+      let mode: 'error' | 'empty' | 'list' = 'error';
+      apiClient.defaults.adapter = vi.fn().mockImplementation((config) => {
+        if (config.url === '/users/me') {
+          return Promise.resolve({ status: 200, data: { success: true, data: profileA }, headers: {}, config });
+        }
+        if (config.url === '/schedules/today' && config.method === 'get') {
+          if (mode === 'error') {
+            return Promise.reject({
+              isAxiosError: true,
+              response: {
+                status: 500,
+                data: { success: false, error: { code: 'SERVER_ERROR', message: 'Lỗi tải lịch hôm nay.' } },
+              },
+              config,
+            });
+          }
+          return Promise.resolve({
+            status: 200,
+            data: {
+              success: true,
+              data: mode === 'empty' ? [] : [todayOverdueItem, todayNotYetDueItem],
+            },
+            headers: {},
+            config,
+          });
+        }
+        throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+      });
+
+      mountWithProviders(<ScheduleScreen />);
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Không thể tải lịch chăm sóc hôm nay');
+        expect(container!.textContent).toContain('Lỗi tải lịch hôm nay.');
+      });
+
+      mode = 'empty';
+      clickElement(
+        Array.from(container!.querySelectorAll('[role="button"]')).find((el) => el.textContent === 'Thử lại')
+      );
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Không có lịch chăm sóc cần thực hiện hôm nay');
+      });
+
+      mode = 'list';
+      clickElement(container!.querySelector('[aria-label="Làm mới lịch hôm nay"]'));
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('2 việc hôm nay • 1 việc quá hạn');
+        expect(container!.textContent).toContain('Tưới 300ml nước quanh gốc');
+        expect(container!.textContent).toContain('Phun sương tối');
+      });
+
+      expect(container!.textContent).not.toContain('Tuần này');
+      expect(container!.textContent).not.toContain('Tiến độ hoàn thành');
+      expect(container!.textContent).not.toContain('Cây chưa có lịch');
+
+      // Non-due item disables Complete & Skip buttons cleanly
+      const disabledFutureComplete = container!.querySelector(
+        '[aria-label="Hoàn thành Phun sương cho Monstera Cửa Sổ"]'
+      );
+      expect(disabledFutureComplete?.getAttribute('aria-disabled')).toBe('true');
+
+      // Filter by Quá hạn
+      clickElement(
+        Array.from(container!.querySelectorAll('[role="button"]')).find((el) =>
+          el.textContent?.startsWith('Quá hạn (1)')
+        )
+      );
+      expect(container!.textContent).toContain('Tưới 300ml nước quanh gốc');
+      expect(container!.textContent).not.toContain('Phun sương tối');
+
+      // Navigation to plant-detail, schedule/detail & schedule/create
+      clickElement(container!.querySelector('[aria-label="Xem cây Monstera Cửa Sổ"]'));
+      expect(mockRouter.push).toHaveBeenCalledWith({
+        pathname: '/plant-detail',
+        params: { plantId: 'plt-1' },
+      });
+
+      clickElement(container!.querySelector('[aria-label="Chi tiết lịch Monstera Cửa Sổ"]'));
+      expect(mockRouter.push).toHaveBeenCalledWith({
+        pathname: '/schedule/detail',
+        params: { plantId: 'plt-1', scheduleId: 'sch-1' },
+      });
+
+      clickElement(container!.querySelector('[aria-label="Tạo lịch chăm sóc mới"]'));
+      expect(mockRouter.push).toHaveBeenCalledWith('/schedule/create');
+    });
+
+    it('completes ONCE schedule (marks COMPLETED & removes from Today), skips recurring schedule, and displays 409 error without faking Care Logs', async () => {
+      vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(sessionA);
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+
+      let todayList: TodayScheduleItemDto[] = [todayOverdueItem, todayOnceDueItem];
+      const deferredComplete = createDeferred<void>();
+      let failSkip409 = true;
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: profileA }, headers: {}, config };
+        }
+        if (config.url === '/schedules/today' && config.method === 'get') {
+          return { status: 200, data: { success: true, data: todayList }, headers: {}, config };
+        }
+        if (config.url === '/schedules/sch-once/complete' && config.method === 'post') {
+          await deferredComplete.promise;
+          todayList = todayList.filter((i) => i.scheduleId !== 'sch-once');
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                careLogId: 'log-once-1',
+                scheduleStatus: 'COMPLETED',
+                nextScheduledAt: pastDueIso,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/schedules/sch-1/skip' && config.method === 'post') {
+          if (failSkip409) {
+            return Promise.reject({
+              isAxiosError: true,
+              response: {
+                status: 409,
+                data: {
+                  success: false,
+                  error: {
+                    code: 'CONFLICT',
+                    message: 'Lượt chăm sóc chưa đến hạn hoặc đã được hoàn thành',
+                  },
+                },
+              },
+              config,
+            });
+          }
+          todayList = [];
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                careLogId: 'log-skip-1',
+                scheduleStatus: 'ACTIVE',
+                nextScheduledAt: futureIso,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+      });
+
+      mountWithProviders(<ScheduleScreen />);
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Sen Đá Bàn Làm Việc');
+        expect(container!.textContent).toContain('Tưới 300ml nước quanh gốc');
+      });
+
+      // Trigger Complete on ONCE schedule -> locks pending controls while awaiting response
+      clickElement(
+        container!.querySelector('[aria-label="Hoàn thành Bón phân cho Sen Đá Bàn Làm Việc"]')
+      );
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Đang lưu...');
+      });
+
+      await act(async () => {
+        deferredComplete.resolve();
+        await flushAsync(40);
+      });
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('kết thúc chu kỳ lịch');
+        expect(
+          container!.querySelector('[aria-label="Hoàn thành Bón phân cho Sen Đá Bàn Làm Việc"]')
+        ).toBeNull();
+        expect(container!.textContent).toContain('1 việc hôm nay • 1 việc quá hạn');
+      });
+
+      // Skip with backend 409 -> renders error alert cleanly and preserves item
+      clickElement(
+        container!.querySelector('[aria-label="Bỏ qua Tưới nước cho Monstera Cửa Sổ"]')
+      );
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Lượt chăm sóc chưa đến hạn hoặc đã được hoàn thành');
+        expect(container!.textContent).toContain('Tưới 300ml nước quanh gốc');
+      });
+
+      // Retry Skip with success -> advances to future date and drops off today
+      failSkip409 = false;
+      clickElement(
+        container!.querySelector('[aria-label="Bỏ qua Tưới nước cho Monstera Cửa Sổ"]')
+      );
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Đã bỏ qua lượt "Tưới nước"');
+        expect(container!.textContent).not.toContain('Tưới 300ml nước quanh gốc');
+      });
+    });
+  });
+
+  describe('4. PlantDetailScreen Schedules, Pagination Guard & Cascade Cache Cleanup', () => {
+    it('loads plant schedules, filters by ScheduleStatus, navigates to create/detail, and retries on failure', async () => {
+      vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(sessionA);
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+      routeParamsState.current = { plantId: 'plt-1' };
+
+      let failFirst = true;
+      apiClient.defaults.adapter = vi.fn().mockImplementation((config) => {
+        if (config.url === '/users/me') {
+          return Promise.resolve({ status: 200, data: { success: true, data: profileA }, headers: {}, config });
+        }
+        if (config.url === '/plants/plt-1') {
+          return Promise.resolve({ status: 200, data: { success: true, data: plantDetailOne }, headers: {}, config });
+        }
+        if (config.url === '/plants/plt-1/schedules') {
+          if (failFirst) {
+            return Promise.reject({
+              isAxiosError: true,
+              response: {
+                status: 500,
+                data: { success: false, error: { code: 'ERR', message: 'Lỗi tải lịch cây.' } },
+              },
+              config,
+            });
+          }
+          const reqStatus = (config.params as { status?: string } | undefined)?.status;
+          const list =
+            reqStatus === 'PAUSED'
+              ? [scheduleDetailPaused]
+              : [scheduleDetailOne, scheduleDetailPaused];
+          return Promise.resolve({
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: list,
+                page: 0,
+                size: 10,
+                totalElements: list.length,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          });
+        }
+        throw new Error(`Unexpected call: ${config.url}`);
+      });
+
+      mountWithProviders(<PlantDetailScreen />);
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Lịch chăm sóc của cây');
+        expect(container!.textContent).toContain('Lỗi tải lịch cây.');
+      });
+
+      failFirst = false;
+      clickElement(
+        Array.from(container!.querySelectorAll('[role="button"]')).find((el) => el.textContent === 'Thử lại')
+      );
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('2 lịch');
+        expect(container!.textContent).toContain('Mỗi 3 ngày');
+        expect(container!.textContent).toContain('Tạm ngưng');
+        expect(container!.textContent).toContain('Quá hạn');
+      });
+
+      clickElement(
+        Array.from(container!.querySelectorAll('[role="button"]')).find((el) => el.textContent === 'Tạm ngưng')
+      );
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('1 lịch');
+        expect(container!.textContent).toContain('Cắt tỉa');
+        expect(container!.textContent).not.toContain('Tưới 300ml nước quanh gốc');
+      });
+
+      clickElement(container!.querySelector('[aria-label="Tạo lịch cho cây này"]'));
+      expect(mockRouter.push).toHaveBeenCalledWith({
+        pathname: '/schedule/create',
+        params: { plantId: 'plt-1' },
+      });
+
+      clickElement(container!.querySelector('[aria-label="Chi tiết lịch Cắt tỉa"]'));
+      expect(mockRouter.push).toHaveBeenCalledWith({
+        pathname: '/schedule/detail',
+        params: { plantId: 'plt-1', scheduleId: 'sch-2' },
+      });
+    });
+
+    it('clamps PlantDetailScreen schedulePage back to 0 when last item on page 1 is removed without false empty state', async () => {
+      vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(sessionA);
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+      routeParamsState.current = { plantId: 'plt-1' };
+
+      let deletedLastOnPage1 = false;
+      apiClient.defaults.adapter = vi.fn().mockImplementation((config) => {
+        if (config.url === '/users/me') {
+          return Promise.resolve({ status: 200, data: { success: true, data: profileA }, headers: {}, config });
+        }
+        if (config.url === '/plants/plt-1') {
+          return Promise.resolve({ status: 200, data: { success: true, data: plantDetailOne }, headers: {}, config });
+        }
+        if (config.url === '/plants/plt-1/schedules') {
+          const reqPage = (config.params as { page?: number } | undefined)?.page ?? 0;
+          if (!deletedLastOnPage1) {
+            return Promise.resolve({
+              status: 200,
+              data: {
+                success: true,
+                data: {
+                  content:
+                    reqPage === 0
+                      ? [scheduleDetailOne]
+                      : [{ ...scheduleDetailOne, id: 'sch-11', taskLabel: 'Lịch trang 2 cuối cùng' }],
+                  page: reqPage,
+                  size: 10,
+                  totalElements: 11,
+                  totalPages: 2,
+                  last: reqPage === 1,
+                },
+              },
+              headers: {},
+              config,
+            });
+          }
+          return Promise.resolve({
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: reqPage === 0 ? [scheduleDetailOne] : [],
+                page: reqPage,
+                size: 10,
+                totalElements: 10,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          });
+        }
+        if (config.url === '/schedules/sch-11' && config.method === 'delete') {
+          deletedLastOnPage1 = true;
+          return Promise.resolve({ status: 200, data: { success: true, data: { message: 'Deleted' } }, headers: {}, config });
+        }
+        throw new Error(`Unexpected call: ${config.url}`);
+      });
+
+      let deleteSchMut!: ReturnType<typeof useDeleteScheduleMutation>;
+      function Probe() {
+        deleteSchMut = useDeleteScheduleMutation();
+        return null;
+      }
+
+      mountWithProviders(
+        <>
+          <Probe />
+          <PlantDetailScreen />
+        </>
+      );
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Trang 1 / 2');
+      });
+
+      clickElement(
+        Array.from(container!.querySelectorAll('[role="button"]')).find((el) => el.textContent === 'Trang sau')
+      );
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Lịch trang 2 cuối cùng');
+        expect(container!.textContent).toContain('Trang 2 / 2');
+      });
+
+      await act(async () => {
+        await deleteSchMut.mutateAsync({ scheduleId: 'sch-11', plantId: 'plt-1' });
+        await flushAsync(40);
+      });
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Tưới 300ml nước quanh gốc');
+        expect(container!.textContent).not.toContain('Chưa có lịch chăm sóc');
+        expect(container!.textContent).not.toContain('Trang 2 / 1');
+      });
+    });
+
+    it('synchronizes schedules caches when Plant is updated/deleted or Garden is deleted (cascade cleanup)', async () => {
+      vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(sessionA);
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation((config) => {
+        if (config.url === '/users/me') {
+          return Promise.resolve({ status: 200, data: { success: true, data: profileA }, headers: {}, config });
+        }
+        if (config.url === '/plants/plt-1' && config.method === 'put') {
+          return Promise.resolve({
+            status: 200,
+            data: { success: true, data: { ...plantDetailOne, displayName: 'Monstera Đổi Tên' } },
+            headers: {},
+            config,
+          });
+        }
+        if (config.url === '/plants/plt-1' && config.method === 'delete') {
+          return Promise.resolve({ status: 200, data: { success: true, data: { message: 'Plant deleted' } }, headers: {}, config });
+        }
+        if (config.url === '/gardens/grd-1' && config.method === 'delete') {
+          return Promise.resolve({ status: 200, data: { success: true, data: { message: 'Garden deleted' } }, headers: {}, config });
+        }
+        throw new Error(`Unexpected call: ${config.url}`);
+      });
+
+      qc.setQueryData(queryKeys.schedules.today(mockUserA.id), [todayOverdueItem, todayOnceDueItem]);
+      qc.setQueryData(queryKeys.plants.schedules(mockUserA.id, 'plt-1', { page: 0, size: 10 }), {
+        content: [scheduleDetailOne],
+        page: 0,
+        size: 10,
+        totalElements: 1,
+        totalPages: 1,
+        last: true,
+      });
+      qc.setQueryData(queryKeys.gardens.detail(mockUserA.id, 'grd-2'), {
+        id: 'grd-2',
+        name: 'Vườn Xóa',
+        location: 'Sân thượng',
+        spaceType: 'SAN_THUONG',
+        description: null,
+        coverImageUrl: null,
+        plants: [{ ...plantSummaryTwo }],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      });
+      qc.setQueryData(queryKeys.plants.schedules(mockUserA.id, 'plt-2', { page: 0, size: 10 }), {
+        content: [{ ...scheduleDetailOne, id: 'sch-once', userPlantId: 'plt-2' }],
+        page: 0,
+        size: 10,
+        totalElements: 1,
+        totalPages: 1,
+        last: true,
+      });
+
+      let updatePlantMut!: ReturnType<typeof useUpdatePlantMutation>;
+      let deletePlantMut!: ReturnType<typeof useDeletePlantMutation>;
+      let deleteGardenMut!: ReturnType<typeof useDeleteGardenMutation>;
+      function Probe() {
+        updatePlantMut = useUpdatePlantMutation();
+        deletePlantMut = useDeletePlantMutation();
+        deleteGardenMut = useDeleteGardenMutation();
+        return null;
+      }
+
+      mountWithProviders(<Probe />);
+      await waitFor(() => {
+        expect(qc.getQueryData(queryKeys.schedules.today(mockUserA.id))).toBeDefined();
+      });
+
+      await act(async () => {
+        await updatePlantMut.mutateAsync({
+          plantId: 'plt-1',
+          data: { displayName: 'Monstera Đổi Tên' },
+        });
+      });
+      expect(
+        qc.getQueryState(queryKeys.plants.schedules(mockUserA.id, 'plt-1', { page: 0, size: 10 }))?.isInvalidated
+      ).toBe(true);
+      expect(qc.getQueryState(queryKeys.schedules.today(mockUserA.id))?.isInvalidated).toBe(true);
+
+      await act(async () => {
+        await deletePlantMut.mutateAsync('plt-1');
+      });
+      expect(
+        qc.getQueryData(queryKeys.plants.schedules(mockUserA.id, 'plt-1', { page: 0, size: 10 }))
+      ).toBeUndefined();
+      expect(
+        qc
+          .getQueryData<TodayScheduleItemDto[]>(queryKeys.schedules.today(mockUserA.id))
+          ?.map((i) => i.plantId)
+      ).toEqual(['plt-2']);
+
+      // Re-attach garden grd-1 -> grd-2 delete test (use grd-1 in API adapter)
+      qc.setQueryData(queryKeys.gardens.detail(mockUserA.id, 'grd-1'), {
+        id: 'grd-1',
+        name: 'Ban công hướng Đông',
+        location: 'Tầng 4',
+        spaceType: 'BAN_CONG',
+        description: null,
+        coverImageUrl: null,
+        plants: [{ ...plantSummaryTwo }],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      });
+      await act(async () => {
+        await deleteGardenMut.mutateAsync('grd-1');
+      });
+      expect(
+        qc.getQueryData(queryKeys.plants.schedules(mockUserA.id, 'plt-2', { page: 0, size: 10 }))
+      ).toBeUndefined();
+    });
+
+    it('deletes a plant from PlantDetailScreen cleanly, removes its schedules and today entries, and never triggers spurious post-delete GET /plants/{id}/schedules 404', async () => {
+      vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(sessionA);
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+      routeParamsState.current = { plantId: 'plt-1' };
+
+      qc.setQueryData(queryKeys.schedules.today(mockUserA.id), [todayOverdueItem, todayOnceDueItem]);
+
+      let deleteStarted = false;
+      let spuriousScheduleFetch = false;
+      const deferredDelete = createDeferred<void>();
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: profileA }, headers: {}, config };
+        }
+        if (config.url === '/plants/plt-1' && config.method === 'get') {
+          if (deleteStarted) {
+            spuriousScheduleFetch = true;
+            throw new Error('Spurious plant GET after delete');
+          }
+          return { status: 200, data: { success: true, data: plantDetailOne }, headers: {}, config };
+        }
+        if (config.url === '/plants/plt-1/schedules' && config.method === 'get') {
+          if (deleteStarted) {
+            spuriousScheduleFetch = true;
+            throw new Error('Spurious schedules GET after plant delete');
+          }
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: [scheduleDetailOne],
+                page: 0,
+                size: 10,
+                totalElements: 1,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/plants/plt-1' && config.method === 'delete') {
+          deleteStarted = true;
+          await deferredDelete.promise;
+          return { status: 200, data: { success: true, data: { message: 'Plant deleted' } }, headers: {}, config };
+        }
+        throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+      });
+
+      let confirmButtons: { text?: string; style?: string; onPress?: () => void }[] = [];
+      let alertMessage = '';
+      vi.spyOn(Alert, 'alert').mockImplementation((_t, msg, buttons) => {
+        alertMessage = msg ?? '';
+        confirmButtons = (buttons as typeof confirmButtons) ?? [];
+      });
+
+      mountWithProviders(<PlantDetailScreen />);
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Tưới 300ml nước quanh gốc');
+        expect(container!.textContent).toContain('Xóa cây');
+      });
+
+      clickElement(
+        Array.from(container!.querySelectorAll('[role="button"]')).find((el) => el.textContent === 'Xóa cây')
+      );
+      expect(alertMessage).toContain('Care Schedules');
+      expect(alertMessage).toContain('Care Logs');
+      expect(alertMessage).toContain('Growth Journals');
+
+      act(() => {
+        confirmButtons.find((b) => b.style === 'destructive')?.onPress?.();
+      });
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Đang xóa cây...');
+      });
+
+      await act(async () => {
+        deferredDelete.resolve();
+        await flushAsync(40);
+      });
+
+      await waitFor(() => {
+        expect(mockRouter.replace).toHaveBeenCalledWith('/plants');
+      });
+      expect(spuriousScheduleFetch).toBe(false);
+      expect(
+        qc.getQueryData(queryKeys.plants.schedules(mockUserA.id, 'plt-1', { page: 0, size: 10 }))
+      ).toBeUndefined();
+      expect(
+        qc.getQueryData<TodayScheduleItemDto[]>(queryKeys.schedules.today(mockUserA.id))?.map((i) => i.plantId)
+      ).toEqual(['plt-2']);
+    });
+  });
+
+  describe('5. CreateScheduleScreen (/schedule/create) Integration', () => {
+    it('preselects plantId, toggles CUSTOM intervalDays, validates locally, prevents double submit, and navigates on POST /schedules', async () => {
+      vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(sessionA);
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+      routeParamsState.current = { plantId: 'plt-1' };
+
+      const deferredPost = createDeferred<void>();
+      let postCalls = 0;
+      let postedBody: Record<string, unknown> | undefined;
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: profileA }, headers: {}, config };
+        }
+        if (config.url === '/plants' && config.method === 'get') {
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: [plantSummaryOne, plantSummaryTwo],
+                page: 0,
+                size: 100,
+                totalElements: 2,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/plants/plt-1' && config.method === 'get') {
+          return { status: 200, data: { success: true, data: plantDetailOne }, headers: {}, config };
+        }
+        if (config.url === '/schedules' && config.method === 'post') {
+          postCalls += 1;
+          postedBody = JSON.parse(String(config.data ?? '{}')) as Record<string, unknown>;
+          await deferredPost.promise;
+          return {
+            status: 201,
+            data: { success: true, data: { ...scheduleDetailOne, id: 'sch-created-1' } },
+            headers: {},
+            config,
+          };
+        }
+        throw new Error(`Unexpected call: ${config.url}`);
+      });
+
+      mountWithProviders(<CreateScheduleScreen />);
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Monstera Cửa Sổ');
+        expect(
+          container!.querySelector('[aria-label="Chọn cây Monstera Cửa Sổ"]')?.textContent
+        ).toContain('●');
+        expect(
+          container!.querySelector('[aria-label="Chọn cây Sen Đá Bàn Làm Việc"]')?.textContent
+        ).toContain('○');
+      });
+
+      // CUSTOM intervalDays input is hidden until Tùy chỉnh is tapped
+      expect(container!.querySelector('[aria-label="Khoảng cách ngày"]')).toBeNull();
+
+      clickElement(container!.querySelector('[aria-label="Chọn công việc Kiểm tra sâu bệnh"]'));
+      clickElement(container!.querySelector('[aria-label="Chọn chu kỳ Tùy chỉnh"]'));
+
+      expect(container!.querySelector('[aria-label="Khoảng cách ngày"]')).toBeTruthy();
+
+      // Local validation: past start date + intervalDays 0
+      changeInputValue(container!.querySelector('[aria-label="Khoảng cách ngày"]'), '0');
+      changeInputValue(container!.querySelector('[aria-label="Ngày bắt đầu"]'), '2020-01-01');
+
+      const submitBtn = Array.from(container!.querySelectorAll('[role="button"]')).find((el) =>
+        el.textContent?.includes('Tạo lịch chăm sóc')
+      );
+      clickElement(submitBtn);
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('số nguyên lớn hơn 0');
+        expect(container!.textContent).toContain('không được trong quá khứ');
+      });
+      expect(postCalls).toBe(0);
+
+      // Fix inputs & submit (double tap prevented)
+      const todayVn = getTodayVnDateString();
+      changeInputValue(container!.querySelector('[aria-label="Khoảng cách ngày"]'), '4');
+      changeInputValue(container!.querySelector('[aria-label="Ngày bắt đầu"]'), todayVn);
+      changeInputValue(container!.querySelector('[aria-label="Giờ nhắc"]'), '09:15');
+      changeInputValue(container!.querySelector('[aria-label="Nhãn mô tả công việc"]'), 'Soi rệp dưới lá');
+
+      clickElement(submitBtn);
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Đang tạo lịch...');
+        expect(submitBtn?.getAttribute('aria-disabled')).toBe('true');
+      });
+      clickElement(submitBtn);
+      expect(postCalls).toBe(1);
+
+      await act(async () => {
+        deferredPost.resolve();
+        await flushAsync(40);
+      });
+
+      await waitFor(() => {
+        expect(postedBody).toEqual({
+          userPlantId: 'plt-1',
+          taskType: 'PEST_CHECK',
+          taskLabel: 'Soi rệp dưới lá',
+          frequency: 'CUSTOM',
+          intervalDays: 4,
+          reminderTime: '09:15:00',
+          startDate: todayVn,
+        });
+        expect(mockRouter.replace).toHaveBeenCalledWith({
+          pathname: '/schedule/detail',
+          params: { plantId: 'plt-1', scheduleId: 'sch-created-1' },
+        });
+      });
+    });
+
+    it('renders empty plants CTA redirecting to /garden/add-plant when user owns no plants', async () => {
+      vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(sessionA);
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation((config) => {
+        if (config.url === '/users/me') {
+          return Promise.resolve({ status: 200, data: { success: true, data: profileA }, headers: {}, config });
+        }
+        if (config.url === '/plants') {
+          return Promise.resolve({
+            status: 200,
+            data: {
+              success: true,
+              data: { content: [], page: 0, size: 100, totalElements: 0, totalPages: 0, last: true },
+            },
+            headers: {},
+            config,
+          });
+        }
+        throw new Error(`Unexpected call: ${config.url}`);
+      });
+
+      mountWithProviders(<CreateScheduleScreen />);
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Bạn chưa có cây trồng nào');
+      });
+
+      clickElement(
+        Array.from(container!.querySelectorAll('[role="button"]')).find((el) =>
+          el.textContent?.includes('Thêm cây mới')
+        )
+      );
+      expect(mockRouter.push).toHaveBeenCalledWith('/garden/add-plant');
+    });
+
+    it('maps backend 400 validation errors to CreateScheduleScreen fieldErrors & alert banner without wiping inputs', async () => {
+      vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(sessionA);
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+      routeParamsState.current = { plantId: 'plt-1' };
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation((config) => {
+        if (config.url === '/users/me') {
+          return Promise.resolve({ status: 200, data: { success: true, data: profileA }, headers: {}, config });
+        }
+        if (config.url === '/plants' && config.method === 'get') {
+          return Promise.resolve({
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: [plantSummaryOne],
+                page: 0,
+                size: 100,
+                totalElements: 1,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          });
+        }
+        if (config.url === '/plants/plt-1' && config.method === 'get') {
+          return Promise.resolve({ status: 200, data: { success: true, data: plantDetailOne }, headers: {}, config });
+        }
+        if (config.url === '/schedules' && config.method === 'post') {
+          return Promise.reject({
+            isAxiosError: true,
+            response: {
+              status: 400,
+              data: {
+                success: false,
+                error: {
+                  code: 'VALIDATION_ERROR',
+                  field: 'taskLabel',
+                  message: 'Nhãn công việc vi phạm quy tắc phía máy chủ.',
+                },
+              },
+            },
+            config,
+          });
+        }
+        throw new Error(`Unexpected call: ${config.url}`);
+      });
+
+      mountWithProviders(<CreateScheduleScreen />);
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Monstera Cửa Sổ');
+      });
+
+      const labelInput = container!.querySelector('[aria-label="Nhãn mô tả công việc"]') as HTMLInputElement;
+      const reminderInput = container!.querySelector('[aria-label="Giờ nhắc"]') as HTMLInputElement;
+      changeInputValue(labelInput, 'Nhãn giữ nguyên');
+      changeInputValue(reminderInput, '09:45');
+
+      const submitBtn = Array.from(container!.querySelectorAll('[role="button"]')).find((el) =>
+        el.textContent?.includes('Tạo lịch chăm sóc')
+      );
+      clickElement(submitBtn);
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Nhãn công việc vi phạm quy tắc phía máy chủ.');
+      });
+      expect(mockRouter.replace).not.toHaveBeenCalled();
+      expect(labelInput.value).toBe('Nhãn giữ nguyên');
+      expect(reminderInput.value).toBe('09:45');
+    });
+  });
+
+  describe('6. ScheduleDetailScreen (/schedule/detail) Integration', () => {
+    it('resolves schedule via GET /plants/{plantId}/schedules without calling GET /schedules/{id}, edits with tri-state nulls & CUSTOM->DAILY switch', async () => {
+      vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(sessionA);
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+      routeParamsState.current = { plantId: 'plt-1', scheduleId: 'sch-1' };
+
+      const calledUrls: string[] = [];
+      let currentSchedule: CareScheduleDto = { ...scheduleDetailOne };
+      let putPayload: Record<string, unknown> | undefined;
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation((config) => {
+        calledUrls.push(`${String(config.method).toUpperCase()} ${config.url}`);
+        if (config.url === '/users/me') {
+          return Promise.resolve({ status: 200, data: { success: true, data: profileA }, headers: {}, config });
+        }
+        if (config.url === '/plants/plt-1/schedules' && config.method === 'get') {
+          return Promise.resolve({
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: [currentSchedule],
+                page: 0,
+                size: 100,
+                totalElements: 1,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          });
+        }
+        if (config.url === '/schedules/sch-1' && config.method === 'put') {
+          putPayload = JSON.parse(String(config.data ?? '{}')) as Record<string, unknown>;
+          currentSchedule = {
+            ...currentSchedule,
+            taskType: 'FERTILIZING',
+            taskLabel: null,
+            frequency: 'DAILY',
+            intervalDays: null,
+            reminderTime: '08:00:00',
+            endDate: null,
+          };
+          return Promise.resolve({
+            status: 200,
+            data: {
+              success: true,
+              data: currentSchedule,
+            },
+            headers: {},
+            config,
+          });
+        }
+        throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+      });
+
+      mountWithProviders(<ScheduleDetailScreen />);
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Monstera Cửa Sổ');
+        expect(container!.textContent).toContain('Mỗi 3 ngày');
+      });
+
+      expect(calledUrls).not.toContain('GET /schedules/sch-1');
+      expect(calledUrls).not.toContain('GET /schedules');
+
+      // Clear optional fields using built-in actions and switch CUSTOM -> DAILY
+      clickElement(container!.querySelector('[aria-label="Sửa công việc Bón phân"]'));
+      clickElement(
+        Array.from(container!.querySelectorAll('[role="button"]')).find((el) => el.textContent === 'Xóa nhãn')
+      );
+      clickElement(container!.querySelector('[aria-label="Sửa chu kỳ Mỗi ngày"]'));
+      clickElement(
+        Array.from(container!.querySelectorAll('[role="button"]')).find(
+          (el) => el.textContent === 'Đặt mặc định 08:00:00'
+        )
+      );
+      clickElement(
+        Array.from(container!.querySelectorAll('[role="button"]')).find(
+          (el) => el.textContent === 'Xóa ngày kết thúc'
+        )
+      );
+
+      clickElement(
+        Array.from(container!.querySelectorAll('[role="button"]')).find(
+          (el) => el.textContent === 'Lưu cập nhật lịch'
+        )
+      );
+
+      await waitFor(() => {
+        expect(putPayload).toEqual({
+          taskType: 'FERTILIZING',
+          taskLabel: null,
+          frequency: 'DAILY',
+          intervalDays: null,
+          reminderTime: null,
+          startDate: '2026-11-11',
+          endDate: null,
+        });
+        expect(putPayload).not.toHaveProperty('userPlantId');
+        expect(container!.textContent).toContain('Đã cập nhật thông tin lịch chăm sóc.');
+        expect(container!.textContent).toContain('(Không giới hạn)');
+      });
+    });
+
+    it('supports Pause -> Resume -> Cancel (CANCELLED), Complete/Skip & Physical Delete with Care Logs preservation alert and zero post-delete refetch', async () => {
+      vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(sessionA);
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+      routeParamsState.current = { plantId: 'plt-1', scheduleId: 'sch-1' };
+
+      let currentSchedule: CareScheduleDto = { ...scheduleDetailOne };
+      let listCalls = 0;
+      let deleteCalls = 0;
+      let spuriousRefetchAfterDelete = false;
+      const deferredDelete = createDeferred<void>();
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: profileA }, headers: {}, config };
+        }
+        if (config.url === '/plants/plt-1/schedules' && config.method === 'get') {
+          listCalls += 1;
+          if (deleteCalls > 0) {
+            spuriousRefetchAfterDelete = true;
+            throw new Error('Spurious plant schedules refetch after delete!');
+          }
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: [currentSchedule],
+                page: 0,
+                size: 100,
+                totalElements: 1,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/schedules/sch-1' && config.method === 'put') {
+          const body = JSON.parse(String(config.data ?? '{}')) as { status?: CareScheduleDto['status'] };
+          currentSchedule = { ...currentSchedule, status: body.status ?? currentSchedule.status };
+          return {
+            status: 200,
+            data: { success: true, data: currentSchedule },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/schedules/sch-1' && config.method === 'delete') {
+          deleteCalls += 1;
+          await deferredDelete.promise;
+          return {
+            status: 200,
+            data: { success: true, data: { message: 'Deleted schedule' } },
+            headers: {},
+            config,
+          };
+        }
+        throw new Error(`Unexpected call: ${config.url}`);
+      });
+
+      let confirmButtons: { text?: string; style?: string; onPress?: () => void }[] = [];
+      let alertMessage = '';
+      vi.spyOn(Alert, 'alert').mockImplementation((_t, msg, buttons) => {
+        alertMessage = msg ?? '';
+        confirmButtons = (buttons as typeof confirmButtons) ?? [];
+      });
+
+      mountWithProviders(<ScheduleDetailScreen />);
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Tạm ngưng');
+      });
+
+      // Pause
+      clickElement(
+        Array.from(container!.querySelectorAll('[role="button"]')).find((el) => el.textContent === 'Tạm ngưng')
+      );
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Tiếp tục lịch');
+        expect(container!.textContent).toContain('Đã tạm ngưng lịch chăm sóc.');
+      });
+      expect(
+        container!.querySelector('[aria-label="Hoàn thành lượt chăm sóc"]')?.getAttribute('aria-disabled')
+      ).toBe('true');
+
+      // Resume
+      clickElement(
+        Array.from(container!.querySelectorAll('[role="button"]')).find((el) => el.textContent === 'Tiếp tục lịch')
+      );
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Tạm ngưng');
+      });
+
+      // Cancel (soft CANCELLED status via PUT)
+      clickElement(
+        Array.from(container!.querySelectorAll('[role="button"]')).find(
+          (el) => el.textContent === 'Hủy lịch (CANCELLED)'
+        )
+      );
+      expect(alertMessage).toContain('CANCELLED');
+      expect(deleteCalls).toBe(0);
+      await act(async () => {
+        confirmButtons.find((b) => b.style === 'destructive')?.onPress?.();
+        await flushAsync(30);
+      });
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Đã hủy');
+      });
+      expect(deleteCalls).toBe(0);
+
+      // Wait for Cancel invalidation refetch to settle before snapshotting listCallsBeforeDelete
+      await flushAsync(40);
+      const listCallsBeforeDelete = listCalls;
+      clickElement(
+        Array.from(container!.querySelectorAll('[role="button"]')).find(
+          (el) => el.textContent === 'Xóa vĩnh viễn lịch'
+        )
+      );
+      expect(alertMessage).toContain('Care Logs');
+      expect(alertMessage).toContain('schedule_id = NULL');
+      expect(deleteCalls).toBe(0);
+
+      // First flush the click state update (isDeleted = true) so React disables the query observer
+      act(() => {
+        confirmButtons.find((b) => b.style === 'destructive')?.onPress?.();
+      });
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Đang xóa lịch...');
+        expect(deleteCalls).toBe(1);
+      });
+
+      await act(async () => {
+        deferredDelete.resolve();
+        await flushAsync(40);
+      });
+
+      await waitFor(() => {
+        expect(mockRouter.replace).toHaveBeenCalledWith({
+          pathname: '/plant-detail',
+          params: { plantId: 'plt-1' },
+        });
+      });
+      expect(spuriousRefetchAfterDelete).toBe(false);
+      expect(listCalls).toBe(listCallsBeforeDelete);
+    });
+
+    it('resolves ScheduleDetailScreen via Today cache fallback & multi-page scan without GET /schedules/{id}, executes Complete/Skip & handles 409', async () => {
+      vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(sessionA);
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+      // Omit plantId intentionally -> must resolve from cached schedules.today
+      routeParamsState.current = { scheduleId: 'sch-page2' };
+
+      const targetOnPage1: CareScheduleDto = {
+        ...scheduleDetailOne,
+        id: 'sch-page2',
+        userPlantId: 'plt-1',
+        taskType: 'MISTING',
+        taskLabel: 'Phun sương trang 2',
+        frequency: 'WEEKLY',
+        intervalDays: null,
+        nextScheduledAt: pastDueIso,
+        isOverdue: true,
+        status: 'ACTIVE',
+      };
+
+      qc.setQueryData(queryKeys.schedules.today(mockUserA.id), [
+        {
+          scheduleId: 'sch-page2',
+          plantId: 'plt-1',
+          plantName: 'Monstera Cửa Sổ',
+          gardenName: 'Ban công hướng Đông',
+          taskType: 'MISTING',
+          taskLabel: 'Phun sương trang 2',
+          nextScheduledAt: pastDueIso,
+          isOverdue: true,
+          status: 'ACTIVE',
+        },
+      ]);
+
+      const calledUrls: string[] = [];
+      let failComplete409 = true;
+      apiClient.defaults.adapter = vi.fn().mockImplementation((config) => {
+        calledUrls.push(`${String(config.method).toUpperCase()} ${config.url}`);
+        if (config.url === '/users/me') {
+          return Promise.resolve({ status: 200, data: { success: true, data: profileA }, headers: {}, config });
+        }
+        if (config.url === '/plants/plt-1/schedules' && config.method === 'get') {
+          const reqPage = (config.params as { page?: number } | undefined)?.page ?? 0;
+          return Promise.resolve({
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: reqPage === 0 ? [scheduleDetailOne] : [targetOnPage1],
+                page: reqPage,
+                size: 100,
+                totalElements: 2,
+                totalPages: 2,
+                last: reqPage === 1,
+              },
+            },
+            headers: {},
+            config,
+          });
+        }
+        if (config.url === '/schedules/sch-page2/complete' && config.method === 'post') {
+          if (failComplete409) {
+            return Promise.reject({
+              isAxiosError: true,
+              response: {
+                status: 409,
+                data: { success: false, error: { code: 'CONFLICT', message: 'Lượt này vừa được hoàn thành trước đó.' } },
+              },
+              config,
+            });
+          }
+          return Promise.resolve({
+            status: 200,
+            data: {
+              success: true,
+              data: { careLogId: 'log-detail-1', scheduleStatus: 'ACTIVE', nextScheduledAt: futureIso },
+            },
+            headers: {},
+            config,
+          });
+        }
+        throw new Error(`Unexpected call: ${config.url}`);
+      });
+
+      mountWithProviders(<ScheduleDetailScreen />);
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Phun sương trang 2');
+      });
+      expect(calledUrls).not.toContain('GET /schedules/sch-page2');
+      expect(calledUrls).not.toContain('GET /schedules');
+
+      clickElement(container!.querySelector('[aria-label="Hoàn thành lượt chăm sóc"]'));
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Lượt này vừa được hoàn thành trước đó.');
+      });
+
+      failComplete409 = false;
+      clickElement(container!.querySelector('[aria-label="Hoàn thành lượt chăm sóc"]'));
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Đã đánh dấu hoàn thành lượt chăm sóc');
+      });
+    });
+
+    it('renders safe fallback error states when scheduleId missing, plantId unresolvable, or server returns 403', async () => {
+      vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(sessionA);
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+      routeParamsState.current = { plantId: 'plt-foreign', scheduleId: 'sch-403' };
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation((config) => {
+        if (config.url === '/users/me') {
+          return Promise.resolve({ status: 200, data: { success: true, data: profileA }, headers: {}, config });
+        }
+        if (config.url === '/plants/plt-foreign/schedules') {
+          return Promise.reject({
+            isAxiosError: true,
+            response: {
+              status: 403,
+              data: { success: false, error: { code: 'FORBIDDEN', message: 'Không có quyền xem lịch cây này.' } },
+            },
+            config,
+          });
+        }
+        throw new Error(`Unexpected call: ${config.url}`);
+      });
+
+      mountWithProviders(<ScheduleDetailScreen />);
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Không có quyền truy cập lịch chăm sóc');
+        expect(container!.textContent).toContain('Không có quyền xem lịch cây này.');
+      });
+    });
+  });
+
+  describe('7. HomeScreen Schedule CTA Navigation', () => {
+    it('navigates cleanly to /schedule and /schedule/create without fake notification claims', async () => {
+      vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(sessionA);
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation((config) => {
+        if (config.url === '/users/me') {
+          return Promise.resolve({ status: 200, data: { success: true, data: profileA }, headers: {}, config });
+        }
+        if (config.url === '/gardens') {
+          return Promise.resolve({ status: 200, data: { success: true, data: [gardenSummaryOne] }, headers: {}, config });
+        }
+        if (config.url === '/plants') {
+          return Promise.resolve({
+            status: 200,
+            data: {
+              success: true,
+              data: { content: [plantSummaryOne], page: 0, size: 10, totalElements: 1, totalPages: 1, last: true },
+            },
+            headers: {},
+            config,
+          });
+        }
+        throw new Error(`Unexpected call: ${config.url}`);
+      });
+
+      mountWithProviders(<HomeScreen />);
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Lịch chăm sóc cây trồng');
+      });
+      expect(container!.textContent).not.toContain('Tự động hóa chu kỳ');
+
+      clickElement(container!.querySelector('[aria-label="Mở lịch chăm sóc hôm nay"]'));
+      expect(mockRouter.push).toHaveBeenCalledWith('/schedule');
+
+      clickElement(container!.querySelector('[aria-label="Tạo lịch chăm sóc mới"]'));
+      expect(mockRouter.push).toHaveBeenCalledWith('/schedule/create');
+    });
+  });
+
+  describe('8. Security & Account-Switch Cache/Mutation Isolation (A -> B Pending)', () => {
+    it('isolates query keys by userId and rejects/prevents User A pending GET queries & placeholderData from leaking across accounts or plantIds', async () => {
+      await tokenStorage.saveSession(sessionA);
+      const pendingTodayA = createDeferred<void>();
+      const pendingPlantSchA = createDeferred<void>();
+      const pendingPlant2B = createDeferred<void>();
+      const todayKeyA = queryKeys.schedules.today(mockUserA.id);
+      const todayKeyB = queryKeys.schedules.today(mockUserB.id);
+      expect(todayKeyA).not.toEqual(todayKeyB);
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        const auth = String(config.headers?.Authorization ?? '');
+        const isB = auth === `Bearer ${sessionB.accessToken}`;
+        if (config.url === '/auth/login') {
+          const payload = JSON.parse(String(config.data ?? '{}')) as { account?: string };
+          return {
+            status: 200,
+            data: { success: true, data: payload.account === mockUserB.email ? sessionB : sessionA },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: isB ? profileB : profileA }, headers: {}, config };
+        }
+        if (config.url === '/schedules/today') {
+          if (!isB) {
+            await pendingTodayA.promise;
+            return {
+              status: 200,
+              data: { success: true, data: [{ ...todayOverdueItem, taskLabel: 'Bí Mật Lịch Của A' }] },
+              headers: {},
+              config,
+            };
+          }
+          return {
+            status: 200,
+            data: { success: true, data: [{ ...todayOverdueItem, scheduleId: 'sch-b', taskLabel: 'Lịch Của B' }] },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/plants/plt-shared-1/schedules') {
+          if (!isB) {
+            await pendingPlantSchA.promise;
+            return {
+              status: 200,
+              data: {
+                success: true,
+                data: {
+                  content: [{ ...scheduleDetailOne, id: 'sch-shared', userPlantId: 'plt-shared-1', taskLabel: 'Chi tiết A' }],
+                  page: 0,
+                  size: 10,
+                  totalElements: 1,
+                  totalPages: 1,
+                  last: true,
+                },
+              },
+              headers: {},
+              config,
+            };
+          }
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: [{ ...scheduleDetailOne, id: 'sch-shared', userPlantId: 'plt-shared-1', taskLabel: 'Chi tiết B' }],
+                page: 0,
+                size: 10,
+                totalElements: 1,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/plants/plt-other-b/schedules') {
+          await pendingPlant2B.promise;
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: [{ ...scheduleDetailOne, id: 'sch-b-2', userPlantId: 'plt-other-b', taskLabel: 'Cây khác của B' }],
+                page: 0,
+                size: 10,
+                totalElements: 1,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        throw new Error(`Unexpected call: ${config.url}`);
+      });
+
+      let authCtx!: ReturnType<typeof useAuth>;
+      let setTargetPlantId!: React.Dispatch<React.SetStateAction<string>>;
+      function Probe() {
+        authCtx = useAuth();
+        const [targetPlantId, updatePlantId] = React.useState('plt-shared-1');
+        setTargetPlantId = updatePlantId;
+        useTodaySchedules();
+        const plantSch = usePlantSchedules(targetPlantId, { page: 0, size: 10 });
+        return React.createElement(
+          'div',
+          null,
+          plantSch.data?.content.map((s) => s.taskLabel).join(',') ?? 'empty'
+        );
+      }
+
+      act(() => {
+        root!.render(
+          <QueryClientProvider client={qc}>
+            <AuthProvider>
+              <Probe />
+            </AuthProvider>
+          </QueryClientProvider>
+        );
+      });
+
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(mockUserA.id);
+      });
+
+      // Switch to B while A's queries are STILL pending
+      await act(async () => {
+        await authCtx.login({ account: mockUserB.email, password: 'Secret123!' });
+      });
+
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(mockUserB.id);
+        expect(container!.textContent).toContain('Chi tiết B');
+      });
+
+      // Switch plantId on User B -> must NOT flash plt-shared-1 placeholder data while plt-other-b is pending
+      act(() => {
+        setTargetPlantId('plt-other-b');
+      });
+      await flushAsync(20);
+      expect(container!.textContent).toBe('empty');
+      expect(container!.textContent).not.toContain('Chi tiết B');
+
+      await act(async () => {
+        pendingPlant2B.resolve();
+        pendingTodayA.resolve();
+        pendingPlantSchA.resolve();
+        await flushAsync(40);
+      });
+
+      expect(container!.textContent).toContain('Cây khác của B');
+      expect(container!.textContent).not.toContain('Chi tiết A');
+      const todayB = qc.getQueryData<TodayScheduleItemDto[]>(todayKeyB);
+      expect(todayB?.map((i) => i.taskLabel)).toEqual(['Lịch Của B']);
+    });
+
+    it('prevents User A pending create/update/complete/skip/delete mutations from mutating User B same-ID schedules or navigating on User B UI', async () => {
+      await tokenStorage.saveSession(sessionA);
+      const pendingCreateA = createDeferred<void>();
+      const pendingUpdateA = createDeferred<void>();
+      const pendingCompleteA = createDeferred<void>();
+      const pendingSkipA = createDeferred<void>();
+      const pendingDeleteA = createDeferred<void>();
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        const auth = String(config.headers?.Authorization ?? '');
+        const isB = auth === `Bearer ${sessionB.accessToken}`;
+        if (config.url === '/auth/login') {
+          const payload = JSON.parse(String(config.data ?? '{}')) as { account?: string };
+          return {
+            status: 200,
+            data: { success: true, data: payload.account === mockUserB.email ? sessionB : sessionA },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: isB ? profileB : profileA }, headers: {}, config };
+        }
+        if (config.url === '/plants') {
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: { content: [plantSummaryOne], page: 0, size: 100, totalElements: 1, totalPages: 1, last: true },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/plants/plt-1') {
+          return { status: 200, data: { success: true, data: plantDetailOne }, headers: {}, config };
+        }
+        if (config.url === '/schedules/today') {
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: [{ ...todayOverdueItem, scheduleId: 'sch-shared', taskLabel: isB ? 'Today Của B' : 'Today Của A' }],
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/plants/plt-1/schedules') {
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: [{ ...scheduleDetailOne, id: 'sch-shared', taskLabel: isB ? 'Schedule Của B' : 'Schedule Của A' }],
+                page: 0,
+                size: 10,
+                totalElements: 1,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/schedules' && config.method === 'post') {
+          await pendingCreateA.promise;
+          return { status: 201, data: { success: true, data: { ...scheduleDetailOne, id: 'sch-a-new' } }, headers: {}, config };
+        }
+        if (config.url === '/schedules/sch-shared' && config.method === 'put') {
+          await pendingUpdateA.promise;
+          return { status: 200, data: { success: true, data: { ...scheduleDetailOne, id: 'sch-shared', taskLabel: 'Ghi đè bởi A' } }, headers: {}, config };
+        }
+        if (config.url === '/schedules/sch-shared/complete' && config.method === 'post') {
+          await pendingCompleteA.promise;
+          return { status: 200, data: { success: true, data: { careLogId: 'l1', scheduleStatus: 'COMPLETED', nextScheduledAt: pastDueIso } }, headers: {}, config };
+        }
+        if (config.url === '/schedules/sch-shared/skip' && config.method === 'post') {
+          await pendingSkipA.promise;
+          return { status: 200, data: { success: true, data: { careLogId: 'l2', scheduleStatus: 'COMPLETED', nextScheduledAt: pastDueIso } }, headers: {}, config };
+        }
+        if (config.url === '/schedules/sch-shared' && config.method === 'delete') {
+          await pendingDeleteA.promise;
+          return { status: 200, data: { success: true, data: { message: 'Deleted by A' } }, headers: {}, config };
+        }
+        throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+      });
+
+      let authCtx!: ReturnType<typeof useAuth>;
+      let createMut!: ReturnType<typeof useCreateScheduleMutation>;
+      let updateMut!: ReturnType<typeof useUpdateScheduleMutation>;
+      let completeMut!: ReturnType<typeof useCompleteScheduleMutation>;
+      let skipMut!: ReturnType<typeof useSkipScheduleMutation>;
+      let deleteMut!: ReturnType<typeof useDeleteScheduleMutation>;
+
+      function Probe() {
+        authCtx = useAuth();
+        useTodaySchedules();
+        usePlantSchedules('plt-1', { page: 0, size: 10 });
+        createMut = useCreateScheduleMutation();
+        updateMut = useUpdateScheduleMutation();
+        completeMut = useCompleteScheduleMutation();
+        skipMut = useSkipScheduleMutation();
+        deleteMut = useDeleteScheduleMutation();
+        return null;
+      }
+
+      act(() => {
+        root!.render(
+          <QueryClientProvider client={qc}>
+            <AuthProvider>
+              <Probe />
+              <CreateScheduleScreen />
+            </AuthProvider>
+          </QueryClientProvider>
+        );
+      });
+
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(mockUserA.id);
+        expect(container!.textContent).toContain('Monstera Cửa Sổ');
+      });
+
+      const todayVn = getTodayVnDateString();
+      let pCreate!: Promise<unknown>;
+      let pUpdate!: Promise<unknown>;
+      let pComplete!: Promise<unknown>;
+      let pSkip!: Promise<unknown>;
+      let pDelete!: Promise<unknown>;
+
+      act(() => {
+        pCreate = createMut
+          .mutateAsync({ userPlantId: 'plt-1', taskType: 'WATERING', frequency: 'DAILY', startDate: todayVn })
+          .catch((e) => e);
+        pUpdate = updateMut
+          .mutateAsync({ scheduleId: 'sch-shared', plantId: 'plt-1', data: { taskLabel: 'Ghi đè bởi A' } })
+          .catch((e) => e);
+        pComplete = completeMut.mutateAsync({ scheduleId: 'sch-shared', plantId: 'plt-1' }).catch((e) => e);
+        pSkip = skipMut.mutateAsync({ scheduleId: 'sch-shared', plantId: 'plt-1' }).catch((e) => e);
+        pDelete = deleteMut.mutateAsync({ scheduleId: 'sch-shared', plantId: 'plt-1' }).catch((e) => e);
+      });
+
+      // Also click CreateScheduleScreen submit button while on A to verify UI callback guard
+      const createSubmitBtn = Array.from(container!.querySelectorAll('[role="button"]')).find((el) =>
+        el.textContent?.includes('Tạo lịch chăm sóc')
+      );
+      clickElement(createSubmitBtn);
+
+      // Switch to User B BEFORE A's requests settle
+      await act(async () => {
+        await authCtx.login({ account: mockUserB.email, password: 'Secret123!' });
+      });
+
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(mockUserB.id);
+        expect(
+          qc.getQueryData<TodayScheduleItemDto[]>(queryKeys.schedules.today(mockUserB.id))?.[0]?.taskLabel
+        ).toBe('Today Của B');
+      });
+
+      await act(async () => {
+        pendingCreateA.resolve();
+        pendingUpdateA.resolve();
+        pendingCompleteA.resolve();
+        pendingSkipA.resolve();
+        pendingDeleteA.resolve();
+        await Promise.all([pCreate, pUpdate, pComplete, pSkip, pDelete]);
+        await flushAsync(40);
+      });
+
+      const bToday = qc.getQueryData<TodayScheduleItemDto[]>(queryKeys.schedules.today(mockUserB.id));
+      expect(bToday).toHaveLength(1);
+      expect(bToday?.[0]?.taskLabel).toBe('Today Của B');
+      expect(bToday?.[0]?.status).toBe('ACTIVE');
+
+      const bPlantSchedules = qc.getQueryData<PageResponse<CareScheduleDto>>(
+        queryKeys.plants.schedules(mockUserB.id, 'plt-1', { page: 0, size: 10 })
+      );
+      expect(bPlantSchedules?.content.map((s) => s.taskLabel)).toEqual(['Schedule Của B']);
+      expect(mockRouter.replace).not.toHaveBeenCalled();
+    });
+
+    it('prevents pending CreateScheduleScreen error/navigation callbacks after Account A -> Account B switch', async () => {
+      await tokenStorage.saveSession(sessionA);
+      const pendingFailedPostA = createDeferred<void>();
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        const auth = String(config.headers?.Authorization ?? '');
+        const isB = auth === `Bearer ${sessionB.accessToken}`;
+        if (config.url === '/auth/login') {
+          const payload = JSON.parse(String(config.data ?? '{}')) as { account?: string };
+          return {
+            status: 200,
+            data: { success: true, data: payload.account === mockUserB.email ? sessionB : sessionA },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: isB ? profileB : profileA }, headers: {}, config };
+        }
+        if (config.url === '/plants') {
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: [{ ...plantSummaryOne, displayName: isB ? 'Cây Của B' : 'Cây Của A' }],
+                page: 0,
+                size: 100,
+                totalElements: 1,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/schedules' && config.method === 'post') {
+          await pendingFailedPostA.promise;
+          return Promise.reject({
+            isAxiosError: true,
+            response: {
+              status: 400,
+              data: { success: false, error: { code: 'BAD_REQUEST', message: 'Lỗi tạo lịch riêng của User A' } },
+            },
+            config,
+          });
+        }
+        throw new Error(`Unexpected call: ${config.url}`);
+      });
+
+      let authCtx!: ReturnType<typeof useAuth>;
+      function Probe() {
+        authCtx = useAuth();
+        return null;
+      }
+
+      act(() => {
+        root!.render(
+          <QueryClientProvider client={qc}>
+            <AuthProvider>
+              <Probe />
+              <CreateScheduleScreen />
+            </AuthProvider>
+          </QueryClientProvider>
+        );
+      });
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Cây Của A');
+      });
+
+      clickElement(container!.querySelector('[aria-label="Chọn cây Cây Của A"]'));
+      const submitBtn = Array.from(container!.querySelectorAll('[role="button"]')).find((el) =>
+        el.textContent?.includes('Tạo lịch chăm sóc')
+      );
+      clickElement(submitBtn);
+
+      await act(async () => {
+        await authCtx.login({ account: mockUserB.email, password: 'Secret123!' });
+      });
+
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(mockUserB.id);
+        expect(container!.textContent).toContain('Cây Của B');
+      });
+
+      await act(async () => {
+        pendingFailedPostA.resolve();
+        await flushAsync(40);
+      });
+
+      expect(container!.textContent).not.toContain('Lỗi tạo lịch riêng của User A');
+      expect(mockRouter.replace).not.toHaveBeenCalled();
+    });
+
+    it('prevents pending ScheduleDetailScreen PUT update snapshot/status banner from bleeding into User B after Account A -> Account B switch', async () => {
+      await tokenStorage.saveSession(sessionA);
+      routeParamsState.current = { plantId: 'plt-1', scheduleId: 'sch-shared' };
+      const pendingPutA = createDeferred<void>();
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        const auth = String(config.headers?.Authorization ?? '');
+        const isB = auth === `Bearer ${sessionB.accessToken}`;
+        if (config.url === '/auth/login') {
+          const payload = JSON.parse(String(config.data ?? '{}')) as { account?: string };
+          return {
+            status: 200,
+            data: { success: true, data: payload.account === mockUserB.email ? sessionB : sessionA },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: isB ? profileB : profileA }, headers: {}, config };
+        }
+        if (config.url === '/plants/plt-1/schedules' && config.method === 'get') {
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: [
+                  {
+                    ...scheduleDetailOne,
+                    id: 'sch-shared',
+                    taskLabel: isB ? 'Lịch Riêng Của B' : 'Lịch Riêng Của A',
+                  },
+                ],
+                page: 0,
+                size: 100,
+                totalElements: 1,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/schedules/sch-shared' && config.method === 'put') {
+          await pendingPutA.promise;
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: { ...scheduleDetailOne, id: 'sch-shared', taskLabel: 'Ghi đè UI bởi User A' },
+            },
+            headers: {},
+            config,
+          };
+        }
+        throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+      });
+
+      let authCtx!: ReturnType<typeof useAuth>;
+      function Probe() {
+        authCtx = useAuth();
+        return null;
+      }
+
+      act(() => {
+        root!.render(
+          <QueryClientProvider client={qc}>
+            <AuthProvider>
+              <Probe />
+              <ScheduleDetailScreen />
+            </AuthProvider>
+          </QueryClientProvider>
+        );
+      });
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Lịch Riêng Của A');
+      });
+
+      changeInputValue(
+        container!.querySelector('[aria-label="Sửa nhãn mô tả công việc"]'),
+        'Ghi đè UI bởi User A'
+      );
+      clickElement(
+        Array.from(container!.querySelectorAll('[role="button"]')).find(
+          (el) => el.textContent === 'Lưu cập nhật lịch'
+        )
+      );
+
+      await act(async () => {
+        await authCtx.login({ account: mockUserB.email, password: 'Secret123!' });
+      });
+
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(mockUserB.id);
+        expect(container!.textContent).toContain('Lịch Riêng Của B');
+      });
+
+      await act(async () => {
+        pendingPutA.resolve();
+        await flushAsync(40);
+      });
+
+      expect(container!.textContent).toContain('Lịch Riêng Của B');
+      expect(container!.textContent).not.toContain('Ghi đè UI bởi User A');
+      expect(container!.textContent).not.toContain('Đã cập nhật thông tin lịch chăm sóc.');
+    });
+
+    it('resets ScheduleDetailScreen deleted snapshot and blocks User A pending DELETE navigation callback on Account A -> Account B switch', async () => {
+      await tokenStorage.saveSession(sessionA);
+      routeParamsState.current = { plantId: 'plt-1', scheduleId: 'sch-shared' };
+      const pendingDeleteA = createDeferred<void>();
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        const auth = String(config.headers?.Authorization ?? '');
+        const isB = auth === `Bearer ${sessionB.accessToken}`;
+        if (config.url === '/auth/login') {
+          const payload = JSON.parse(String(config.data ?? '{}')) as { account?: string };
+          return {
+            status: 200,
+            data: { success: true, data: payload.account === mockUserB.email ? sessionB : sessionA },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: isB ? profileB : profileA }, headers: {}, config };
+        }
+        if (config.url === '/plants/plt-1/schedules' && config.method === 'get') {
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: [
+                  {
+                    ...scheduleDetailOne,
+                    id: 'sch-shared',
+                    taskLabel: isB ? 'Lịch An Toàn Của B' : 'Lịch Sắp Xóa Của A',
+                  },
+                ],
+                page: 0,
+                size: 100,
+                totalElements: 1,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/schedules/sch-shared' && config.method === 'delete') {
+          await pendingDeleteA.promise;
+          return {
+            status: 200,
+            data: { success: true, data: { message: 'Deleted A schedule' } },
+            headers: {},
+            config,
+          };
+        }
+        throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+      });
+
+      let confirmButtons: { text?: string; style?: string; onPress?: () => void }[] = [];
+      vi.spyOn(Alert, 'alert').mockImplementation((_t, _m, buttons) => {
+        confirmButtons = (buttons as typeof confirmButtons) ?? [];
+      });
+
+      let authCtx!: ReturnType<typeof useAuth>;
+      function Probe() {
+        authCtx = useAuth();
+        return null;
+      }
+
+      act(() => {
+        root!.render(
+          <QueryClientProvider client={qc}>
+            <AuthProvider>
+              <Probe />
+              <ScheduleDetailScreen />
+            </AuthProvider>
+          </QueryClientProvider>
+        );
+      });
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Lịch Sắp Xóa Của A');
+      });
+
+      clickElement(
+        Array.from(container!.querySelectorAll('[role="button"]')).find(
+          (el) => el.textContent === 'Xóa vĩnh viễn lịch'
+        )
+      );
+      act(() => {
+        confirmButtons.find((b) => b.style === 'destructive')?.onPress?.();
+      });
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Đang xóa lịch...');
+      });
+
+      // Switch to B while User A's DELETE is still in flight
+      await act(async () => {
+        await authCtx.login({ account: mockUserB.email, password: 'Secret123!' });
+      });
+
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(mockUserB.id);
+        expect(container!.textContent).toContain('Lịch An Toàn Của B');
+      });
+
+      await act(async () => {
+        pendingDeleteA.resolve();
+        await flushAsync(40);
+      });
+
+      expect(container!.textContent).toContain('Lịch An Toàn Của B');
+      expect(mockRouter.replace).not.toHaveBeenCalled();
+    });
+  });
+});
