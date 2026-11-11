@@ -22,7 +22,7 @@ Sau các lượt hoàn thiện nền tảng **G5.2.1 – G5.2.1.1.4**, tích h�
 - **Quản lý Server State**: Tích hợp **TanStack React Query v5** quản lý cache (`staleTime: 2 phút` theo `queryClient.ts`), auth-gating chỉ query khi `status === 'authenticated'`, phân lập cache chống rò rỉ dữ liệu giữa các tài khoản, và chính sách retry nghiêm ngặt (chỉ retry network/timeout/5xx tối đa 2 lần).
 - **Phân hệ Species, Favorites & Gardens (G5.3)**: Kết nối REST API thật cho thư viện loài cây (`GET /species`, `GET /species/{speciesId}`), danh sách yêu thích (`POST/DELETE /species/{speciesId}/favorite`, `GET /species/favorites`) và CRUD khu vườn (`GET/POST /gardens`, `GET/PUT/DELETE /gardens/{gardenId}`) với phân trang 0-based, đồng bộ cache nhiều cấp, chống race-condition/double-tap khi thả tim, validation enum `SpaceType` và xác nhận cascade delete.
 - **Phân hệ User Plants (G5.4.1)**: Kết nối REST API thật cho quản lý cây trồng cá nhân (`GET /api/v1/plants`, `POST /api/v1/gardens/{gardenId}/plants`, `GET/PUT/DELETE /api/v1/plants/{plantId}`): lọc theo từ khóa/`gardenId`/`HealthStatus`, sort allowlist (`displayName`, `createdAt`, `plantedAt`, `healthStatus`), phân trang 0-based, thêm cây chọn khu vườn & loài cây thật từ Backend, chỉnh sửa giữ nguyên khu vườn/loài cây (cho phép xóa trắng field tùy chọn, bỏ qua `plantedAt` rỗng cho Jackson `LocalDate`), hiển thị có điều kiện `plantCode` nếu server trả về, xác nhận cascade delete (`Care Schedules`, `Care Logs`, `Growth Journals`) và đồng bộ cache chéo sang `gardens.*` (`plantCount`, `GardenDetail.plants`).
-- **Kiểm thử tự động toàn diện**: Bộ kiểm thử **Vitest** (với Axios adapter mock trong `happy-dom`, chưa bao gồm E2E trên máy chủ/Emulator thật) gồm **140 bài test** trên 7 file kiểm thử bao phủ lưu trữ phiên & schema, trusted origin/`baseURL` & session identity guard, chuẩn hóa lỗi & retry policy, auth flow, Species & Favorites (bao gồm concurrency lock, rollback isolation & owner-scoped placeholder data), Gardens CRUD, và User Plants CRUD (bao gồm validation, cache sync chéo và cách ly tài khoản A → B khi query/mutation đang pending).
+- **Kiểm thử tự động toàn diện**: Bộ kiểm thử **Vitest** (với Axios adapter mock trong `happy-dom`, chưa bao gồm E2E trên máy chủ/Emulator thật) gồm **145 bài test** trên 7 file kiểm thử bao phủ lưu trữ phiên & schema, trusted origin/`baseURL` & session identity guard, chuẩn hóa lỗi & retry policy, auth flow, Species & Favorites (bao gồm concurrency lock, rollback isolation & owner-scoped placeholder data), Gardens CRUD, và User Plants CRUD (bao gồm validation, cache sync chéo, tự điều chỉnh phân trang khi xóa trang cuối và cách ly tài khoản A → B khi query/mutation đang pending).
 
 Các phân hệ nghiệp vụ kế tiếp (**Lịch chăm sóc / Care Schedules**, **Lịch sử chăm sóc / Care Logs**, **Nhật ký phát triển / Growth Journals**, Camera/Upload ảnh, AI & Push Notification) vẫn giữ giao diện xem trước và sẽ được triển khai ở các giai đoạn tiếp theo (**G5.4.2**, **G5.4.3**, **G5.5**).
 
@@ -133,14 +133,14 @@ frontend/
 │   ├── services/
 │   │   ├── api/                 # apiClient, apiConfig, apiError, apiTypes, tokenStorage
 │   │   └── query/               # queryClient, queryKeys
-│   ├── __tests__/               # Automated Test Suite (Vitest + Axios adapter mock — 140 tests)
+│   ├── __tests__/               # Automated Test Suite (Vitest + Axios adapter mock — 145 tests)
 │   │   ├── tokenStorage.test.ts         # Lưu trữ an toàn, AuthSession schema & phân loại lỗi (31 tests)
 │   │   ├── apiClient.test.ts            # Trusted origin, baseURL guard, session identity guard, interceptor & HTTP 401 (31 tests)
 │   │   ├── apiErrorAndRetry.test.ts     # Chuẩn hóa lỗi & chính sách retry (15 tests)
 │   │   ├── authFlow.test.tsx            # Khôi phục session, cleanup error, retry, login, logout (12 tests)
 │   │   ├── speciesAndFavorites.test.tsx # Species API, Favorites serialization/concurrency, placeholder/account isolation & UI integration (23 tests)
 │   │   ├── gardensIntegration.test.tsx  # Gardens API, CRUD cache/account isolation & Home/Main/Garden/AddPlant UI (13 tests)
-│   │   ├── userPlantsIntegration.test.tsx # User Plants API, validation, CRUD, PlantDetail/AddEdit/Plants/Home/Search/Filter UI, cross-cache sync & A→B pending isolation (15 tests)
+│   │   ├── userPlantsIntegration.test.tsx # User Plants API, validation, CRUD, UI, cross-cache sync, last-page delete pagination & A→B pending isolation (20 tests)
 │   │   └── setup.ts                     # Cấu hình môi trường mock cho Vitest
 ├── vitest.config.mjs            # Cấu hình Vitest runner (`happy-dom`, alias `@/assets` & `@ -> src`, stub `@/assets/*` require khi test)
 ├── eslint.config.js             # Cấu hình Flat Config ESLint v9
@@ -190,7 +190,7 @@ npm.cmd run typecheck
 # 3. Phân tích mã nguồn với ESLint (0 errors)
 npm.cmd run lint
 
-# 4. Chạy toàn bộ kiểm thử tự động với Vitest (140/140 PASS)
+# 4. Chạy toàn bộ kiểm thử tự động với Vitest (145/145 PASS)
 npm.cmd test
 
 # 5. Xác minh cấu hình Expo hợp lệ
@@ -216,5 +216,6 @@ cd E:\GoPlant
 - [x] **G5.3.1**: Serialize thao tác Favorites chống multi-species rollback race, phân lập Query Cache & Mutation Identity Guard theo `userId` + `sessionGeneration`, bổ sung `SESSION_USER_MISMATCH` guard trong `apiClient`, sửa `HealthStatus` (`CRITICAL`) và mở rộng lên 120 tests Vitest.
 - [x] **G5.3.1.2**: Khắc phục rò rỉ `placeholderData` giữa các tài khoản trong `useSpeciesList` / `useFavoriteSpecies` theo `cacheOwnerId` (`previousQuery.queryKey[1]`) và bổ sung 5 regression tests lúc chuyển A → B còn pending (125 tests Vitest).
 - [x] **G5.4.1**: Tích hợp hoàn chỉnh Backend REST API cho Cây trồng cá nhân (`User Plants`: danh sách/lọc/phân trang, chi tiết + `plantCode` có điều kiện, tạo mới theo vườn & loài thật, cập nhật & cascade delete, đồng bộ cache chéo với `gardens.*`, phân lập A → B khi pending); đạt 140 tests Vitest.
+- [x] **G5.4.1.1**: Khắc phục lỗi phân trang khi xóa cây cuối trang cuối tại `PlantsScreen` (`PageContent`) và `SearchScreen` (`scope="owned"`) với guard `isFetching` / `isPlaceholderData`; bổ sung regression tests đạt 145 tests Vitest.
 - [ ] **G5.4.2 – G5.4.3**: Tích hợp Backend REST API cho Lịch chăm sóc (`Care Schedules`), Lịch sử chăm sóc (`Care Logs`) và Nhật ký sinh trưởng (`Growth Journals`).
 - [ ] **G5.5**: Tích hợp các tính năng nâng cao (Chẩn đoán AI, Camera/Upload ảnh, QR định danh, Thông báo nhắc nhở).

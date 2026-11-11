@@ -372,6 +372,31 @@ export function SearchScreen() {
     { enabled: scope === 'owned' }
   );
 
+  const ownedQueryData = ownedPlantsQuery.data;
+  const isOwnedFetching = ownedPlantsQuery.isFetching;
+  const isOwnedPlaceholder = ownedPlantsQuery.isPlaceholderData;
+  const isOwnedError = ownedPlantsQuery.isError;
+
+  useEffect(() => {
+    if (scope !== 'owned') {
+      return;
+    }
+    if (isOwnedFetching || isOwnedPlaceholder || isOwnedError || !ownedQueryData) {
+      return;
+    }
+    const rawTotalPages = ownedQueryData.totalPages;
+    if (typeof rawTotalPages !== 'number' || !Number.isFinite(rawTotalPages)) {
+      return;
+    }
+    const totalPages = Math.max(0, Math.trunc(rawTotalPages));
+    if (ownedPage < 0 || ownedPage >= totalPages) {
+      const nextPage = ownedPage < 0 || totalPages === 0 ? 0 : totalPages - 1;
+      if (nextPage !== ownedPage) {
+        setOwnedPage(nextPage);
+      }
+    }
+  }, [scope, ownedPage, ownedQueryData, isOwnedFetching, isOwnedPlaceholder, isOwnedError]);
+
   const gardensQuery = useGardensList({ enabled: scope === 'owned' });
 
   const { toggleFavorite, isSpeciesPending, isAnyFavoritePending } = useFavoriteToggle();
@@ -482,9 +507,12 @@ export function SearchScreen() {
   const speciesList = speciesPage?.content ?? [];
   const totalPages = speciesPage?.totalPages ?? 0;
 
-  const ownedPageData = ownedPlantsQuery.data;
+  const ownedPageData = ownedQueryData;
   const ownedList = ownedPageData?.content ?? [];
   const ownedTotalPages = ownedPageData?.totalPages ?? 0;
+  const displayOwnedTotalPages = isOwnedPlaceholder
+    ? Math.max(1, ownedTotalPages, ownedPage + 1)
+    : Math.max(1, ownedTotalPages);
   const hasOwnedFilters = Boolean(debouncedKeyword || ownedGardenId || ownedHealthStatus);
   const gardens = gardensQuery.data ?? [];
 
@@ -844,7 +872,7 @@ export function SearchScreen() {
                       <Text style={ss.pageButtonText}>Trang trước</Text>
                     </Pressable>
                     <Text style={ss.body}>
-                      Trang {ownedPage + 1} / {Math.max(1, ownedTotalPages)}
+                      Trang {ownedPage + 1} / {displayOwnedTotalPages}
                     </Text>
                     <Pressable
                       disabled={Boolean(ownedPageData?.last) || ownedPlantsQuery.isFetching}

@@ -196,6 +196,7 @@ interface PlantsBodyProps {
   plantsData: PageResponse<UserPlantSummaryDto> | undefined;
   isLoading: boolean;
   isFetching: boolean;
+  isPlaceholderData: boolean;
   isError: boolean;
   errorMessage: string | undefined;
   onRetry: () => void;
@@ -221,6 +222,7 @@ function PlantsManagementBody({
   plantsData,
   isLoading,
   isFetching,
+  isPlaceholderData,
   isError,
   errorMessage,
   onRetry,
@@ -248,6 +250,9 @@ function PlantsManagementBody({
   const visiblePlants = plantsData?.content ?? [];
   const totalElements = plantsData?.totalElements ?? 0;
   const totalPages = plantsData?.totalPages ?? 0;
+  const displayTotalPages = isPlaceholderData
+    ? Math.max(1, totalPages, page + 1)
+    : Math.max(1, totalPages);
 
   const handleRequestDeletePlant = (plant: UserPlantSummaryDto) => {
     const initiatedGeneration = getSessionGeneration();
@@ -552,7 +557,7 @@ function PlantsManagementBody({
                   <Text style={s.pageButtonText}>Trang trước</Text>
                 </Pressable>
                 <Text style={s.body}>
-                  Trang {page + 1} / {Math.max(1, totalPages)}
+                  Trang {page + 1} / {displayTotalPages}
                 </Text>
                 <Pressable
                   disabled={Boolean(plantsData?.last) || isFetching}
@@ -786,6 +791,31 @@ function PageContent({ kind }: { kind: PageKind }) {
     { enabled: isPlantsTab }
   );
 
+  const plantsData = plantsQuery.data;
+  const isPlantsFetching = plantsQuery.isFetching;
+  const isPlantsPlaceholder = plantsQuery.isPlaceholderData;
+  const isPlantsError = plantsQuery.isError;
+
+  useEffect(() => {
+    if (!isPlantsTab) {
+      return;
+    }
+    if (isPlantsFetching || isPlantsPlaceholder || isPlantsError || !plantsData) {
+      return;
+    }
+    const rawTotalPages = plantsData.totalPages;
+    if (typeof rawTotalPages !== 'number' || !Number.isFinite(rawTotalPages)) {
+      return;
+    }
+    const totalPages = Math.max(0, Math.trunc(rawTotalPages));
+    if (page < 0 || page >= totalPages) {
+      const nextPage = page < 0 || totalPages === 0 ? 0 : totalPages - 1;
+      if (nextPage !== page) {
+        setPage(nextPage);
+      }
+    }
+  }, [isPlantsTab, page, plantsData, isPlantsFetching, isPlantsPlaceholder, isPlantsError]);
+
   const gardens = gardensQuery.data ?? [];
   const gardensCount = gardens.length;
   const favCount = favoritesQuery.data?.totalElements ?? 0;
@@ -874,6 +904,7 @@ function PageContent({ kind }: { kind: PageKind }) {
           plantsData={plantsQuery.data}
           isLoading={plantsQuery.isLoading}
           isFetching={plantsQuery.isFetching}
+          isPlaceholderData={plantsQuery.isPlaceholderData}
           isError={plantsQuery.isError}
           errorMessage={plantsQuery.error?.message}
           onRetry={() => {
