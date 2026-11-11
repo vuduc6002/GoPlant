@@ -1,6 +1,19 @@
 /**
  * Centralized React Query Keys
  */
+export interface SpeciesListQueryKeyParams {
+  keyword?: string;
+  category?: string;
+  page: number;
+  size: number;
+  sort: string;
+}
+
+export interface FavoriteSpeciesQueryKeyParams {
+  page: number;
+  size: number;
+}
+
 export const queryKeys = {
   auth: {
     session: ['auth', 'session'] as const,
@@ -10,11 +23,21 @@ export const queryKeys = {
     me: ['user', 'me'] as const,
     profile: (id: string) => ['user', 'profile', id] as const,
   },
-  // Placeholders for future phases
+  species: {
+    all: ['species'] as const,
+    lists: () => ['species', 'list'] as const,
+    list: (params: SpeciesListQueryKeyParams) => ['species', 'list', params] as const,
+    details: () => ['species', 'detail'] as const,
+    detail: (id: string) => ['species', 'detail', id] as const,
+    favoritesAll: ['species', 'favorites'] as const,
+    favorites: (params: FavoriteSpeciesQueryKeyParams) => ['species', 'favorites', params] as const,
+  },
   gardens: {
     all: ['gardens'] as const,
-    detail: (id: string) => ['gardens', id] as const,
+    list: ['gardens', 'list'] as const,
+    detail: (id: string) => ['gardens', 'detail', id] as const,
   },
+  // Placeholders for future phases
   plants: {
     all: ['plants'] as const,
     detail: (id: string) => ['plants', id] as const,

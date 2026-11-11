@@ -39,6 +39,10 @@ export type OwnedPlant = {
   note: string;
 };
 
+/**
+ * Local sample catalog retained strictly for the G5.4 Add-Plant UI prototype (/garden/add-plant).
+ * G5.3 Species & Favorites features must query the REST API via features/species instead.
+ */
 export const plantCatalog: PlantProfile[] = [
   { id: 'monstera-deliciosa', name: 'Trầu bà lá xẻ', scientificName: 'Monstera deliciosa', category: 'Cây cảnh' },
   { id: 'epipremnum-marble-queen', name: 'Trầu bà cẩm thạch', scientificName: "Epipremnum aureum 'Marble Queen'", category: 'Cây cảnh' },
@@ -49,30 +53,25 @@ export const plantCatalog: PlantProfile[] = [
 
 type PlantDataContextValue = {
   ownedPlants: OwnedPlant[];
-  favorites: string[];
   addPlant: (plant: Omit<OwnedPlant, 'id'>) => string;
   updatePlant: (id: string, plant: Omit<OwnedPlant, 'id'>) => void;
   removePlant: (id: string) => void;
-  toggleFavorite: (catalogId: string) => void;
 };
 
 const PlantDataContext = createContext<PlantDataContextValue | null>(null);
 
 export function PlantDataProvider({ children }: { children: ReactNode }) {
   const [ownedPlants, setOwnedPlants] = useState<OwnedPlant[]>([]);
-  const [favorites, setFavorites] = useState<string[]>([]);
   const value = useMemo<PlantDataContextValue>(() => ({
     ownedPlants,
-    favorites,
     addPlant: (plant) => {
       const id = `demo-plant-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       setOwnedPlants((items) => [...items, { ...plant, id }]);
       return id;
     },
-    updatePlant: (id, plant) => setOwnedPlants((items) => items.map((item) => item.id === id ? { ...plant, id } : item)),
+    updatePlant: (id, plant) => setOwnedPlants((items) => items.map((item) => (item.id === id ? { ...plant, id } : item))),
     removePlant: (id) => setOwnedPlants((items) => items.filter((item) => item.id !== id)),
-    toggleFavorite: (catalogId) => setFavorites((items) => items.includes(catalogId) ? items.filter((item) => item !== catalogId) : [...items, catalogId]),
-  }), [ownedPlants, favorites]);
+  }), [ownedPlants]);
 
   return <PlantDataContext.Provider value={value}>{children}</PlantDataContext.Provider>;
 }

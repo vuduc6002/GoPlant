@@ -4,11 +4,11 @@ GoPlant là giải pháp ứng dụng di động hỗ trợ người dùng số 
 
 Kiến trúc mục tiêu của dự án là **Ứng dụng di động React Native + Expo (Android) kết nối qua RESTful API với Backend Spring Boot và cơ sở dữ liệu Supabase PostgreSQL**.
 
-> **Trạng thái phát triển hiện tại (Giai đoạn 4):**
-> - **Frontend:** Đã tích hợp hoàn chỉnh mã nguồn giao diện trong thư mục `frontend/` sử dụng **React Native (v0.86.3) + Expo SDK 57 (Managed Workflow) + Expo Router**. Toàn bộ 11 phân hệ màn hình và điều hướng đã sẵn sàng.
-> - **Backend:** Đã hoàn thành triển khai Backend Java 21 + Spring Boot 4.1.1 trong `backend/` với **19 RESTful API ưu tiên** (Auth, Users, Species, Favorites, Gardens, Admin Species), bảo mật JWT + BCrypt, phân quyền `ROLE_USER`/`ROLE_ADMIN`, bảo vệ toàn vẹn sở hữu dữ liệu (Data Ownership Security) và tích hợp Flyway Database Migration. 41/41 Unit & Integration Tests đạt 100% Pass.
-> - **Cơ sở dữ liệu:** Thiết kế chuẩn hóa 11 bảng, sơ đồ ERD, Migration PostgreSQL V1 tích hợp trong `backend/src/main/resources/db/migration/`. Hỗ trợ H2 local in-memory, PostgreSQL local và Supabase PostgreSQL.
-> - **Hướng dẫn chi tiết:** Xem thêm tại [docs/backend/backend-setup-guide.md](docs/backend/backend-setup-guide.md).
+> **Trạng thái phát triển hiện tại (Giai đoạn 5 — Hoàn thành Backend G5.1.1 & Tích hợp Frontend G5.3):**
+> - **Frontend (`frontend/`):** Xây dựng trên **React Native (`0.86.3`) + Expo SDK `57.0.32` + Expo Router + TypeScript Strict + Axios + TanStack React Query v5 + Expo SecureStore**. Đã hoàn thành nền tảng Auth & bảo mật **G5.2 – G5.2.1.1.4** (`LoginScreen`, `RegisterScreen`, `AuthProvider`, Trusted Origin/`baseURL` Guard) và tích hợp REST API **G5.3** cho **Loài cây (`Species`)**, **Yêu thích (`Favorites`)** và **Khu vườn (`Gardens`)**. Bộ kiểm thử tự động đạt **103/103 Vitest tests** (6 file) cùng `typecheck` và `eslint` đều pass `0 errors`. Các phân hệ User Plants, Care Schedules, Care Logs, Growth Journals giữ nguyên giao diện/demo cục bộ chờ G5.4.
+> - **Backend (`backend/`):** Hoàn thành Backend **Java 21 + Spring Boot `4.1.1`** với đầy đủ **40/40 RESTful API MVP** (19 API nền tảng ở G4 + 21 API nghiệp vụ ở G5.1/G5.1.1 cho User Plants, Care Schedules, Care Logs, Growth Journals, Admin Users), bảo mật JWT + BCrypt, phân quyền `ROLE_USER`/`ROLE_ADMIN`, kiểm soát sở hữu dữ liệu và Flyway Migration `V1__initial_schema.sql`. Đạt **96/96 Unit & Integration Tests** (`18` file kiểm thử).
+> - **Cơ sở dữ liệu & Đặc tả (`docs/`):** Thiết kế chuẩn hóa 11 bảng (`docs/database/schema-design.md`, `erd.mmd`), hợp đồng REST (`docs/api/api-contract.md`, `openapi.yaml` — 40 MVP + 4 camera backlog). Hỗ trợ H2 local in-memory (dev nhanh, tắt Flyway), PostgreSQL + Flyway (`postgres` profile trên CI) và Supabase PostgreSQL (`supabase` profile).
+> - **Hướng dẫn chi tiết:** Xem thêm tại [docs/backend/backend-setup-guide.md](docs/backend/backend-setup-guide.md) và [frontend/README.md](frontend/README.md).
 
 ---
 
@@ -52,21 +52,21 @@ Bảng ma trận đối soát hiện trạng triển khai giữa Frontend, Backe
 | Phân hệ nghiệp vụ | Chức năng trong thiết kế | Trạng thái Frontend | Trạng thái Backend & Database |
 |:---|:---|:---:|:---:|
 | **Chào mừng (Welcome)** | Giới thiệu app, điều hướng bắt đầu | Đã hoàn thành UI (`WelcomeScreen.tsx`) | Không yêu cầu API |
-| **Xác thực tài khoản** | Đăng ký, đăng nhập | Đã có UI (`AuthScreens.tsx`); dùng Mock Auth (`mockAuth.ts`) | **Hoàn thành API:** `POST /api/v1/auth/register`, `POST /api/v1/auth/login` (JWT, BCrypt) |
-| **Hồ sơ người dùng** | Xem hồ sơ, sửa thông tin, đổi mật khẩu | Đã có UI Profile | **Hoàn thành API:** `GET/PUT /api/v1/users/me`, `PUT /api/v1/users/me/password` |
-| **Trang chủ (Dashboard)** | Xem tổng quan vườn, việc cần làm, thời tiết | Đã có UI (`HomeScreen.tsx`); dữ liệu mô phỏng | Chưa có API tổng hợp |
-| **Khám phá cây** | Danh mục loài cây, tìm kiếm, lọc đa tiêu chí | Đã có UI (`SearchScreens.tsx`) | **Hoàn thành API:** `GET /api/v1/species` (tìm kiếm, lọc, phân trang) |
-| **Chi tiết loài cây** | Thông tin sinh học, đặc điểm, nhu cầu chăm sóc | Đã có UI (`PlantDetailScreen.tsx`) | **Hoàn thành API:** `GET /api/v1/species/{id}` |
-| **Cây yêu thích** | Thêm, bỏ, xem danh sách giống yêu thích | Đã có UI | **Hoàn thành API:** `POST/DELETE /api/v1/species/{id}/favorite`, `GET /api/v1/species/favorites` |
-| **Quản lý khu vườn** | Tạo mới, xem chi tiết, sửa, xóa khu vườn | Đã có UI (`GardenScreens.tsx`) | **Hoàn thành API:** `GET/POST /api/v1/gardens`, `GET/PUT/DELETE /api/v1/gardens/{id}` |
-| **Quản lý cây sở hữu** | Thêm cây vào vườn, sửa vị trí, ghi chú, xóa | Đã có UI; lưu trong React Context (`PlantDataStore.tsx`) | Entity & Repository đã sẵn sàng (API Giai đoạn 5) |
-| **Lập lịch chăm sóc** | Tạo lịch tưới/bón/tỉa, chu kỳ lặp, xem lịch | Đã có UI (`ScheduleScreens.tsx`); giao diện mẫu | Entity & Repository đã sẵn sàng (API Giai đoạn 5) |
-| **Nhật ký chăm sóc** | Đánh dấu hoàn thành việc, lưu lịch sử chăm sóc | Đã có UI (`JournalScreens.tsx`); giao diện mẫu | Entity & Repository đã sẵn sàng (API Giai đoạn 5) |
-| **Nhật ký phát triển** | Ghi nhận tiến trình lớn lên, tình trạng sức khỏe | Đã có UI (`JournalDetailScreen.tsx`); giao diện mẫu | Entity & Repository đã sẵn sàng (API Giai đoạn 5) |
-| **Admin Quản trị cây** | Thêm, sửa, xóa giống cây trong danh mục | UI quản trị Backlog | **Hoàn thành API:** `GET/POST /api/v1/admin/species`, `PUT/DELETE /api/v1/admin/species/{id}` |
+| **Xác thực tài khoản** | Đăng ký, đăng nhập | **Đã tích hợp API thật (G5.2/G5.2.1.1.4):** `LoginScreen`, `RegisterScreen`, `AuthProvider` (`expo-secure-store` / in-memory web, bỏ `mockAuth.ts`) | **Hoàn thành API:** `POST /api/v1/auth/register`, `POST /api/v1/auth/login` (JWT, BCrypt) |
+| **Hồ sơ người dùng** | Xem hồ sơ, sửa thông tin, đổi mật khẩu | **Đã tích hợp API `GET /users/me` (G5.2):** React Query `useUserProfile()` trên `HomeScreen` | **Hoàn thành API:** `GET/PUT /api/v1/users/me`, `PUT /api/v1/users/me/password` |
+| **Trang chủ (Dashboard)** | Xem tổng quan vườn, việc cần làm, thời tiết | **Đã tích hợp một phần (G5.2 & G5.3):** hồ sơ thật (`/users/me`) & *"Vườn của bạn"* (`HomeGardensSection`); thời tiết/lịch giữ UI mẫu | Dùng `/users/me`, `/gardens` (chưa có dashboard aggregate API) |
+| **Khám phá cây** | Danh mục loài cây, tìm kiếm, lọc đa tiêu chí | **Đã tích hợp API thật (G5.3):** `SearchScreens.tsx` (`GET /species`), `FilterScreen` cho thư viện (tìm kiếm, category, sort allowlist, phân trang 0-based) | **Hoàn thành API:** `GET /api/v1/species` (tìm kiếm, lọc, phân trang) |
+| **Chi tiết loài cây** | Thông tin sinh học, đặc điểm, nhu cầu chăm sóc | **Đã tích hợp API thật (G5.3):** `PlantDetailScreen.tsx` nhánh `speciesId` (30 trường, fallback `Chưa có dữ liệu`, xử lý 404/lỗi); giữ nhánh `ownedId` cục bộ | **Hoàn thành API:** `GET /api/v1/species/{speciesId}` |
+| **Cây yêu thích** | Thêm, bỏ, xem danh sách giống yêu thích | **Đã tích hợp API thật (G5.3):** `FavoritesSection` tab Cây trồng + nút tim trên `SearchScreen`/`PlantDetailScreen`, đồng bộ cache & chống double-tap | **Hoàn thành API:** `POST/DELETE /api/v1/species/{speciesId}/favorite`, `GET /api/v1/species/favorites` |
+| **Quản lý khu vườn** | Tạo mới, xem chi tiết, sửa, xóa khu vườn | **Đã tích hợp API thật (G5.3):** `GardenScreens.tsx`, `GardensTabContent`, `HomeGardensSection` (5 `SpaceType`, tạo/sửa validation + 409, xóa cascade confirm, 403/404) | **Hoàn thành API:** `GET/POST /api/v1/gardens`, `GET/PUT/DELETE /api/v1/gardens/{gardenId}` |
+| **Quản lý cây sở hữu** | Thêm cây vào vườn, sửa vị trí, ghi chú, xóa | Giữ **Demo cục bộ G5.4** (`/garden/add-plant`, `PlantDataStore.tsx`, tab Cây trồng) — chờ tích hợp G5.4 | **Hoàn thành API (G5.1/G5.1.1):** `/gardens/{gardenId}/plants`, `/plants`, `/plants/{plantId}` |
+| **Lập lịch chăm sóc** | Tạo lịch tưới/bón/tỉa, chu kỳ lặp, xem lịch | Đã có UI (`ScheduleScreens.tsx`); giao diện mẫu — chờ tích hợp G5.4 | **Hoàn thành API (G5.1/G5.1.1):** `/plants/{plantId}/schedules`, `/schedules/upcoming`, `/schedules/{scheduleId}` |
+| **Nhật ký chăm sóc** | Đánh dấu hoàn thành việc, lưu lịch sử chăm sóc | Đã có UI (`JournalScreens.tsx`); giao diện mẫu — chờ tích hợp G5.4 | **Hoàn thành API (G5.1/G5.1.1):** `/plants/{plantId}/care-logs`, `/care-logs`, `/care-logs/{logId}` |
+| **Nhật ký phát triển** | Ghi nhận tiến trình lớn lên, tình trạng sức khỏe | Đã có UI (`JournalDetailScreen.tsx`); giao diện mẫu — chờ tích hợp G5.4 | **Hoàn thành API (G5.1/G5.1.1):** `/plants/{plantId}/growth-journals`, `/growth-journals/{journalId}` |
+| **Admin Quản trị hệ thống** | Quản trị loài cây & tài khoản người dùng | UI quản trị Backlog | **Hoàn thành API:** `/api/v1/admin/species*`, `/api/v1/admin/users*` |
 | **Chỉ số sinh trưởng** | Biểu đồ môi trường, độ ẩm đất, nhiệt độ | Đã có UI (`MonitoringDetailScreen.tsx`) | Chưa có API |
-| **Mã định danh (QR)** | Sinh mã `plantCode` mở nhanh hồ sơ cây | Đang trong kế hoạch mở rộng (Backlog) | Schema đã hỗ trợ |
-| **Camera giám sát** | Xem ảnh chụp thực tế vị trí trồng cây | Nút bấm placeholder UI (Backlog) | Schema bảng `cameras` đã thiết kế |
+| **Mã định danh (QR)** | Sinh mã `plantCode` mở nhanh hồ sơ cây | Đang trong kế hoạch mở rộng (Backlog) | Schema & API `user_plants.plantCode` đã hỗ trợ |
+| **Camera giám sát** | Xem ảnh chụp thực tế vị trí trồng cây | Nút bấm placeholder UI (Backlog) | Schema bảng `cameras` + 4 endpoint Backlog trong OpenAPI |
 
 ---
 
@@ -76,19 +76,21 @@ Bảng ma trận đối soát hiện trạng triển khai giữa Frontend, Backe
 
 - **Nền tảng:** React Native `0.86.3` kết hợp **Expo SDK `57.0.32`** (Managed Workflow).
 - **Điều hướng:** Expo Router `~57.0.30` (File-based Routing trong `src/app/`).
-- **Ngôn ngữ:** TypeScript `~6.0.3`, React `19.2.3`.
+- **Ngôn ngữ:** TypeScript `~6.0.3` (Strict Mode), React `19.2.3`.
+- **Kết nối API & Server State:** `axios` (`^1.21.0`) với Trusted Origin / `baseURL` Guard, `@tanstack/react-query` (`^5.107.1`), lưu trữ JWT an toàn qua `expo-secure-store` (`~57.0.4`) trên Native / in-memory trên Web.
 - **Giao diện & Đồ họa:** Vector Icons qua `react-native-svg` (`15.15.4`) và `react-native-svg-transformer`, Animations qua `react-native-reanimated` (`4.5.1`).
 - **Font chữ:** `@expo-google-fonts/plus-jakarta-sans`.
+- **Kiểm thử & Chất lượng mã:** `vitest` (`^5.1.0`) + `happy-dom`, `eslint` (`^9.39.5`) với `eslint-config-expo` (`~57.0.2`).
 - **Quản lý gói:** npm (sử dụng `frontend/package-lock.json`).
 
 ### 3.2. Phía Backend Dịch vụ (`backend/`)
 
 - **Ngôn ngữ & Nền tảng:** Java 21, Spring Boot `4.1.1`.
 - **Công cụ build:** Maven Wrapper (`mvnw`, `mvnw.cmd`).
-- **Mô đun Spring:** Spring Web MVC, Spring Data JPA, Spring Security, Spring Validation.
+- **Mô đun Spring:** Spring Web MVC, Spring Data JPA, Spring Security (Bearer JWT + BCrypt), Spring Validation, Flyway Migration (`spring-boot-starter-flyway`).
 - **Cơ sở dữ liệu hỗ trợ:**
-  - H2 Database Engine (chạy in-memory kiểm thử nhanh nội bộ).
-  - PostgreSQL JDBC Driver (kết nối Supabase PostgreSQL).
+  - H2 Database Engine (in-memory dev cục bộ; profile mặc định tắt Flyway).
+  - PostgreSQL + Flyway `V1__initial_schema.sql` (chạy trên CI với profile `postgres` và triển khai cloud qua profile `supabase`).
 
 ---
 
@@ -97,14 +99,16 @@ Bảng ma trận đối soát hiện trạng triển khai giữa Frontend, Backe
 ```mermaid
 flowchart LR
     subgraph Client["Ứng dụng Di động (Frontend)"]
-        EXPO["React Native + Expo SDK 57\n(Android / Web)"]
-        STORE["Local State / PlantDataStore\n(Hiện tại: Mock & In-Memory)"]
-        EXPO <--> STORE
+        EXPO["React Native + Expo SDK 57\n(Auth, Species, Favorites, Gardens)"]
+        NET["Axios apiClient (Trusted Origin Guard)\n+ TanStack React Query v5 + Expo SecureStore"]
+        DEMO["PlantDataStore\n(Demo cục bộ chờ G5.4)"]
+        EXPO <--> NET
+        EXPO -.-> DEMO
     end
 
     subgraph Server["Máy chủ Dịch vụ (Backend)"]
-        SEC["Spring Security Filter\n(JWT Authentication)"]
-        CTRL["Controller Layer\n(@RestController: /api/v1/...)"]
+        SEC["Spring Security Filter\n(JWT Authentication & RBAC)"]
+        CTRL["Controller Layer\n(@RestController: 40 API /api/v1/...)"]
         SRV["Service Layer\n(Business Logic & @Transactional)"]
         REPO["Repository Layer\n(Spring Data JPA)"]
 
@@ -113,16 +117,16 @@ flowchart LR
 
     subgraph Database["Cơ sở Dữ liệu"]
         H2[("H2 Database\n(In-Memory Local)")]
-        SUPA[("Supabase PostgreSQL\n(Cloud Database)")]
+        SUPA[("PostgreSQL / Supabase\n(Flyway V1__initial_schema.sql)")]
     end
 
-    EXPO <== "HTTP / JSON REST API" ==> SEC
+    NET <== "HTTP / JSON REST API" ==> SEC
     REPO -. "spring.profiles.active=default" .-> H2
-    REPO -. "spring.profiles.active=supabase" .-> SUPA
+    REPO -. "postgres / supabase" .-> SUPA
 ```
 
 **Quy tắc tích hợp bắt buộc:**
-1. Ứng dụng di động **chỉ trao đổi với Backend qua giao thức REST API JSON**; tuyệt đối không kết nối trực tiếp hoặc chứa thông tin đăng nhập PostgreSQL/Supabase bên trong code di động.
+1. Ứng dụng di động **chỉ trao đổi với Backend qua giao thức REST API JSON** thông qua `apiClient` (đã ràng buộc Trusted Origin & `baseURL` guard); tuyệt đối không kết nối trực tiếp hoặc chứa thông tin đăng nhập PostgreSQL/Supabase bên trong code di động.
 2. Backend là nơi tập trung xác thực, phân quyền người dùng, thực thi quy tắc toàn vẹn dữ liệu và điều phối truy vấn cơ sở dữ liệu.
 
 ---
@@ -133,20 +137,29 @@ flowchart LR
 E:\GoPlant/
 ├── .github/
 │   └── workflows/
-│       ├── maven.yml               # CI build & test Backend Spring Boot (Java 21)
-│       └── frontend.yml            # CI kiểm tra TypeScript, Expo config & dependencies (Node 22)
-├── backend/                        # Nguồn Backend Spring Boot
+│       ├── maven.yml               # CI build & test Backend Spring Boot (Java 21 + Postgres 16)
+│       └── frontend.yml            # CI typecheck, ESLint, Vitest, Expo config & dependencies (Node 22)
+├── backend/                        # Nguồn Backend Spring Boot (40 REST API + 96 tests)
 │   ├── .mvn/wrapper/
 │   ├── src/
 │   │   ├── main/
 │   │   │   ├── java/com/cmc/plant_care_backend/
+│   │   │   │   ├── common/         # Exception, chuẩn hóa API response & utilities
+│   │   │   │   ├── config/         # Cấu hình ứng dụng, Jackson, CORS, Timezone
+│   │   │   │   ├── controller/     # 10 REST Controllers (/api/v1/...)
+│   │   │   │   ├── dto/            # Request / Response DTOs
+│   │   │   │   ├── model/          # JPA Entities & Enums
+│   │   │   │   ├── repository/     # Spring Data JPA Repositories
+│   │   │   │   ├── security/       # JWT Filter, SecurityConfig, UserDetails
+│   │   │   │   ├── service/        # Business Services (@Transactional)
 │   │   │   │   └── PlantCareBackendApplication.java
 │   │   │   └── resources/
-│   │   │       ├── application.properties           # Cấu hình mặc định H2 in-memory
-│   │   │       └── application-supabase.properties  # Cấu hình PostgreSQL Supabase qua biến môi trường
-│   │   └── test/
-│   │       └── java/com/cmc/plant_care_backend/
-│   │           └── PlantCareBackendApplicationTests.java
+│   │   │       ├── db/migration/
+│   │   │       │   └── V1__initial_schema.sql        # Schema 11 bảng + seed 5 loài cây mẫu
+│   │   │       ├── application.properties            # Cấu hình mặc định H2 in-memory (Flyway off)
+│   │   │       ├── application-postgres.properties   # Cấu hình PostgreSQL + Flyway cho CI/local PG
+│   │   │       └── application-supabase.properties   # Cấu hình Supabase PostgreSQL qua biến môi trường
+│   │   └── test/                   # 18 file kiểm thử (96 Unit & Integration Tests)
 │   ├── mvnw
 │   ├── mvnw.cmd
 │   └── pom.xml
@@ -155,34 +168,30 @@ E:\GoPlant/
 │   ├── design-reference/           # Ảnh chụp màn hình mẫu tham chiếu thiết kế
 │   ├── scripts/                    # Scripts tiện ích
 │   ├── src/
-│   │   ├── app/                    # Định tuyến file-based của Expo Router
-│   │   │   ├── _layout.tsx         # Root layout nạp fonts, theme và DataProvider
-│   │   │   ├── index.tsx           # Điểm vào ứng dụng (dẫn đến WelcomeScreen)
-│   │   │   ├── home.tsx            # Trang chủ Dashboard
-│   │   │   ├── explore.tsx         # Khám phá loài cây
-│   │   │   ├── filter.tsx          # Bộ lọc tìm kiếm
-│   │   │   ├── gardens.tsx         # Quản lý vườn
-│   │   │   ├── plants.tsx          # Danh sách cây cá nhân
-│   │   │   ├── auth/               # Tuyến đường đăng nhập / đăng ký
-│   │   │   ├── garden/             # Tuyến đường thêm vườn, thêm cây vào vườn
-│   │   │   ├── journal/            # Tuyến đường ghi chép nhật ký
-│   │   │   ├── monitoring/         # Tuyến đường theo dõi chỉ số
-│   │   │   └── schedule/           # Tuyến đường lịch chăm sóc
+│   │   ├── __tests__/              # Vitest Suite (6 file test — 103 tests) & setup.ts
+│   │   ├── app/                    # Định tuyến file-based Expo Router (auth/, garden/, journal/, ...)
 │   │   ├── components/             # Components UI tái sử dụng
 │   │   ├── constants/              # Bảng màu, typography, kích thước theme
-│   │   ├── features/               # Code màn hình nghiệp vụ (Auth, Home, Garden, Plant...)
+│   │   ├── features/               # Code nghiệp vụ (auth, gardens, home, main, plants, species, ...)
 │   │   ├── hooks/                  # Custom hooks (color scheme, theme)
-│   │   ├── services/               # Mock authentication service
+│   │   ├── services/               # Tầng API Client (api/) & React Query (query/)
 │   │   └── types/                  # Ambient declarations (css.d.ts, svg.d.ts)
 │   ├── app.json                    # Cấu hình Expo application
+│   ├── eslint.config.js            # Cấu hình Flat Config ESLint v9
 │   ├── metro.config.js             # Cấu hình Metro bundler (hỗ trợ SVG Transformer)
 │   ├── package.json                # Dependencies Expo SDK 57 và npm scripts
 │   ├── package-lock.json           # Khóa phiên bản dependencies
-│   └── tsconfig.json               # Cấu hình TypeScript và path alias (@/*)
+│   ├── tsconfig.json               # Cấu hình TypeScript Strict Mode và path alias (@/*)
+│   └── vitest.config.mjs           # Cấu hình Vitest runner
 ├── docs/
+│   ├── api/                        # api-contract.md, openapi.yaml
+│   ├── backend/                    # backend-setup-guide.md
+│   ├── database/                   # schema-design.md, erd.mmd, requirements-traceability.md
+│   ├── design/                     # Tài liệu thiết kế giao diện
 │   └── GEMINI_MASTER_PROMPT.md     # Chỉ thị gốc về quy chuẩn kiến trúc và lộ trình
 ├── .gitignore                      # Loại trừ node_modules, target, .expo, secrets
-└── README.md                       # Tài liệu hướng dẫn dự án chuẩn hóa
+├── README.md                       # Tài liệu hướng dẫn dự án chuẩn hóa
+└── frontend/README.md              # Tài liệu chi tiết Frontend (Auth, Security, G5.3)
 ```
 
 ---
@@ -250,8 +259,8 @@ Started PlantCareBackendApplication in ... seconds
 ```
 Backend đã khởi động thành công trên cổng mặc định `8080` (`http://localhost:8080`).
 
-> **Lưu ý về trạng thái Backend:**
-> Hiện tại Backend đang ở giai đoạn bộ khung ứng dụng. Khi truy cập vào `http://localhost:8080` qua trình duyệt, bạn có thể nhận phản hồi `404 Not Found` hoặc màn hình đăng nhập mặc định do Spring Security tự sinh. Điều này là hoàn toàn bình thường vì các Controller nghiệp vụ chưa được cài đặt.
+> **Lưu ý về trạng thái Backend & H2 local:**
+> Backend đã cài đặt đầy đủ **40 REST API** dưới prefix `/api/v1/**` cùng cấu hình Spring Security Stateless JWT. Tuy nhiên khi chạy bằng cấu hình H2 mặc định (`default` profile), thuộc tính `spring.flyway.enabled=false` khiến bảng `plant_species` khởi tạo trống cho tới khi seed qua API Admin (`/api/v1/admin/species`) hoặc chạy với profile `postgres` / `supabase` (có Flyway `V1__initial_schema.sql` kèm 5 loài cây mẫu).
 
 Để dừng Backend: Nhấn tổ hợp phím `Ctrl + C` trong cửa sổ Terminal.
 
@@ -259,7 +268,7 @@ Backend đã khởi động thành công trên cổng mặc định `8080` (`htt
 
 ## 8. Cấu hình cơ sở dữ liệu H2 local
 
-Khi khởi động Backend bình thường (không kích hoạt profile), ứng dụng sẽ tự động sử dụng cấu hình H2 in-memory từ file [application.properties](file:///E:/GoPlant/backend/src/main/resources/application.properties):
+Khi khởi động Backend bình thường (không kích hoạt profile), ứng dụng sẽ tự động sử dụng cấu hình H2 in-memory từ file [application.properties](backend/src/main/resources/application.properties):
 
 - **JDBC URL:** `jdbc:h2:mem:plantcaredb`
 - **Username:** `sa`
@@ -272,7 +281,7 @@ Khi khởi động Backend bình thường (không kích hoạt profile), ứng 
 
 ## 9. Cấu hình cơ sở dữ liệu Supabase PostgreSQL
 
-Để dữ liệu được đồng bộ dùng chung giữa các thành viên, Backend hỗ trợ profile `supabase` qua file [application-supabase.properties](file:///E:/GoPlant/backend/src/main/resources/application-supabase.properties).
+Để dữ liệu được đồng bộ dùng chung giữa các thành viên, Backend hỗ trợ profile `supabase` qua file [application-supabase.properties](backend/src/main/resources/application-supabase.properties).
 
 ### 9.1. Lấy thông tin kết nối từ Supabase
 
@@ -353,7 +362,8 @@ Menu điều khiển của Expo CLI sẽ xuất hiện:
 | `ios` | `expo start --ios` | Khởi động Expo cho iOS Simulator (chỉ hỗ trợ trên macOS) |
 | `web` | `expo start --web` | Chạy ứng dụng trên nền tảng Web |
 | `typecheck` | `tsc --noEmit` | Kiểm tra tĩnh toàn bộ mã TypeScript theo cấu hình `tsconfig.json` |
-| `lint` | `expo lint` | Chạy bộ kiểm tra quy chuẩn mã nguồn ESLint (khi đã cấu hình) |
+| `lint` | `expo lint` | Chạy bộ kiểm tra quy chuẩn mã nguồn ESLint v9 (`eslint-config-expo`) |
+| `test` | `vitest run` | Chạy toàn bộ bộ kiểm thử tự động Vitest (103 tests / 6 file) |
 | `reset-project` | `node ./scripts/reset-project.js` | Script dọn dẹp đưa template về trạng thái ban đầu (không dùng khi dev) |
 
 ---
@@ -405,18 +415,24 @@ Khi chạy đồng thời Frontend và Backend trên máy tính cá nhân:
 
 ## 12. Kiểm thử Frontend và Backend
 
-### 12.1. Kiểm thử tĩnh Frontend
+### 12.1. Kiểm thử & Chất lượng mã Frontend
 
 Từ thư mục `E:\GoPlant\frontend`, thực hiện các lệnh:
 
 ```powershell
-# 1. Kiểm tra typecheck TypeScript
+# 1. Kiểm tra typecheck TypeScript (0 errors)
 npm.cmd run typecheck
 
-# 2. Kiểm tra cấu hình Expo
+# 2. Kiểm tra quy chuẩn mã nguồn ESLint (0 errors, 0 warnings)
+npm.cmd run lint
+
+# 3. Chạy bộ kiểm thử tự động Vitest (103/103 PASS trên 6 file)
+npm.cmd test
+
+# 4. Kiểm tra cấu hình Expo
 npx.cmd expo config --json
 
-# 3. Kiểm tra tính tương thích của dependencies
+# 5. Kiểm tra tính tương thích của dependencies
 npx.cmd expo install --check
 ```
 Tất cả các lệnh trên đều phải vượt qua thành công với mã thoát `0`.
@@ -428,7 +444,7 @@ Từ thư mục `E:\GoPlant\backend`, thực hiện:
 ```powershell
 .\mvnw.cmd clean verify
 ```
-Maven sẽ dọn dẹp, tải các dependency cần thiết, biên dịch Java 21, thực thi các test case trong `src/test/java/` và tạo gói JAR tại `target/`. Kết quả đạt `BUILD SUCCESS`.
+Maven sẽ dọn dẹp, tải các dependency cần thiết, biên dịch Java 21, thực thi toàn bộ **96/96 Unit & Integration Tests** trên 18 file kiểm thử trong `src/test/java/` và tạo gói JAR tại `target/`. Kết quả đạt `BUILD SUCCESS`.
 
 ---
 
@@ -436,7 +452,7 @@ Maven sẽ dọn dẹp, tải các dependency cần thiết, biên dịch Java 2
 
 Dự án thiết lập hệ thống tích hợp liên tục (CI) tự động với hai pipeline độc lập đặt trong `.github/workflows/`:
 
-### 13.1. Backend Pipeline ([.github/workflows/maven.yml](file:///E:/GoPlant/.github/workflows/maven.yml))
+### 13.1. Backend Pipeline ([.github/workflows/maven.yml](.github/workflows/maven.yml))
 
 - **Kích hoạt (Triggers):**
   - Push lên nhánh `main` và nhánh tính năng `feature/integrate-frontend-report`.
@@ -446,9 +462,9 @@ Dự án thiết lập hệ thống tích hợp liên tục (CI) tự động v�
   - Cài đặt Java 21 (Temurin).
   - Tự động cache Maven dependencies theo file `backend/pom.xml`.
   - Khởi chạy dịch vụ container `services.postgres` (PostgreSQL 16 Alpine) để kiểm thử Flyway migration thực tế và xác thực toàn vẹn schema với Hibernate (`ddl-auto=validate`).
-  - Cấp quyền thực thi và chạy `./mvnw --batch-mode clean verify` trong thư mục `backend/` với `SPRING_PROFILES_ACTIVE=postgres`.
+  - Cấp quyền thực thi và chạy `./mvnw --batch-mode --no-transfer-progress clean verify` trong thư mục `backend/` với `SPRING_PROFILES_ACTIVE=postgres`.
 
-### 13.2. Frontend Pipeline ([.github/workflows/frontend.yml](file:///E:/GoPlant/.github/workflows/frontend.yml))
+### 13.2. Frontend Pipeline ([.github/workflows/frontend.yml](.github/workflows/frontend.yml))
 
 - **Kích hoạt (Triggers):**
   - Push lên nhánh `main` và nhánh tính năng `feature/integrate-frontend-report`.
@@ -459,6 +475,8 @@ Dự án thiết lập hệ thống tích hợp liên tục (CI) tự động v�
   - Tự động cache npm dependencies theo file `frontend/package-lock.json`.
   - Cài đặt gói sạch bằng `npm ci`.
   - Chạy `npm run typecheck` (`tsc --noEmit`).
+  - Chạy `npm run lint` (`expo lint`).
+  - Chạy bộ kiểm thử `npm test` (`vitest run`).
   - Kiểm tra tính hợp lệ của cấu hình ứng dụng bằng `npx expo config --json`.
   - Kiểm tra độ tương thích của các dependencies bằng `CI=1 npx expo install --check`.
 
@@ -474,7 +492,7 @@ Dự án thiết lập hệ thống tích hợp liên tục (CI) tự động v�
 
 ### 2. TypeScript báo lỗi `Cannot find module './animated-icon.module.css'` hoặc `'@/global.css'`
 - **Triệu chứng:** Trình biên dịch TypeScript không nhận dạng được các file CSS.
-- **Khắc phục:** Đảm bảo file [frontend/src/types/css.d.ts](file:///E:/GoPlant/frontend/src/types/css.d.ts) đã tồn tại trong dự án để khai báo ambient module cho `*.css` và `*.module.css`.
+- **Khắc phục:** Đảm bảo file [frontend/src/types/css.d.ts](frontend/src/types/css.d.ts) đã tồn tại trong dự án để khai báo ambient module cho `*.css` và `*.module.css`.
 
 ### 3. Backend báo lỗi `release version 25 not supported` hoặc lỗi phiên bản JDK
 - **Triệu chứng:** Maven báo không hỗ trợ phiên bản Java đích.
@@ -486,21 +504,24 @@ Dự án thiết lập hệ thống tích hợp liên tục (CI) tự động v�
 
 ### 5. Android Emulator không kết nối được Backend
 - **Triệu chứng:** Ứng dụng di động báo lỗi `Network request failed` hoặc không nạp được dữ liệu từ máy tính host.
-- **Khắc phục:** Đảm bảo Backend đang chạy. Trong code gọi API từ Android Emulator, dùng địa chỉ `http://10.0.2.2:8080` thay vì `http://localhost:8080`.
+- **Khắc phục:** Đảm bảo Backend đang chạy. Trong `frontend/.env` (`EXPO_PUBLIC_API_BASE_URL`), dùng địa chỉ `http://10.0.2.2:8080/api/v1` cho Android Emulator thay vì `http://localhost:8080/api/v1`.
 
 ---
 
 ## 15. Lộ trình phát triển và các chức năng kế tiếp
 
-Lộ trình chuẩn hóa theo 10 giai đoạn của dự án GoPlant:
+Lộ trình phát triển chuẩn hóa của dự án GoPlant:
 
 - [x] **Giai đoạn 0:** Audit chỉ đọc hiện trạng repository và đối chiếu 2 báo cáo kỹ thuật.
 - [x] **Giai đoạn 1:** Tích hợp Frontend React Native + Expo SDK 57 vào nhánh `feature/integrate-frontend-report`; sửa lỗi TypeScript CSS declarations.
 - [x] **Giai đoạn 2:** Chuẩn hóa README, tài liệu môi trường phát triển Windows/VS Code và thiết lập GitHub Actions CI cho cả Frontend lẫn Backend.
 - [x] **Giai đoạn 3:** Thiết kế mô hình dữ liệu (ERD 11 bảng), migration cơ sở dữ liệu PostgreSQL (Flyway V1) và đặc tả hợp đồng RESTful API / OpenAPI.
 - [x] **Giai đoạn 4:** Triển khai Backend Spring Boot 4.1.1 với 19 REST API ưu tiên (Auth, Users, Species, Favorites, Gardens, Admin Species), bảo mật Spring Security + BCrypt + Bearer JWT, kiểm soát quyền sở hữu dữ liệu, Flyway Auto Configuration và kiểm thử tích hợp container PostgreSQL trên CI.
-- [ ] **Giai đoạn 5:** Triển khai 21 REST API nghiệp vụ còn lại (Cây cá nhân User Plants, Lịch chăm sóc Care Schedules, Nhật ký Care Logs, Nhật ký phát triển Growth Journals) và kết nối Frontend Expo với Backend qua REST API (thay thế Mock Data).
-- [ ] **Giai đoạn 6:** Kiểm thử tích hợp toàn diện trên Android Studio / Emulator và thiết bị thật.
+- [x] **Giai đoạn 5 (Backend G5.1 – G5.1.1):** Hoàn thành toàn bộ 21 REST API nghiệp vụ còn lại (User Plants, Care Schedules, Care Logs, Growth Journals, Admin Users), đồng bộ UTC/Concurrency và đạt 96/96 Maven tests.
+- [x] **Giai đoạn 5 (Frontend G5.2 – G5.2.1.1.4):** Thiết lập Axios `apiClient` + Trusted Origin / `baseURL` Guard, TanStack React Query v5, Expo SecureStore hardening, loại bỏ Mock Auth, kết nối Auth (`/auth/*`, `/users/me`).
+- [x] **Giai đoạn 5 (Frontend G5.3):** Tích hợp REST API cho **Loài cây (`Species`)**, **Yêu thích (`Favorites`)** và **Khu vườn (`Gardens`)**; đạt 103/103 Vitest tests.
+- [ ] **Giai đoạn 5 (Frontend G5.4):** Kết nối Frontend Expo với REST API **Cây cá nhân (User Plants)**, **Lịch chăm sóc (Care Schedules)**, **Nhật ký chăm sóc (Care Logs)** và **Nhật ký phát triển (Growth Journals)** (thay thế Demo cục bộ `PlantDataStore.tsx`).
+- [ ] **Giai đoạn 6:** Kiểm thử tích hợp toàn diện end-to-end trên Android Studio / Emulator và thiết bị thật.
 - [ ] **Giai đoạn 7:** Triển khai các tính năng mở rộng theo mức ưu tiên: Giám sát Camera, Mã QR (`plantCode`), Lưu trữ ảnh đám mây, AI chẩn đoán bệnh cây.
 - [ ] **Giai đoạn 8:** Hoàn thiện tổng kết, kiểm toán bảo mật, đóng gói bản phát hành và chuẩn bị báo cáo dự án.
 

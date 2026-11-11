@@ -6,8 +6,8 @@ GoPlant là ứng dụng di động hỗ trợ người dùng khám phá và s�
 
 Mã nguồn Frontend được xây dựng trên nền tảng **React Native 0.86 + Expo SDK 57**, sử dụng **Expo Router** để định tuyến theo cấu trúc file và **TypeScript Strict Mode**.
 
-Sau các lượt nâng cấp **G5.2.1**, **G5.2.1.1**, **G5.2.1.1.2** và **G5.2.1.1.3**, ứng dụng đã hoàn thiện nền tảng kết nối Backend REST API và bảo mật phiên:
-- **API Client & Trusted Origin Boundary**: Axios Client tập trung với kiểm soát ranh giới nguồn tin cậy (`API_BASE_URL`), từ chối URL thuộc origin bên ngoài, URL protocol-relative (`//...`) và URL sai định dạng trước khi đọc SecureStore hoặc gửi JWT ra mạng; chuẩn hóa lỗi `AppApiError`, phân định rõ ràng giữa lỗi local (storage, unauthenticated, untrusted URL) và lỗi backend (401, 403, 400, 5xx, timeout, network error).
+Sau các lượt hoàn thiện nền tảng **G5.2.1 – G5.2.1.1.4** và tích hợp nghiệp vụ **G5.3**, ứng dụng đã hoàn thiện kết nối Backend REST API cho Xác thực, Hồ sơ, Loài cây, Yêu thích và Khu vườn:
+- **API Client & Trusted Origin / BaseURL Guard**: Axios Client tập trung với kiểm soát ranh giới nguồn tin cậy (`API_BASE_URL`), từ chối URL thuộc origin bên ngoài, URL protocol-relative (`//...`), URL sai định dạng và `baseURL` override rỗng/không hợp lệ trước khi đọc SecureStore hoặc gửi JWT ra mạng; chuẩn hóa lỗi `AppApiError`, phân định rõ ràng giữa lỗi local (storage, unauthenticated, untrusted URL) và lỗi backend (401, 403, 400, 404, 409, 5xx, timeout, network error).
 - **Phân loại endpoint chuẩn xác**: Cơ chế phân loại thống nhất cho relative path và absolute URL cùng backend origin; endpoint công khai (`/auth/login`, `/auth/register`) và cờ `skipAuth: true` được lưu giữ xuyên suốt cả Request và Response Interceptor; 401 từ nguồn ngoài hoặc public route tuyệt đối không kích hoạt đăng xuất.
 - **Xác thực thật**: Tích hợp các API `POST /api/v1/auth/login`, `POST /api/v1/auth/register`, `GET /api/v1/users/me`. Hệ thống Mock Auth đã được loại bỏ hoàn toàn.
 - **Bảo mật phiên đăng nhập (Storage Hardening & Recovery)**:
@@ -19,10 +19,11 @@ Sau các lượt nâng cấp **G5.2.1**, **G5.2.1.1**, **G5.2.1.1.2** và **G5.2
     - Khi lỗi xóa (`DELETE_FAILED`): chuyển trạng thái `storage-cleanup-error`, xóa dữ liệu trong bộ nhớ và cache, hiển thị nút **Thử xóa lại** (`retryClearSession`), tuyệt đối không tự ý chuyển về màn hình đăng nhập bình thường khi session chưa được xóa.
 - **An toàn Request API**: Request Interceptor tự động ngăn chặn việc gửi request được bảo vệ khi SecureStore gặp lỗi đọc, không kích hoạt logout 401 giả.
 - **Loại bỏ trùng lặp Request Profile**: React Query đóng vai trò nguồn dữ liệu duy nhất cho `GET /api/v1/users/me`, loại bỏ hoàn toàn tình trạng gọi 2 request profile song song khi đăng nhập.
-- **Quản lý Server State**: Tích hợp **TanStack React Query v5** quản lý cache hồ sơ người dùng (`staleTime: 2 phút` theo `queryClient.ts`), phân lập cache chống rò rỉ dữ liệu giữa các tài khoản, và chính sách retry nghiêm ngặt (chỉ retry network/timeout/5xx tối đa 2 lần).
-- **Kiểm thử tự động toàn diện**: Bộ kiểm thử **Vitest** với **79 bài test** trên 4 file kiểm thử bao phủ lưu trữ phiên & schema, trusted origin & interceptor, chuẩn hóa lỗi & retry policy, và auth flow.
+- **Quản lý Server State**: Tích hợp **TanStack React Query v5** quản lý cache (`staleTime: 2 phút` theo `queryClient.ts`), auth-gating chỉ query khi `status === 'authenticated'`, phân lập cache chống rò rỉ dữ liệu giữa các tài khoản, và chính sách retry nghiêm ngặt (chỉ retry network/timeout/5xx tối đa 2 lần).
+- **Phân hệ Species, Favorites & Gardens (G5.3)**: Kết nối REST API thật cho thư viện loài cây (`GET /species`, `GET /species/{speciesId}`), danh sách yêu thích (`POST/DELETE /species/{speciesId}/favorite`, `GET /species/favorites`) và CRUD khu vườn (`GET/POST /gardens`, `GET/PUT/DELETE /gardens/{gardenId}`) với phân trang 0-based, đồng bộ cache nhiều cấp, chống race-condition/double-tap khi thả tim, validation enum `SpaceType` và xác nhận cascade delete.
+- **Kiểm thử tự động toàn diện**: Bộ kiểm thử **Vitest** với **103 bài test** trên 6 file kiểm thử bao phủ lưu trữ phiên & schema, trusted origin/`baseURL` & interceptor, chuẩn hóa lỗi & retry policy, auth flow, Species & Favorites, và Gardens CRUD.
 
-Các phân hệ nghiệp vụ tiếp theo (Loài cây, Khu vườn, Cây trồng, Lịch chăm sóc, Nhật ký) hiện tại vẫn giữ giao diện xem trước và sẽ lần lượt được tích hợp REST API từ Giai đoạn G5.3+.
+Các phân hệ nghiệp vụ kế tiếp (**Cây trồng cá nhân / User Plants**, **Lịch chăm sóc / Care Schedules**, **Nhật ký / Care Logs & Growth Journals**) vẫn giữ giao diện xem trước/demo cục bộ (cho `/garden/add-plant` và các tab tương ứng) và sẽ được tích hợp REST API từ Giai đoạn **G5.4**.
 
 ---
 
@@ -45,20 +46,19 @@ Các phân hệ nghiệp vụ tiếp theo (Loài cây, Khu vườn, Cây trồng
 
 ## 3. Giao diện và trạng thái tích hợp
 
-| Khu vực | Trạng thái tích hợp G5.2.1.1.3 |
+| Khu vực | Trạng thái tích hợp (G5.3) |
 |---|---|
 | **Chào mừng** | Giao diện giới thiệu tính năng, điều hướng sang Đăng ký hoặc Đăng nhập. |
 | **Đăng nhập** | **Đã kết nối API thật** (`POST /api/v1/auth/login`) qua `useLoginMutation()`. Kiểm tra tài khoản, hiển thị lỗi 401/mạng, lưu JWT an toàn và điều hướng sang Trang chủ. |
 | **Đăng ký** | **Đã kết nối API thật** (`POST /api/v1/auth/register`) qua `useRegisterMutation()`. Hỗ trợ đăng ký bằng Email hoặc Số điện thoại (hỗ trợ `email: null`). Xử lý lỗi validation (400) và tài khoản trùng lặp (409). |
-| **Trang chủ** | **Đã kết nối API hồ sơ thật** (`GET /api/v1/users/me`) qua `useUserProfile()`. Hiển thị tên người dùng và chữ cái đại diện trên Avatar. Nhấn vào Avatar để xem thông tin và **Đăng xuất**. |
-| **Khôi phục lỗi Đọc Storage** | Màn hình `StorageErrorView` với nút **Thử đọc lại** (`retryLoadSession`) khi SecureStore gặp sự cố đọc tạm thời, bảo vệ dữ liệu người dùng không bị xóa oan. |
-| **Khôi phục lỗi Xóa Storage** | Màn hình `StorageErrorView` với nút **Thử xóa lại** (`retryClearSession`) khi việc xóa session khỏi thiết bị thất bại, không đăng xuất giả. |
-| **Quản lý cây** | Giao diện danh mục, danh sách cây và trạng thái cục bộ (chờ tích hợp API ở G5.4). |
-| **Tìm kiếm & Lọc** | Tìm kiếm theo danh mục cục bộ mẫu (chờ tích hợp API Species ở G5.3). |
-| **Quản lý vườn** | Giao diện danh sách và chi tiết vườn (chờ tích hợp API Gardens ở G5.3). |
-| **Nhật ký** | Giao diện danh sách và tạo nhật ký xem trước (chờ tích hợp API Growth Journals ở G5.4). |
-| **Lịch chăm sóc** | Giao diện lịch biểu xem trước (chờ tích hợp API Care Schedules ở G5.4). |
-| **Theo dõi** | Giao diện chỉ số sinh thái xem trước. |
+| **Trang chủ** | **Đã kết nối API hồ sơ & khu vườn** (`GET /api/v1/users/me`, `GET /api/v1/gardens`). Hiển thị tên/Avatar, phần *"Vườn của bạn"* đồng bộ số khu vườn thực tế và điều hướng tìm kiếm loài cây / tạo vườn. Thời tiết giữ thẻ xem trước mẫu UI. |
+| **Khôi phục lỗi Đọc / Xóa Storage** | Màn hình `StorageErrorView` với **Thử đọc lại** (`retryLoadSession`) và **Thử xóa lại** (`retryClearSession`), không xóa oan session hoặc đăng xuất giả. |
+| **Tìm kiếm & Lọc Loài cây** | **Đã kết nối API thật** (`GET /api/v1/species`) với debounce, phân trang 0-based (`page=0`, `size=20`), sort allowlist (`commonName,asc`...), nhóm loài cây, đồng bộ nút yêu thích, lỗi + retry và trạng thái rỗng. `FilterScreen` chỉ hiển thị tiêu chí backend hỗ trợ khi ở chế độ thư viện. |
+| **Chi tiết loài cây** | **Đã kết nối API thật** (`GET /api/v1/species/{speciesId}`) với `speciesId`, hiển thị đầy đủ các trường sinh học/chăm sóc (fallback `Chưa có dữ liệu` khi `null`), xử lý 404/lỗi + nút yêu thích. Vẫn hỗ trợ nhánh `ownedId` cục bộ cho demo G5.4. |
+| **Loài cây yêu thích** | **Đã kết nối API thật** (`GET /api/v1/species/favorites`, `POST/DELETE /api/v1/species/{speciesId}/favorite`) hiển thị trong tab **Cây trồng** (`FavoritesSection`) với phân trang và đồng bộ cache tức thì. |
+| **Quản lý vườn** | **Đã kết nối API thật** (`GET/POST /api/v1/gardens`, `GET/PUT/DELETE /api/v1/gardens/{gardenId}`): lọc 5 loại `SpaceType`, xem chi tiết + danh sách `plants`, tạo/sửa (`SpaceType` enum, lỗi 409 trường `name`), xử lý 403/404 và xác nhận cascade delete. |
+| **Cây đang sở hữu** | Giữ bản demo cục bộ G5.4 trong `PlantDataStore.tsx` (`/garden/add-plant` và mục demo trên tab **Cây trồng**), **chờ tích hợp API User Plants ở G5.4**. |
+| **Nhật ký & Lịch chăm sóc & Theo dõi** | Giao diện xem trước (chờ tích hợp API Care Schedules, Care Logs, Growth Journals ở G5.4). |
 
 ---
 
@@ -92,6 +92,14 @@ Các phân hệ nghiệp vụ tiếp theo (Loài cây, Khu vườn, Cây trồng
   - Chỉ cho phép thử lại (tối đa 2 lần) khi gặp: Lỗi kết nối mạng (`isNetworkError`), Lỗi timeout (`TIMEOUT_ERROR`), hoặc Lỗi máy chủ HTTP 5xx.
   - Tuyệt đối không retry các lỗi 4xx (`400 Validation`, `401 Unauthorized`, `403 Forbidden`, `404 Not Found`, `409 Conflict`), `StorageError`, lỗi cú pháp hoặc lỗi ứng dụng.
 
+### 4.4. Tích hợp Species, Favorites & Gardens (G5.3)
+- **Giao tiếp tập trung & Auth Gating**: Toàn bộ endpoint nghiệp vụ đều đi qua `apiClient` và chỉ tự động fetch trong React Query hooks khi `status === 'authenticated'`:
+  - Species & Favorites: `GET /api/v1/species`, `GET /api/v1/species/{speciesId}`, `GET /api/v1/species/favorites`, `POST /api/v1/species/{speciesId}/favorite`, `DELETE /api/v1/species/{speciesId}/favorite`.
+  - Gardens: `GET /api/v1/gardens`, `POST /api/v1/gardens`, `GET /api/v1/gardens/{gardenId}`, `PUT /api/v1/gardens/{gardenId}`, `DELETE /api/v1/gardens/{gardenId}`.
+- **Phân trang & Sort an toàn**: Chuẩn hóa phân trang 0-based (`page >= 0`, `size` mặc định `20` giới hạn `[1, 100]`), danh sách sort allowlist theo tên thuộc tính JPA (`commonName`, `scientificName`, `category`, `difficulty`, `createdAt`, `updatedAt`, mặc định `commonName,asc`).
+- **Đồng bộ Cache & Bảo vệ Race Condition cho Favorites**: `useFavoriteToggle()` giữ `inFlightFavoriteOps` per-`speciesId` để chống double-tap song song, áp dụng optimistic update đồng bộ giữa cache `species.lists()`, `species.detail(id)` và `species.favoritesAll`, rollback khi lỗi chung, nhưng đối chiếu theo server truth khi nhận `409 Conflict` (đã yêu thích) hoặc `404 Not Found` (đã bỏ trước đó) và vẫn ném `AppApiError` cho caller xử lý UI.
+- **Mapping & An toàn dữ liệu Gardens**: Sử dụng đúng enum `SpaceType` (`BAN_CONG`, `SAN_THUONG`, `TRONG_NHA`, `SAN_VUON`, `KHAC`) và `HealthStatus` (`HEALTHY`, `NEEDS_ATTENTION`, `SICK`, `UNKNOWN`); validate tên vườn 1–200 ký tự và vị trí trước khi gửi; hiển thị lỗi field `name` từ HTTP 409 trùng tên; xác nhận xóa có cảnh báo cascade xóa cây/lịch/nhật ký và hủy + xóa sạch cache `queryKeys.gardens.detail(gardenId)` sau khi xóa.
+
 ---
 
 ## 5. Cấu trúc thư mục mã nguồn
@@ -100,25 +108,29 @@ Các phân hệ nghiệp vụ tiếp theo (Loài cây, Khu vườn, Cây trồng
 frontend/
 ├── assets/                      # Asset hình ảnh và icon SVG
 ├── src/
-│   ├── app/                     # Tuyến điều hướng Expo Router (_layout, index, home, auth/...)
+│   ├── app/                     # Tuyến điều hướng Expo Router (_layout, index, home, search, filter, plants, gardens, garden-detail, plant-detail, auth/, garden/, ...)
 │   ├── components/              # UI Component dùng chung
 │   ├── constants/theme.ts       # Bảng màu GoPlantColors và GoPlantTypography
 │   ├── features/
-│   │   ├── auth/                # Phân hệ Xác thực: AuthProvider, hooks, service, screens
-│   │   ├── home/                # Trang chủ (HomeScreen)
-│   │   ├── gardens/             # Phân hệ Khu vườn (UI Prototype)
-│   │   ├── plants/              # Phân hệ Cây trồng & PlantDataStore
+│   │   ├── auth/                # Phân hệ Xác thực: AuthProvider, authHooks, authService, AuthScreens
+│   │   ├── home/                # Trang chủ (HomeScreen, HomeGardensSection) & Tìm kiếm/Lọc loài cây (SearchScreens)
+│   │   ├── species/             # Phân hệ Loài cây & Yêu thích: speciesTypes, speciesApi, speciesHooks, FavoritesSection
+│   │   ├── gardens/             # Phân hệ Khu vườn: gardenTypes, gardenApi, gardenHooks, GardenScreens
+│   │   ├── plants/              # Chi tiết cây (PlantDetailScreen) & PlantDataStore (demo cục bộ G5.4)
+│   │   ├── main/                # Các tab chính (GardensScreen, PlantsScreen, JournalScreen, ScheduleScreen, MonitoringScreen)
 │   │   └── ...
 │   ├── services/
 │   │   ├── api/                 # apiClient, apiConfig, apiError, apiTypes, tokenStorage
 │   │   └── query/               # queryClient, queryKeys
-│   ├── __tests__/               # Automated Test Suite (Vitest)
-│   │   ├── tokenStorage.test.ts # Kiểm thử lưu trữ an toàn, AuthSession schema & phân loại lỗi (31 tests)
-│   │   ├── apiClient.test.ts    # Kiểm thử trusted origin, request interceptor, route match & HTTP 401 (21 tests)
-│   │   ├── apiErrorAndRetry.test.ts # Kiểm thử chuẩn hóa lỗi & chính sách retry (15 tests)
-│   │   ├── authFlow.test.tsx    # Kiểm thử khôi phục session, cleanup error, retry, login, logout (12 tests)
-│   │   └── setup.ts             # Cấu hình môi trường mock cho Vitest
-├── vitest.config.mjs            # Cấu hình Vitest runner
+│   ├── __tests__/               # Automated Test Suite (Vitest — 103 tests)
+│   │   ├── tokenStorage.test.ts         # Lưu trữ an toàn, AuthSession schema & phân loại lỗi (31 tests)
+│   │   ├── apiClient.test.ts            # Trusted origin, baseURL guard, interceptor, route match & HTTP 401 (25 tests)
+│   │   ├── apiErrorAndRetry.test.ts     # Chuẩn hóa lỗi & chính sách retry (15 tests)
+│   │   ├── authFlow.test.tsx            # Khôi phục session, cleanup error, retry, login, logout (12 tests)
+│   │   ├── speciesAndFavorites.test.tsx # Species API, Favorites sync/reconciliation & UI integration (10 tests)
+│   │   ├── gardensIntegration.test.tsx  # Gardens API, CRUD cache sync, Home/Main/Garden UI & G5.4 demo preservation (10 tests)
+│   │   └── setup.ts                     # Cấu hình môi trường mock cho Vitest
+├── vitest.config.mjs            # Cấu hình Vitest runner (alias @/assets & @ -> src)
 ├── eslint.config.js             # Cấu hình Flat Config ESLint v9
 ├── app.json                     # Cấu hình ứng dụng Expo SDK 57
 ├── package.json                 # Khai báo dependency và scripts
@@ -166,7 +178,7 @@ npm.cmd run typecheck
 # 3. Phân tích mã nguồn với ESLint (0 errors)
 npm.cmd run lint
 
-# 4. Chạy toàn bộ kiểm thử tự động với Vitest (79/79 PASS)
+# 4. Chạy toàn bộ kiểm thử tự động với Vitest (103/103 PASS)
 npm.cmd test
 
 # 5. Xác minh cấu hình Expo hợp lệ
@@ -174,7 +186,7 @@ npx.cmd expo config --json
 
 # 6. Kiểm tra toàn bộ test Backend Maven (96/96 PASS)
 cd E:\GoPlant
-.\backend\mvnw.cmd -f backend/pom.xml test
+.\backend\mvnw.cmd -f backend/pom.xml clean verify
 ```
 
 ---
@@ -187,7 +199,7 @@ cd E:\GoPlant
 - [x] Tích hợp TanStack React Query v5 với cơ chế cách ly cache và retry nghiêm ngặt.
 - [x] Kết nối API Xác thực thật: Đăng ký, Đăng nhập, Lấy hồ sơ cá nhân, Đăng xuất, Route Guard.
 - [x] Cấu hình ESLint v9 và hoàn thành kiểm tra chất lượng không lỗi.
-- [x] **G5.2.1.1 – G5.2.1.1.3**: Hoàn thiện phân loại lỗi lưu trữ, khôi phục session an toàn, xử lý lỗi xóa token (`storage-cleanup-error`), loại bỏ request `/users/me` trùng lặp, siết chặt Trusted API Origin & `AuthSession` schema, ổn định test Maven CI và phủ 79 tests Vitest frontend.
-- [ ] **G5.3**: Tích hợp Backend REST API cho Loài cây (Species, Favorites) và Khu vườn (Gardens).
-- [ ] **G5.4**: Tích hợp Backend REST API cho Cây trồng (User Plants), Lịch chăm sóc (Schedules) và Nhật ký sinh trưởng (Growth Journals).
+- [x] **G5.2.1.1 – G5.2.1.1.4**: Hoàn thiện phân loại lỗi lưu trữ, khôi phục session an toàn, xử lý lỗi xóa token (`storage-cleanup-error`), loại bỏ request `/users/me` trùng lặp, siết chặt Trusted API Origin, từ chối `baseURL` override rỗng/không hợp lệ và chuẩn hóa `AuthSession` schema.
+- [x] **G5.3**: Tích hợp Backend REST API cho Loài cây (`Species`), Yêu thích (`Favorites`) và Khu vườn (`Gardens`); phủ 103 tests Vitest frontend.
+- [ ] **G5.4**: Tích hợp Backend REST API cho Cây trồng cá nhân (User Plants), Lịch chăm sóc (Care Schedules), Nhật ký chăm sóc (Care Logs) và Nhật ký sinh trưởng (Growth Journals).
 - [ ] **G5.5**: Tích hợp các tính năng nâng cao (Chẩn đoán AI, Camera, Thông báo nhắc nhở).

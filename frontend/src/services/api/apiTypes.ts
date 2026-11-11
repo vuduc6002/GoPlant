@@ -96,3 +96,22 @@ export interface AuthSession {
   user: AuthUserSummary;
   savedAt: number;
 }
+
+/**
+ * Standard Spring Boot paginated response envelope matching com.cmc.plant_care_backend.common.response.PageResponse
+ */
+export interface PageResponse<T> {
+  content: T[];
+  page: number;
+  size: number;
+  totalElements: number;
+  totalPages: number;
+  last: boolean;
+}
+
+/**
+ * Standard simple message payload matching com.cmc.plant_care_backend.dto.common.SimpleMessageResponse
+ */
+export interface SimpleMessageResponseDto {
+  message: string;
+}
