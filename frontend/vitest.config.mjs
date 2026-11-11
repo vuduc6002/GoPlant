@@ -4,7 +4,30 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+const mockAssetRequiresPlugin = {
+  name: 'mock-asset-requires',
+  enforce: 'pre',
+  transform(code, id) {
+    const normalizedId = id.replace(/\\/g, '/');
+    if (normalizedId.includes('/node_modules/') || !/\.(?:[cm]?[jt]sx?)$/.test(normalizedId)) {
+      return null;
+    }
+    const nextCode = code.replace(
+      /require\(\s*(['"])(@\/assets\/[^'"]+\.(?:png|jpe?g|gif|webp|avif))\1\s*\)/g,
+      '({ uri: $1$2$1 })'
+    );
+    if (nextCode === code) {
+      return null;
+    }
+    return {
+      code: nextCode,
+      map: null,
+    };
+  },
+};
+
 export default defineConfig({
+  plugins: [mockAssetRequiresPlugin],
   define: {
     __DEV__: true,
   },

@@ -949,17 +949,88 @@ describe('G5.3 Gardens REST API Integration', () => {
       });
     });
 
-    it('preserves G5.4 local AddGardenPlantScreen demo flow without making any backend User Plants API calls', async () => {
+    it('AddGardenPlantScreen uses real gardens, species & POST /gardens/{gardenId}/plants without using legacy PlantDataStore demo', async () => {
       vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(mockSession);
       vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(mockSession.accessToken);
 
-      const adapter = vi.fn().mockImplementation((config) => {
+      let postedGardenId: string | undefined;
+      let postedBody: Record<string, unknown> | undefined;
+      apiClient.defaults.adapter = vi.fn().mockImplementation((config) => {
         if (config.url === '/users/me') {
           return Promise.resolve({ status: 200, data: { success: true, data: mockProfile }, headers: {}, config });
         }
-        throw new Error(`No User Plants API should be called in G5.3 demo: ${config.url}`);
+        if (config.url === '/gardens' && config.method === 'get') {
+          return Promise.resolve({
+            status: 200,
+            data: { success: true, data: [gardenSummaryBalcony] },
+            headers: {},
+            config,
+          });
+        }
+        if (config.url === '/species' && config.method === 'get') {
+          return Promise.resolve({
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: [
+                  {
+                    id: 'sp-1',
+                    commonName: 'Trầu bà lá xẻ',
+                    scientificName: 'Monstera deliciosa',
+                    category: 'Cây cảnh',
+                    difficulty: 'Dễ',
+                    thumbnailUrl: null,
+                    isFavorited: false,
+                  },
+                ],
+                page: 0,
+                size: 20,
+                totalElements: 1,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          });
+        }
+        if (config.url === '/gardens/grd-1/plants' && config.method === 'post') {
+          postedGardenId = 'grd-1';
+          postedBody = JSON.parse(String(config.data ?? '{}')) as Record<string, unknown>;
+          return Promise.resolve({
+            status: 201,
+            data: {
+              success: true,
+              data: {
+                id: 'plt-new-1',
+                plantCode: null,
+                displayName: 'Trầu bà lá xẻ',
+                species: {
+                  id: 'sp-1',
+                  commonName: 'Trầu bà lá xẻ',
+                  scientificName: 'Monstera deliciosa',
+                  category: 'Cây cảnh',
+                },
+                garden: {
+                  id: 'grd-1',
+                  name: 'Ban công nắng sáng',
+                },
+                healthStatus: 'HEALTHY',
+                location: 'Ban công',
+                plantedAt: null,
+                note: null,
+                imageUrl: null,
+                createdAt: '2026-02-01T00:00:00Z',
+                updatedAt: '2026-02-01T00:00:00Z',
+              },
+            },
+            headers: {},
+            config,
+          });
+        }
+        throw new Error(`Unexpected API call: ${config.method} ${config.url}`);
       });
-      apiClient.defaults.adapter = adapter;
 
       let ownedCount = 0;
       function OwnedObserver() {
@@ -976,13 +1047,12 @@ describe('G5.3 Gardens REST API Integration', () => {
       );
 
       await waitFor(() => {
+        expect(container!.textContent).toContain('Ban công nắng sáng');
         expect(container!.textContent).toContain('Trầu bà lá xẻ');
       });
 
-      const pickMonstera = Array.from(container!.querySelectorAll('[role="button"]')).find((el) =>
-        el.textContent?.includes('Trầu bà lá xẻ')
-      );
-      clickElement(pickMonstera);
+      clickElement(container!.querySelector('[aria-label="Chọn khu vườn Ban công nắng sáng"]'));
+      clickElement(container!.querySelector('[aria-label="Chọn loài cây Trầu bà lá xẻ"]'));
 
       const pickLoc = Array.from(container!.querySelectorAll('[role="button"]')).find(
         (el) => el.textContent === 'Ban công'
@@ -995,14 +1065,21 @@ describe('G5.3 Gardens REST API Integration', () => {
       clickElement(submitBtn);
 
       await waitFor(() => {
-        expect(ownedCount).toBe(1);
-        expect(mockRouter.replace).toHaveBeenCalledWith('/plants');
-        // Only /users/me from AuthProvider startup; zero G5.4 API calls
-        expect(adapter).toHaveBeenCalledTimes(1);
+        expect(postedGardenId).toBe('grd-1');
+        expect(postedBody).toEqual({
+          speciesId: 'sp-1',
+          displayName: 'Trầu bà lá xẻ',
+          location: 'Ban công',
+        });
+        expect(ownedCount).toBe(0);
+        expect(mockRouter.replace).toHaveBeenCalledWith({
+          pathname: '/plant-detail',
+          params: { plantId: 'plt-new-1' },
+        });
       });
     });
 
-    it('HomeScreen and MainScreens wire real gardens & favorites APIs while keeping G5.4 sections clearly separated', async () => {
+    it('HomeScreen and MainScreens wire real gardens, favorites & user plants APIs', async () => {
       vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(mockSession);
       vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(mockSession.accessToken);
 
@@ -1046,6 +1123,24 @@ describe('G5.3 Gardens REST API Integration', () => {
             config,
           });
         }
+        if (config.url === '/plants') {
+          return Promise.resolve({
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: [],
+                page: 0,
+                size: 20,
+                totalElements: 0,
+                totalPages: 0,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          });
+        }
         throw new Error(`Unexpected call: ${config.url}`);
       });
 
@@ -1077,17 +1172,19 @@ describe('G5.3 Gardens REST API Integration', () => {
         expect(container!.textContent).toContain('Ban công nắng sáng');
       });
 
-      // PlantsScreen shows both real FavoritesSection and preserved G5.4 demo section
+      // PlantsScreen shows real FavoritesSection and real User Plants section
       act(() => {
         root?.unmount();
       });
       root = createRoot(container!);
       mountWithProviders(<PlantsScreen />);
       await waitFor(() => {
-        expect(container!.textContent).toContain('1 loài yêu thích • 0 cây demo • 1 khu vườn');
+        expect(container!.textContent).toContain('1 loài yêu thích • 0 cây sở hữu • 1 khu vườn');
         expect(container!.textContent).toContain('Trầu bà đế vương');
-        expect(container!.textContent).toContain('Cây đang sở hữu (Demo G5.4)');
+        expect(container!.textContent).toContain('Cây đang sở hữu');
+        expect(container!.textContent).toContain('Bạn chưa có cây trồng nào');
       });
+      expect(container!.textContent).not.toContain('Demo G5.4');
     });
   });
 

@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -15,13 +14,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GoPlantColors as C, GoPlantTypography as F } from '@/constants/theme';
 import { useAuth } from '@/features/auth/AuthProvider';
-import { usePlantData, type OwnedPlant } from '@/features/plants/PlantDataStore';
+import { useGardensList } from '@/features/gardens/gardenHooks';
+import { getHealthStatusMeta, type HealthStatus } from '@/features/gardens/gardenTypes';
+import { useUserPlantsList } from '@/features/plants/plantHooks';
 import {
-  matchesPlantFilters,
-  ownedFilterGroups,
-  type PlantFilterState,
-  vietnameseAlphabet,
-} from '@/features/plants/plantFilters';
+  HEALTH_STATUS_OPTIONS,
+  PLANT_SORT_OPTIONS,
+  type UserPlantSummaryDto,
+} from '@/features/plants/plantTypes';
 import { useFavoriteToggle, useSpeciesList } from '@/features/species/speciesHooks';
 import {
   SPECIES_CATEGORY_OPTIONS,
@@ -30,6 +30,15 @@ import {
 } from '@/features/species/speciesTypes';
 import { AppApiError } from '@/services/api/apiError';
 import { getSessionGeneration } from '@/services/api/tokenStorage';
+
+function normalizeRouteHealthStatus(raw?: string): HealthStatus | '' {
+  return raw === 'HEALTHY' ||
+    raw === 'NEEDS_ATTENTION' ||
+    raw === 'CRITICAL' ||
+    raw === 'UNKNOWN'
+    ? raw
+    : '';
+}
 
 const DEFAULT_PAGE_SIZE = 20;
 const QUICK_SUGGESTIONS = ['Trầu bà', 'Monstera', 'Philodendron', 'Cẩm thạch'];
@@ -97,14 +106,14 @@ function SpeciesResultCard({
   isAnyFavoritePending,
   onToggleFavorite,
   onOpenDetail,
-  onAddPlantPreview,
+  onAddPlant,
 }: {
   item: SpeciesSummaryDto;
   isPending: boolean;
   isAnyFavoritePending: boolean;
   onToggleFavorite: () => void;
   onOpenDetail: () => void;
-  onAddPlantPreview: () => void;
+  onAddPlant: () => void;
 }) {
   return (
     <View style={ss.resultCard}>
@@ -146,7 +155,7 @@ function SpeciesResultCard({
           <Text style={ss.actionLightText}>Xem chi tiết</Text>
         </Pressable>
         <Pressable
-          onPress={onAddPlantPreview}
+          onPress={onAddPlant}
           style={ss.action}
           accessibilityRole="button"
           accessibilityLabel={`Thêm ${item.commonName} vào cây của tôi`}
@@ -158,34 +167,56 @@ function SpeciesResultCard({
   );
 }
 
-function OwnedDemoCard({ item }: { item: OwnedPlant }) {
+function OwnedPlantResultCard({ item }: { item: UserPlantSummaryDto }) {
+  const health = getHealthStatusMeta(item.healthStatus);
   return (
     <View style={ss.resultCard}>
       <View style={ss.resultTop}>
-        <View style={ss.resultImage}>
-          <Text style={ss.plantEmoji}>♧</Text>
-        </View>
+        {item.imageUrl ? (
+          <Image source={{ uri: item.imageUrl }} style={ss.resultThumbImage} contentFit="cover" />
+        ) : (
+          <View style={ss.resultImage}>
+            <Text style={ss.plantEmoji}>♧</Text>
+          </View>
+        )}
         <View style={ss.resultCopy}>
-          <Text style={ss.resultName}>{item.name}</Text>
-          <Text style={ss.latin}>{item.scientificName}</Text>
+          <Text style={ss.resultName}>{item.displayName}</Text>
+          {item.scientificName ? <Text style={ss.latin}>{item.scientificName}</Text> : null}
           <Text style={ss.body}>
-            {item.category} • ⌖ {item.location}
+            {item.speciesName || 'Chưa gắn loài'}
+            {item.category ? ` • ${item.category}` : ''}
+          </Text>
+          <Text style={ss.body}>
+            {item.gardenName ? `⌂ ${item.gardenName}` : 'Chưa gắn khu vườn'} • {health.label}
           </Text>
         </View>
       </View>
-      <Text style={ss.statusLine}>Dữ liệu cây cá nhân demo cục bộ (G5.4).</Text>
       <View style={ss.actions}>
         <Pressable
           onPress={() =>
             router.push({
               pathname: '/plant-detail',
-              params: { ownedId: item.id },
+              params: { plantId: item.id },
             } as never)
           }
           style={[ss.action, ss.actionLight]}
           accessibilityRole="button"
+          accessibilityLabel={`Xem chi tiết ${item.displayName}`}
         >
-          <Text style={ss.actionLightText}>Xem hồ sơ demo</Text>
+          <Text style={ss.actionLightText}>Xem chi tiết</Text>
+        </Pressable>
+        <Pressable
+          onPress={() =>
+            router.push({
+              pathname: '/garden/add-plant',
+              params: { editPlantId: item.id },
+            } as never)
+          }
+          style={ss.action}
+          accessibilityRole="button"
+          accessibilityLabel={`Chỉnh sửa ${item.displayName}`}
+        >
+          <Text style={ss.actionText}>Chỉnh sửa</Text>
         </Pressable>
       </View>
     </View>
@@ -199,6 +230,9 @@ export function SearchScreen() {
     sort?: string;
     scope?: string;
     filters?: string;
+    gardenId?: string;
+    healthStatus?: string;
+    plantSort?: string;
   }>();
 
   const initialScope =
@@ -209,7 +243,6 @@ export function SearchScreen() {
   const currentUserIdRef = useRef(currentUserId);
   const prevUserIdRef = useRef(currentUserId);
 
-  const { ownedPlants } = usePlantData();
   const [scope, setScope] = useState<'catalog' | 'owned'>(initialScope);
   const [query, setQuery] = useState(typeof params.query === 'string' ? params.query : '');
   const [debouncedKeyword, setDebouncedKeyword] = useState(
@@ -222,10 +255,30 @@ export function SearchScreen() {
     typeof params.sort === 'string' && params.sort.trim() ? params.sort.trim() : 'commonName,asc'
   );
   const [page, setPage] = useState(0);
+  const [ownedGardenId, setOwnedGardenId] = useState(
+    typeof params.gardenId === 'string' ? params.gardenId.trim() : ''
+  );
+  const [ownedHealthStatus, setOwnedHealthStatus] = useState<HealthStatus | ''>(() =>
+    normalizeRouteHealthStatus(params.healthStatus)
+  );
+  const [ownedSort, setOwnedSort] = useState(
+    typeof params.plantSort === 'string' && params.plantSort.trim()
+      ? params.plantSort.trim()
+      : 'createdAt,desc'
+  );
+  const [ownedPage, setOwnedPage] = useState(0);
   const [favError, setFavError] = useState<string | null>(null);
 
   const lastParamsSignatureRef = useRef<string>(
-    JSON.stringify([params.query ?? '', params.category ?? '', params.sort ?? '', params.scope ?? ''])
+    JSON.stringify([
+      params.query ?? '',
+      params.category ?? '',
+      params.sort ?? '',
+      params.scope ?? '',
+      params.gardenId ?? '',
+      params.healthStatus ?? '',
+      params.plantSort ?? '',
+    ])
   );
 
   // Sync local state only when route parameters change (e.g. returning from FilterScreen)
@@ -235,6 +288,9 @@ export function SearchScreen() {
       params.category ?? '',
       params.sort ?? '',
       params.scope ?? '',
+      params.gardenId ?? '',
+      params.healthStatus ?? '',
+      params.plantSort ?? '',
     ]);
     if (signature === lastParamsSignatureRef.current) {
       return;
@@ -252,6 +308,12 @@ export function SearchScreen() {
       typeof params.sort === 'string' && params.sort.trim()
         ? params.sort.trim()
         : 'commonName,asc';
+    const nextGardenId = typeof params.gardenId === 'string' ? params.gardenId.trim() : '';
+    const nextHealthStatus = normalizeRouteHealthStatus(params.healthStatus);
+    const nextOwnedSort =
+      typeof params.plantSort === 'string' && params.plantSort.trim()
+        ? params.plantSort.trim()
+        : 'createdAt,desc';
 
     setScope(nextScope);
     setQuery(nextQuery);
@@ -259,9 +321,21 @@ export function SearchScreen() {
     setCategory(nextCategory);
     setSort(nextSort);
     setPage(0);
-  }, [params.query, params.category, params.sort, params.scope]);
+    setOwnedGardenId(nextGardenId);
+    setOwnedHealthStatus(nextHealthStatus);
+    setOwnedSort(nextOwnedSort);
+    setOwnedPage(0);
+  }, [
+    params.query,
+    params.category,
+    params.sort,
+    params.scope,
+    params.gardenId,
+    params.healthStatus,
+    params.plantSort,
+  ]);
 
-  // Debounce free-text typing for species search
+  // Debounce free-text typing for search
   useEffect(() => {
     const trimmed = query.trim();
     if (trimmed === debouncedKeyword) {
@@ -270,18 +344,10 @@ export function SearchScreen() {
     const timer = setTimeout(() => {
       setDebouncedKeyword(trimmed);
       setPage(0);
+      setOwnedPage(0);
     }, 250);
     return () => clearTimeout(timer);
   }, [query, debouncedKeyword]);
-
-  const filtersParam = params.filters;
-  const ownedFilters = useMemo<PlantFilterState>(() => {
-    try {
-      return JSON.parse(Array.isArray(filtersParam) ? filtersParam[0] : filtersParam ?? '{}') as PlantFilterState;
-    } catch {
-      return {};
-    }
-  }, [filtersParam]);
 
   const speciesQuery = useSpeciesList(
     {
@@ -294,6 +360,20 @@ export function SearchScreen() {
     { enabled: scope === 'catalog' }
   );
 
+  const ownedPlantsQuery = useUserPlantsList(
+    {
+      keyword: debouncedKeyword || undefined,
+      gardenId: ownedGardenId || undefined,
+      healthStatus: ownedHealthStatus || undefined,
+      page: ownedPage,
+      size: DEFAULT_PAGE_SIZE,
+      sort: ownedSort,
+    },
+    { enabled: scope === 'owned' }
+  );
+
+  const gardensQuery = useGardensList({ enabled: scope === 'owned' });
+
   const { toggleFavorite, isSpeciesPending, isAnyFavoritePending } = useFavoriteToggle();
 
   useEffect(() => {
@@ -302,26 +382,19 @@ export function SearchScreen() {
     currentUserIdRef.current = currentUserId;
     if (prevUserId && prevUserId !== currentUserId) {
       setPage(0);
+      setOwnedPage(0);
+      setOwnedGardenId('');
+      setOwnedHealthStatus('');
+      setOwnedSort('createdAt,desc');
       setFavError(null);
     }
   }, [currentUserId]);
-
-  const filteredOwnedPlants = useMemo(() => {
-    const normalized = query.trim().toLocaleLowerCase();
-    return ownedPlants.filter((plant) => {
-      const matchesQuery =
-        !normalized ||
-        `${plant.name} ${plant.scientificName} ${plant.location}`
-          .toLocaleLowerCase()
-          .includes(normalized);
-      return matchesQuery && matchesPlantFilters(plant, ownedFilters);
-    });
-  }, [ownedPlants, query, ownedFilters]);
 
   const applyImmediateKeyword = (nextKeyword: string) => {
     setQuery(nextKeyword);
     setDebouncedKeyword(nextKeyword.trim());
     setPage(0);
+    setOwnedPage(0);
   };
 
   const handleSelectCategory = (nextCategory: string) => {
@@ -340,6 +413,15 @@ export function SearchScreen() {
     setCategory('Tất cả');
     setSort('commonName,asc');
     setPage(0);
+  };
+
+  const handleResetOwnedFilters = () => {
+    setQuery('');
+    setDebouncedKeyword('');
+    setOwnedGardenId('');
+    setOwnedHealthStatus('');
+    setOwnedSort('createdAt,desc');
+    setOwnedPage(0);
   };
 
   const handleFavoriteToggle = async (item: SpeciesSummaryDto) => {
@@ -377,18 +459,34 @@ export function SearchScreen() {
   const openFilter = () =>
     router.push({
       pathname: '/filter',
-      params: {
-        query,
-        category,
-        sort,
-        scope,
-        filters: JSON.stringify(ownedFilters),
-      },
+      params:
+        scope === 'owned'
+          ? {
+              query,
+              scope,
+              gardenId: ownedGardenId,
+              healthStatus: ownedHealthStatus,
+              plantSort: ownedSort,
+              filters: '{}',
+            }
+          : {
+              query,
+              category,
+              sort,
+              scope,
+              filters: '{}',
+            },
     } as never);
 
   const speciesPage = speciesQuery.data;
   const speciesList = speciesPage?.content ?? [];
   const totalPages = speciesPage?.totalPages ?? 0;
+
+  const ownedPageData = ownedPlantsQuery.data;
+  const ownedList = ownedPageData?.content ?? [];
+  const ownedTotalPages = ownedPageData?.totalPages ?? 0;
+  const hasOwnedFilters = Boolean(debouncedKeyword || ownedGardenId || ownedHealthStatus);
+  const gardens = gardensQuery.data ?? [];
 
   return (
     <SafeAreaView style={ss.safe} edges={['top']}>
@@ -399,6 +497,7 @@ export function SearchScreen() {
         onSubmit={() => {
           setDebouncedKeyword(query.trim());
           setPage(0);
+          setOwnedPage(0);
         }}
         onFilter={openFilter}
       />
@@ -420,7 +519,7 @@ export function SearchScreen() {
             accessibilityRole="button"
           >
             <Text style={[ss.scopeText, scope === 'owned' && ss.scopeTextActive]}>
-              Cây demo của tôi ({ownedPlants.length})
+              Cây của tôi {ownedPageData ? `(${ownedPageData.totalElements})` : ''}
             </Text>
           </Pressable>
         </ScrollView>
@@ -541,11 +640,11 @@ export function SearchScreen() {
                         params: { speciesId: item.id },
                       } as never)
                     }
-                    onAddPlantPreview={() =>
-                      Alert.alert(
-                        'Sắp ra mắt (G5.4)',
-                        'Chức năng thêm cây vào khu vườn (User Plants API) sẽ được kết nối ở giai đoạn G5.4.'
-                      )
+                    onAddPlant={() =>
+                      router.push({
+                        pathname: '/garden/add-plant',
+                        params: { speciesId: item.id },
+                      } as never)
                     }
                   />
                 ))}
@@ -583,33 +682,187 @@ export function SearchScreen() {
               </>
             )}
           </>
-        ) : filteredOwnedPlants.length ? (
-          <>
-            <View style={ss.sectionRow}>
-              <Text style={ss.sectionTitle}>Cây demo đang sở hữu (G5.4)</Text>
-              <Text style={ss.body}>{filteredOwnedPlants.length} kết quả</Text>
-            </View>
-            {filteredOwnedPlants.map((item) => (
-              <OwnedDemoCard key={item.id} item={item} />
-            ))}
-          </>
         ) : (
-          <View style={ss.emptyCard}>
-            <View style={ss.emptyIcon}>
-              <Text style={ss.emptyPlant}>♧</Text>
-            </View>
-            <Text style={ss.emptyTitle}>Chưa có cây demo cá nhân phù hợp</Text>
-            <Text style={ss.bodyCenter}>
-              Tab này hiển thị hồ sơ demo cục bộ của G5.4. Chuyển về tab Thư viện loài cây để tìm kiếm dữ liệu thật.
-            </Text>
-            <Pressable
-              onPress={() => router.push('/garden/add-plant' as never)}
-              style={ss.action}
-              accessibilityRole="button"
-            >
-              <Text style={ss.actionText}>＋ Thêm cây demo</Text>
-            </Pressable>
-          </View>
+          <>
+            <Text style={ss.kicker}>KHU VƯỜN</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={ss.pills}>
+              <Pressable
+                onPress={() => {
+                  setOwnedGardenId('');
+                  setOwnedPage(0);
+                }}
+                style={[ss.chip, !ownedGardenId && ss.chipActive]}
+                accessibilityRole="button"
+              >
+                <Text style={[ss.chipText, !ownedGardenId && ss.chipTextActive]}>Tất cả vườn</Text>
+              </Pressable>
+              {gardens.map((garden) => {
+                const active = ownedGardenId === garden.id;
+                return (
+                  <Pressable
+                    key={garden.id}
+                    onPress={() => {
+                      setOwnedGardenId(garden.id);
+                      setOwnedPage(0);
+                    }}
+                    style={[ss.chip, active && ss.chipActive]}
+                    accessibilityRole="button"
+                  >
+                    <Text style={[ss.chipText, active && ss.chipTextActive]}>{garden.name}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            <Text style={ss.kicker}>TÌNH TRẠNG SỨC KHỎE</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={ss.pills}>
+              <Pressable
+                onPress={() => {
+                  setOwnedHealthStatus('');
+                  setOwnedPage(0);
+                }}
+                style={[ss.chip, !ownedHealthStatus && ss.chipActive]}
+                accessibilityRole="button"
+              >
+                <Text style={[ss.chipText, !ownedHealthStatus && ss.chipTextActive]}>
+                  Tất cả trạng thái
+                </Text>
+              </Pressable>
+              {HEALTH_STATUS_OPTIONS.map((opt) => {
+                const active = ownedHealthStatus === opt.value;
+                return (
+                  <Pressable
+                    key={opt.value}
+                    onPress={() => {
+                      setOwnedHealthStatus(opt.value);
+                      setOwnedPage(0);
+                    }}
+                    style={[ss.chip, active && ss.chipActive]}
+                    accessibilityRole="button"
+                  >
+                    <Text style={[ss.chipText, active && ss.chipTextActive]}>{opt.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            <Text style={ss.kicker}>SẮP XẾP</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={ss.pills}>
+              {PLANT_SORT_OPTIONS.map((opt) => {
+                const active = ownedSort === opt.value;
+                return (
+                  <Pressable
+                    key={opt.value}
+                    onPress={() => {
+                      setOwnedSort(opt.value);
+                      setOwnedPage(0);
+                    }}
+                    style={[ss.chip, active && ss.chipActive]}
+                    accessibilityRole="button"
+                  >
+                    <Text style={[ss.chipText, active && ss.chipTextActive]}>{opt.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            {ownedPlantsQuery.isLoading ? (
+              <View style={ss.stateCard}>
+                <ActivityIndicator size="large" color={C.primary} />
+                <Text style={ss.bodyCenter}>Đang tải danh sách cây của bạn từ máy chủ...</Text>
+              </View>
+            ) : ownedPlantsQuery.isError ? (
+              <View style={ss.emptyCard} accessibilityRole="alert">
+                <Text style={ss.emptyTitle}>Không thể tải cây của bạn</Text>
+                <Text style={ss.bodyCenter}>{ownedPlantsQuery.error.message}</Text>
+                <Pressable
+                  onPress={() => {
+                    void ownedPlantsQuery.refetch();
+                  }}
+                  style={ss.action}
+                  accessibilityRole="button"
+                >
+                  <Text style={ss.actionText}>Thử lại</Text>
+                </Pressable>
+              </View>
+            ) : ownedList.length === 0 ? (
+              <View style={ss.emptyCard}>
+                <View style={ss.emptyIcon}>
+                  <Text style={ss.emptyPlant}>♧</Text>
+                </View>
+                <Text style={ss.emptyTitle}>
+                  {hasOwnedFilters ? 'Không tìm thấy cây của bạn phù hợp' : 'Bạn chưa có cây trồng nào'}
+                </Text>
+                {debouncedKeyword ? <Text style={ss.queryText}>“{debouncedKeyword}”</Text> : null}
+                <Text style={ss.bodyCenter}>
+                  {hasOwnedFilters
+                    ? 'Thử xóa bộ lọc khu vườn / tình trạng hoặc nhập từ khóa khác.'
+                    : 'Chọn khu vườn và loài cây từ thư viện để thêm cây đầu tiên của bạn.'}
+                </Text>
+                <View style={ss.emptyActions}>
+                  {hasOwnedFilters ? (
+                    <Pressable
+                      onPress={handleResetOwnedFilters}
+                      style={[ss.action, ss.actionLight]}
+                      accessibilityRole="button"
+                    >
+                      <Text style={ss.actionLightText}>Xóa bộ lọc</Text>
+                    </Pressable>
+                  ) : null}
+                  <Pressable
+                    onPress={() => router.push('/garden/add-plant' as never)}
+                    style={ss.action}
+                    accessibilityRole="button"
+                  >
+                    <Text style={ss.actionText}>＋ Thêm cây mới</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : (
+              <>
+                <View style={ss.sectionRow}>
+                  <Text style={ss.sectionTitle}>Cây đang sở hữu</Text>
+                  <Text style={ss.body}>
+                    {ownedPageData?.totalElements ?? ownedList.length} kết quả
+                    {ownedPlantsQuery.isFetching ? ' • Đang cập nhật...' : ''}
+                  </Text>
+                </View>
+                {ownedList.map((item) => (
+                  <OwnedPlantResultCard key={item.id} item={item} />
+                ))}
+                {ownedTotalPages > 1 || ownedPage > 0 ? (
+                  <View style={ss.paginationRow}>
+                    <Pressable
+                      disabled={ownedPage <= 0 || ownedPlantsQuery.isFetching}
+                      onPress={() => setOwnedPage((prev) => Math.max(0, prev - 1))}
+                      style={[
+                        ss.pageButton,
+                        (ownedPage <= 0 || ownedPlantsQuery.isFetching) && ss.pageButtonDisabled,
+                      ]}
+                      accessibilityRole="button"
+                    >
+                      <Text style={ss.pageButtonText}>Trang trước</Text>
+                    </Pressable>
+                    <Text style={ss.body}>
+                      Trang {ownedPage + 1} / {Math.max(1, ownedTotalPages)}
+                    </Text>
+                    <Pressable
+                      disabled={Boolean(ownedPageData?.last) || ownedPlantsQuery.isFetching}
+                      onPress={() => setOwnedPage((prev) => prev + 1)}
+                      style={[
+                        ss.pageButton,
+                        (Boolean(ownedPageData?.last) || ownedPlantsQuery.isFetching) &&
+                          ss.pageButtonDisabled,
+                      ]}
+                      accessibilityRole="button"
+                    >
+                      <Text style={ss.pageButtonText}>Trang sau</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+              </>
+            )}
+          </>
         )}
       </ScrollView>
     </SafeAreaView>
@@ -623,9 +876,11 @@ export function FilterScreen() {
     sort?: string;
     scope?: string;
     filters?: string;
+    gardenId?: string;
+    healthStatus?: string;
+    plantSort?: string;
   }>();
 
-  const { ownedPlants } = usePlantData();
   const [scope, setScope] = useState<'catalog' | 'owned'>(
     params.scope === 'owned' || params.scope === 'Trong vườn của tôi' ? 'owned' : 'catalog'
   );
@@ -636,13 +891,17 @@ export function FilterScreen() {
   const [sort, setSort] = useState(
     typeof params.sort === 'string' && params.sort.trim() ? params.sort.trim() : 'commonName,asc'
   );
-  const [ownedSelected, setOwnedSelected] = useState<PlantFilterState>(() => {
-    try {
-      return JSON.parse(params.filters ?? '{}') as PlantFilterState;
-    } catch {
-      return {};
-    }
-  });
+  const [gardenId, setGardenId] = useState(
+    typeof params.gardenId === 'string' ? params.gardenId.trim() : ''
+  );
+  const [healthStatus, setHealthStatus] = useState<HealthStatus | ''>(() =>
+    normalizeRouteHealthStatus(params.healthStatus)
+  );
+  const [plantSort, setPlantSort] = useState(
+    typeof params.plantSort === 'string' && params.plantSort.trim()
+      ? params.plantSort.trim()
+      : 'createdAt,desc'
+  );
 
   const catalogPreviewQuery = useSpeciesList(
     {
@@ -655,51 +914,56 @@ export function FilterScreen() {
     { enabled: scope === 'catalog' }
   );
 
-  const visibleOwned = useMemo(
-    () =>
-      ownedPlants.filter((plant) => {
-        const normalized = query.trim().toLocaleLowerCase();
-        const matchesQuery =
-          !normalized ||
-          `${plant.name} ${plant.scientificName} ${plant.location}`
-            .toLocaleLowerCase()
-            .includes(normalized);
-        return matchesQuery && matchesPlantFilters(plant, ownedSelected);
-      }),
-    [ownedPlants, query, ownedSelected]
+  const ownedPreviewQuery = useUserPlantsList(
+    {
+      keyword: query.trim() || undefined,
+      gardenId: gardenId || undefined,
+      healthStatus: healthStatus || undefined,
+      page: 0,
+      size: 1,
+      sort: plantSort,
+    },
+    { enabled: scope === 'owned' }
   );
 
-  const toggleOwnedFilter = (key: string, value: string) =>
-    setOwnedSelected((old) => {
-      if (key === 'letter' && value === 'Tất cả') return { ...old, letter: [] };
-      const values = old[key] ?? [];
-      return {
-        ...old,
-        [key]: values.includes(value) ? values.filter((item) => item !== value) : [...values, value],
-      };
-    });
+  const gardensQuery = useGardensList({ enabled: scope === 'owned' });
+  const gardens = gardensQuery.data ?? [];
 
   const reset = () => {
     setQuery('');
     setCategory('Tất cả');
     setSort('commonName,asc');
-    setOwnedSelected({});
+    setGardenId('');
+    setHealthStatus('');
+    setPlantSort('createdAt,desc');
   };
 
   const apply = () =>
     router.replace({
       pathname: '/search',
-      params: {
-        query,
-        category,
-        sort,
-        scope,
-        filters: JSON.stringify(ownedSelected),
-      },
+      params:
+        scope === 'owned'
+          ? {
+              query,
+              scope: 'owned',
+              gardenId,
+              healthStatus,
+              plantSort,
+              filters: '{}',
+            }
+          : {
+              query,
+              category,
+              sort,
+              scope,
+              filters: '{}',
+            },
     } as never);
 
   const previewCount =
-    scope === 'catalog' ? catalogPreviewQuery.data?.totalElements : visibleOwned.length;
+    scope === 'catalog'
+      ? catalogPreviewQuery.data?.totalElements
+      : ownedPreviewQuery.data?.totalElements;
 
   return (
     <SafeAreaView style={ss.safe} edges={['top']}>
@@ -717,7 +981,7 @@ export function FilterScreen() {
         <View style={ss.toggleRow}>
           {[
             { key: 'catalog', label: 'Thư viện loài cây (API)' },
-            { key: 'owned', label: `Cây demo (${ownedPlants.length})` },
+            { key: 'owned', label: 'Cây của tôi (API)' },
           ].map((item) => (
             <Pressable
               key={item.key}
@@ -737,7 +1001,7 @@ export function FilterScreen() {
           <TextInput
             value={query}
             onChangeText={setQuery}
-            placeholder="Tên cây hoặc tên khoa học"
+            placeholder={scope === 'catalog' ? 'Tên loài hoặc tên khoa học' : 'Tên cây hoặc tên loài'}
             placeholderTextColor={C.mutedText}
             style={ss.searchInput}
           />
@@ -802,59 +1066,96 @@ export function FilterScreen() {
           </>
         ) : (
           <>
-            <View style={ss.sectionRow}>
-              <Text style={ss.sectionTitle}>Lọc theo chữ cái đầu (Demo G5.4)</Text>
-              <Text style={ss.body}>Tiếng Việt</Text>
-            </View>
-            <View style={ss.letters}>
-              {vietnameseAlphabet.map((letter) => (
+            <View style={ss.filterGroup}>
+              <Text style={ss.sectionTitle}>Khu vườn (hỗ trợ API)</Text>
+              <View style={ss.optionGrid}>
                 <Pressable
-                  key={letter}
-                  onPress={() => toggleOwnedFilter('letter', letter)}
-                  style={[
-                    ss.letter,
-                    (letter === 'Tất cả'
-                      ? !ownedSelected.letter?.length
-                      : ownedSelected.letter?.includes(letter)) && ss.letterActive,
-                  ]}
+                  onPress={() => setGardenId('')}
+                  style={[ss.option, !gardenId && ss.optionActive]}
+                  accessibilityRole="button"
                 >
-                  <Text
-                    style={[
-                      ss.letterText,
-                      (letter === 'Tất cả'
-                        ? !ownedSelected.letter?.length
-                        : ownedSelected.letter?.includes(letter)) && ss.scopeTextActive,
-                    ]}
-                  >
-                    {letter}
+                  <Text style={[ss.optionText, !gardenId && ss.optionTextActive]}>Tất cả vườn</Text>
+                </Pressable>
+                {gardens.map((garden) => {
+                  const active = gardenId === garden.id;
+                  return (
+                    <Pressable
+                      key={garden.id}
+                      onPress={() => setGardenId(garden.id)}
+                      style={[ss.option, active && ss.optionActive]}
+                      accessibilityRole="button"
+                    >
+                      <Text style={[ss.optionText, active && ss.optionTextActive]}>
+                        {garden.name}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+
+            <View style={ss.filterGroup}>
+              <Text style={ss.sectionTitle}>Tình trạng sức khỏe</Text>
+              <View style={ss.optionGrid}>
+                <Pressable
+                  onPress={() => setHealthStatus('')}
+                  style={[ss.option, !healthStatus && ss.optionActive]}
+                  accessibilityRole="button"
+                >
+                  <Text style={[ss.optionText, !healthStatus && ss.optionTextActive]}>
+                    Tất cả trạng thái
                   </Text>
                 </Pressable>
-              ))}
+                {HEALTH_STATUS_OPTIONS.map((opt) => {
+                  const active = healthStatus === opt.value;
+                  return (
+                    <Pressable
+                      key={opt.value}
+                      onPress={() => setHealthStatus(opt.value)}
+                      style={[ss.option, active && ss.optionActive]}
+                      accessibilityRole="button"
+                    >
+                      <Text style={[ss.optionText, active && ss.optionTextActive]}>
+                        {opt.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
             </View>
 
-            {ownedFilterGroups.map((group) => (
-              <View key={group.key} style={ss.filterGroup}>
-                <Text style={ss.sectionTitle}>{group.title}</Text>
-                <View style={ss.optionGrid}>
-                  {group.options.map((item) => {
-                    const active = ownedSelected[group.key]?.includes(item) ?? false;
-                    return (
-                      <Pressable
-                        key={item}
-                        onPress={() => toggleOwnedFilter(group.key, item)}
-                        style={[ss.option, active && ss.optionActive]}
-                      >
-                        <Text style={[ss.optionText, active && ss.optionTextActive]}>{item}</Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
+            <View style={ss.filterGroup}>
+              <Text style={ss.sectionTitle}>Sắp xếp kết quả</Text>
+              <View style={ss.optionGrid}>
+                {PLANT_SORT_OPTIONS.map((opt) => {
+                  const active = plantSort === opt.value;
+                  return (
+                    <Pressable
+                      key={opt.value}
+                      onPress={() => setPlantSort(opt.value)}
+                      style={[ss.option, active && ss.optionActive]}
+                      accessibilityRole="button"
+                    >
+                      <Text style={[ss.optionText, active && ss.optionTextActive]}>
+                        {opt.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
               </View>
-            ))}
+            </View>
 
             <View style={ss.filterResult}>
-              <Text style={ss.resultName}>{visibleOwned.length} cây demo phù hợp</Text>
-              <Text style={ss.mockNote}>Bộ lọc cây cá nhân chỉ áp dụng cho dữ liệu demo cục bộ G5.4.</Text>
+              <Text style={ss.resultName}>
+                {ownedPreviewQuery.isLoading
+                  ? 'Đang kiểm tra số lượng trên máy chủ...'
+                  : ownedPreviewQuery.isError
+                    ? 'Không thể xem trước số lượng'
+                    : `${ownedPreviewQuery.data?.totalElements ?? 0} cây phù hợp`}
+              </Text>
+              <Text style={ss.body}>
+                Tất cả bộ lọc cây của tôi được truy vấn trực tiếp qua GET /api/v1/plants.
+              </Text>
             </View>
           </>
         )}

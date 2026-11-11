@@ -15,7 +15,21 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GoPlantColors as C, GoPlantTypography as F } from '@/constants/theme';
 import { useAuth } from '@/features/auth/AuthProvider';
-import { plantCatalog, usePlantData } from '@/features/plants/PlantDataStore';
+import {
+  PLANT_DISPLAY_NAME_MAX_LENGTH,
+  PLANT_LOCATION_MAX_LENGTH,
+  validatePlantedAtDate,
+  validatePlantDisplayName,
+  validatePlantLocation,
+} from '@/features/plants/plantApi';
+import {
+  useCreatePlantMutation,
+  useUpdatePlantMutation,
+  useUserPlantDetail,
+} from '@/features/plants/plantHooks';
+import { HEALTH_STATUS_OPTIONS } from '@/features/plants/plantTypes';
+import { useSpeciesDetail, useSpeciesList } from '@/features/species/speciesHooks';
+import type { SpeciesSummaryDto } from '@/features/species/speciesTypes';
 import { AppApiError } from '@/services/api/apiError';
 import { getSessionGeneration } from '@/services/api/tokenStorage';
 import { GARDEN_NAME_MAX_LENGTH } from './gardenApi';
@@ -31,6 +45,7 @@ import {
   getSpaceTypeLabel,
   SPACE_TYPE_OPTIONS,
   type GardenDetailDto,
+  type HealthStatus,
   type SpaceType,
 } from './gardenTypes';
 
@@ -443,10 +458,10 @@ export function GardenDetailScreen() {
             <Text style={g.sectionTitle}>Cây đang trồng ({garden.plants.length})</Text>
             <Pressable
               onPress={() =>
-                Alert.alert(
-                  'Sắp ra mắt (G5.4)',
-                  'API quản lý cây trong khu vườn (User Plants) sẽ được tích hợp ở giai đoạn G5.4.'
-                )
+                router.push({
+                  pathname: '/garden/add-plant',
+                  params: { gardenId: garden.id },
+                } as never)
               }
               accessibilityRole="button"
             >
@@ -458,14 +473,24 @@ export function GardenDetailScreen() {
             <View style={g.emptyPlantsBox}>
               <Text style={g.bodyCenter}>Khu vườn này chưa có cây trồng nào.</Text>
               <Text style={g.note}>
-                Tính năng thêm và quản lý cây theo khu vườn sẽ được kết nối API ở giai đoạn G5.4.
+                Nhấn “＋ Thêm cây” để chọn loài cây từ thư viện và thêm vào khu vườn này.
               </Text>
             </View>
           ) : (
             garden.plants.map((plant) => {
               const health = getHealthStatusMeta(plant.healthStatus);
               return (
-                <View key={plant.id} style={g.plantCard}>
+                <Pressable
+                  key={plant.id}
+                  onPress={() =>
+                    router.push({
+                      pathname: '/plant-detail',
+                      params: { plantId: plant.id },
+                    } as never)
+                  }
+                  accessibilityRole="button"
+                  style={g.plantCard}
+                >
                   {plant.imageUrl ? (
                     <Image source={{ uri: plant.imageUrl }} style={g.plantThumb} contentFit="cover" />
                   ) : (
@@ -481,7 +506,8 @@ export function GardenDetailScreen() {
                     </Text>
                     <Text style={g.healthLabel}>{health.label}</Text>
                   </View>
-                </View>
+                  <Text style={g.link}>Chi tiết ›</Text>
+                </Pressable>
               );
             })
           )}
@@ -764,144 +790,654 @@ function GardenCreateEditForm({ gardenId }: { gardenId?: string }) {
   );
 }
 
-/**
- * Local G5.4 UI prototype preserved cleanly for /garden/add-plant.
- */
-function AddPlantDemoForm() {
-  const params = useLocalSearchParams<{ editId?: string; plantId?: string }>();
-  const { ownedPlants, addPlant: createOwnedPlant, updatePlant } = usePlantData();
-  const editId = params.editId;
-  const editingPlant = editId ? ownedPlants.find((item) => item.id === editId) : undefined;
-  const initialCatalogId = params.plantId ?? editingPlant?.catalogId ?? '';
-  const initialCatalogPlant = plantCatalog.find((plant) => plant.id === initialCatalogId);
-  const [name, setName] = useState(editingPlant?.name ?? initialCatalogPlant?.name ?? '');
-  const [place, setPlace] = useState(editingPlant?.location ?? '');
-  const [error, setError] = useState(false);
-  const [selected, setSelected] = useState(initialCatalogId);
-  const [plantedAt, setPlantedAt] = useState(editingPlant?.plantedAt ?? '');
-  const [note, setNote] = useState(editingPlant?.note ?? '');
-  const [plantQuery, setPlantQuery] = useState('');
-  const title = editId ? 'Chỉnh sửa hồ sơ cây demo' : 'Thêm cây trồng (Demo G5.4)';
-  const selectedProfile = plantCatalog.find((plant) => plant.id === selected);
+const LOCATION_SUGGESTIONS = ['Ban công', 'Trong nhà', 'Cửa sổ', 'Sân thượng', 'Sân vườn'];
 
-  const submit = () => {
-    const invalid = !selectedProfile || !name.trim() || !place;
-    setError(invalid);
-    if (invalid || !selectedProfile) return;
-    const profile = {
-      catalogId: selectedProfile.id,
-      name: name.trim(),
-      scientificName: selectedProfile.scientificName,
-      category: selectedProfile.category,
-      plantedAt: plantedAt.trim(),
-      location: place,
-      note: note.trim(),
-    };
-    if (editId) updatePlant(editId, profile);
-    else createOwnedPlant(profile);
-    router.replace('/plants' as never);
+type PlantFormFieldErrors = {
+  gardenId?: string;
+  speciesId?: string;
+  displayName?: string;
+  location?: string;
+  plantedAt?: string;
+};
+
+function UserPlantCreateEditForm() {
+  const params = useLocalSearchParams<{
+    gardenId?: string;
+    speciesId?: string;
+    editPlantId?: string;
+    plantId?: string;
+  }>();
+
+  const { user } = useAuth();
+  const currentUserId = typeof user?.id === 'string' ? user.id.trim() : '';
+  const currentUserIdRef = useRef(currentUserId);
+  const prevUserIdRef = useRef(currentUserId);
+
+  const cleanEditPlantId =
+    (typeof params.editPlantId === 'string' ? params.editPlantId.trim() : '') ||
+    (typeof params.plantId === 'string' ? params.plantId.trim() : '');
+  const isEditMode = Boolean(cleanEditPlantId);
+  const preselectedGardenId = typeof params.gardenId === 'string' ? params.gardenId.trim() : '';
+  const preselectedSpeciesId =
+    typeof params.speciesId === 'string' ? params.speciesId.trim() : '';
+
+  const detailQuery = useUserPlantDetail(cleanEditPlantId, { enabled: isEditMode });
+  const gardensQuery = useGardensList({ enabled: !isEditMode });
+
+  const [speciesSearch, setSpeciesSearch] = useState('');
+  const [debouncedSpeciesSearch, setDebouncedSpeciesSearch] = useState('');
+
+  useEffect(() => {
+    const trimmed = speciesSearch.trim();
+    if (trimmed === debouncedSpeciesSearch) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      setDebouncedSpeciesSearch(trimmed);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [speciesSearch, debouncedSpeciesSearch]);
+
+  const speciesQuery = useSpeciesList(
+    {
+      keyword: debouncedSpeciesSearch || undefined,
+      page: 0,
+      size: 20,
+      sort: 'commonName,asc',
+    },
+    { enabled: !isEditMode }
+  );
+  const preselectedSpeciesQuery = useSpeciesDetail(preselectedSpeciesId, {
+    enabled: !isEditMode && Boolean(preselectedSpeciesId),
+  });
+
+  const createPlantMutation = useCreatePlantMutation();
+  const updatePlantMutation = useUpdatePlantMutation();
+
+  const [selectedGardenId, setSelectedGardenId] = useState('');
+  const [selectedSpeciesId, setSelectedSpeciesId] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [location, setLocation] = useState('');
+  const [plantedAt, setPlantedAt] = useState('');
+  const [note, setNote] = useState('');
+  const [healthStatus, setHealthStatus] = useState<HealthStatus>('HEALTHY');
+  const [imageUrl, setImageUrl] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<PlantFormFieldErrors>({});
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  const hydratedPlantRef = useRef<string | null>(null);
+  const autoAppliedGardenParamRef = useRef(false);
+  const autoAppliedSpeciesParamRef = useRef(false);
+  const autoSuggestedNameRef = useRef(false);
+
+  useEffect(() => {
+    const prevUserId = prevUserIdRef.current;
+    prevUserIdRef.current = currentUserId;
+    currentUserIdRef.current = currentUserId;
+    if (prevUserId && prevUserId !== currentUserId) {
+      hydratedPlantRef.current = null;
+      autoAppliedGardenParamRef.current = false;
+      autoAppliedSpeciesParamRef.current = false;
+      autoSuggestedNameRef.current = false;
+      setSelectedGardenId('');
+      setSelectedSpeciesId('');
+      setDisplayName('');
+      setLocation('');
+      setPlantedAt('');
+      setNote('');
+      setHealthStatus('HEALTHY');
+      setImageUrl('');
+      setFieldErrors({});
+      setSubmitError(null);
+    }
+  }, [currentUserId]);
+
+  useEffect(() => {
+    if (!isEditMode || !detailQuery.data) {
+      return;
+    }
+    const hydrationKey = `${currentUserId}:${detailQuery.data.id}`;
+    if (hydratedPlantRef.current === hydrationKey) {
+      return;
+    }
+    hydratedPlantRef.current = hydrationKey;
+    setDisplayName(detailQuery.data.displayName);
+    setLocation(detailQuery.data.location ?? '');
+    setPlantedAt(detailQuery.data.plantedAt ?? '');
+    setNote(detailQuery.data.note ?? '');
+    setHealthStatus(detailQuery.data.healthStatus);
+    setImageUrl(detailQuery.data.imageUrl ?? '');
+  }, [isEditMode, currentUserId, detailQuery.data]);
+
+  const gardens = useMemo(() => gardensQuery.data ?? [], [gardensQuery.data]);
+
+  useEffect(() => {
+    if (isEditMode || autoAppliedGardenParamRef.current || !preselectedGardenId) {
+      return;
+    }
+    if (gardens.some((garden) => garden.id === preselectedGardenId)) {
+      autoAppliedGardenParamRef.current = true;
+      setSelectedGardenId(preselectedGardenId);
+    }
+  }, [isEditMode, preselectedGardenId, gardens]);
+
+  const speciesOptions = useMemo<SpeciesSummaryDto[]>(() => {
+    const listContent = speciesQuery.data?.content ?? [];
+    const preDetail = preselectedSpeciesQuery.data;
+    if (!preDetail) {
+      return listContent;
+    }
+    if (listContent.some((item) => item.id === preDetail.id)) {
+      return listContent;
+    }
+    return [
+      {
+        id: preDetail.id,
+        commonName: preDetail.commonName,
+        scientificName: preDetail.scientificName,
+        category: preDetail.category,
+        difficulty: preDetail.difficulty,
+        thumbnailUrl: preDetail.thumbnailUrl,
+        isFavorited: preDetail.isFavorited,
+      },
+      ...listContent,
+    ];
+  }, [speciesQuery.data, preselectedSpeciesQuery.data]);
+
+  useEffect(() => {
+    if (isEditMode || autoAppliedSpeciesParamRef.current || !preselectedSpeciesId) {
+      return;
+    }
+    const matched = speciesOptions.find((item) => item.id === preselectedSpeciesId);
+    if (matched) {
+      autoAppliedSpeciesParamRef.current = true;
+      setSelectedSpeciesId(matched.id);
+      if (!displayName.trim()) {
+        autoSuggestedNameRef.current = true;
+        setDisplayName(matched.commonName);
+      }
+    }
+  }, [isEditMode, preselectedSpeciesId, speciesOptions, displayName]);
+
+  const title = isEditMode ? 'Chỉnh sửa cây trồng' : 'Thêm cây trồng mới';
+  const isPending = createPlantMutation.isPending || updatePlantMutation.isPending;
+
+  if (isEditMode && detailQuery.isLoading) {
+    return (
+      <SafeAreaView style={g.safe} edges={['top']}>
+        <GardenHeader title={title} />
+        <View style={g.centerState}>
+          <ActivityIndicator size="large" color={C.primary} />
+          <Text style={g.bodyCenter}>Đang tải thông tin cây trồng để chỉnh sửa...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (isEditMode && (detailQuery.isError || !detailQuery.data)) {
+    return (
+      <SafeAreaView style={g.safe} edges={['top']}>
+        <GardenHeader title={title} />
+        <View style={g.centerState} accessibilityRole="alert">
+          <Text style={g.stateTitle}>Không thể mở biểu mẫu chỉnh sửa cây</Text>
+          <Text style={g.bodyCenter}>
+            {detailQuery.error?.message || 'Cây trồng không tồn tại hoặc bạn không có quyền truy cập.'}
+          </Text>
+          <View style={g.stateActions}>
+            {detailQuery.error?.statusCode !== 403 && detailQuery.error?.statusCode !== 404 ? (
+              <ActionButton label="Thử lại" onPress={() => void detailQuery.refetch()} />
+            ) : null}
+            <ActionButton label="Quay lại" secondary onPress={() => router.back()} />
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  const validateLocal = (): boolean => {
+    const nextErrors: PlantFormFieldErrors = {};
+
+    if (!isEditMode) {
+      if (!selectedGardenId.trim()) {
+        nextErrors.gardenId = 'Vui lòng chọn khu vườn thực tế trước khi thêm cây.';
+      }
+      if (!selectedSpeciesId.trim()) {
+        nextErrors.speciesId = 'Vui lòng chọn loài cây thực tế từ thư viện.';
+      }
+    }
+
+    try {
+      validatePlantDisplayName(displayName);
+    } catch (err) {
+      nextErrors.displayName =
+        err instanceof AppApiError ? err.message : 'Tên cây hiển thị không hợp lệ.';
+    }
+
+    try {
+      validatePlantLocation(location);
+    } catch (err) {
+      nextErrors.location =
+        err instanceof AppApiError ? err.message : 'Vị trí trồng không hợp lệ.';
+    }
+
+    try {
+      validatePlantedAtDate(plantedAt);
+    } catch (err) {
+      nextErrors.plantedAt =
+        err instanceof AppApiError
+          ? err.message
+          : 'Ngày trồng phải theo định dạng YYYY-MM-DD.';
+    }
+
+    setFieldErrors(nextErrors);
+    return Object.keys(nextErrors).length === 0;
   };
+
+  const handleSubmit = async () => {
+    const initiatedGeneration = getSessionGeneration();
+    const initiatedByUserId = currentUserIdRef.current;
+    const hasSwitchedSession = () =>
+      getSessionGeneration() !== initiatedGeneration ||
+      (Boolean(initiatedByUserId) && currentUserIdRef.current !== initiatedByUserId);
+
+    setSubmitError(null);
+    if (!validateLocal()) {
+      return;
+    }
+
+    const trimmedName = displayName.trim();
+    const trimmedLocation = location.trim();
+    const trimmedPlantedAt = plantedAt.trim();
+    const trimmedNote = note.trim();
+    const trimmedImageUrl = imageUrl.trim();
+
+    try {
+      if (isEditMode) {
+        const updated = await updatePlantMutation.mutateAsync({
+          plantId: cleanEditPlantId,
+          data: {
+            displayName: trimmedName,
+            location: trimmedLocation,
+            ...(trimmedPlantedAt ? { plantedAt: trimmedPlantedAt } : {}),
+            note: trimmedNote,
+            healthStatus,
+            imageUrl: trimmedImageUrl,
+          },
+        });
+        if (hasSwitchedSession()) {
+          return;
+        }
+        if (router.canGoBack()) {
+          router.back();
+        } else {
+          router.replace({
+            pathname: '/plant-detail',
+            params: { plantId: updated.id },
+          } as never);
+        }
+      } else {
+        const created = await createPlantMutation.mutateAsync({
+          gardenId: selectedGardenId,
+          request: {
+            speciesId: selectedSpeciesId,
+            displayName: trimmedName,
+            ...(trimmedLocation ? { location: trimmedLocation } : {}),
+            ...(trimmedPlantedAt ? { plantedAt: trimmedPlantedAt } : {}),
+            ...(trimmedNote ? { note: trimmedNote } : {}),
+            ...(trimmedImageUrl ? { imageUrl: trimmedImageUrl } : {}),
+          },
+        });
+        if (hasSwitchedSession()) {
+          return;
+        }
+        router.replace({
+          pathname: '/plant-detail',
+          params: { plantId: created.id },
+        } as never);
+      }
+    } catch (err) {
+      if (hasSwitchedSession()) {
+        return;
+      }
+      if (err instanceof AppApiError) {
+        if (err.code === 'SESSION_USER_MISMATCH') {
+          return;
+        }
+        if (err.field === 'displayName') {
+          setFieldErrors((prev) => ({ ...prev, displayName: err.message }));
+        } else if (err.field === 'location') {
+          setFieldErrors((prev) => ({ ...prev, location: err.message }));
+        } else if (err.field === 'plantedAt') {
+          setFieldErrors((prev) => ({ ...prev, plantedAt: err.message }));
+        } else if (err.field === 'speciesId') {
+          setFieldErrors((prev) => ({ ...prev, speciesId: err.message }));
+        } else if (err.field === 'gardenId') {
+          setFieldErrors((prev) => ({ ...prev, gardenId: err.message }));
+        }
+        setSubmitError(err.message);
+        return;
+      }
+      setSubmitError('Không thể lưu thông tin cây trồng. Vui lòng thử lại.');
+    }
+  };
+
+  const editingDetail = detailQuery.data;
 
   return (
     <SafeAreaView style={g.safe} edges={['top']}>
       <GardenHeader title={title} />
-      <ScrollView contentContainerStyle={g.content}>
+      <ScrollView contentContainerStyle={g.content} keyboardShouldPersistTaps="handled">
         <View style={g.tip}>
-          <Text style={g.sectionTitle}>Thêm cây vào hồ sơ demo (G5.4)</Text>
-          <Text style={g.body}>Lưu tạm cục bộ để thử nghiệm giao diện Quản lý cây.</Text>
+          <Text style={g.sectionTitle}>
+            {isEditMode ? 'Cập nhật hồ sơ cây trồng' : 'Thêm cây trồng vào khu vườn'}
+          </Text>
+          <Text style={g.body}>
+            {isEditMode
+              ? 'Chỉnh sửa tên, vị trí, ngày trồng, tình trạng sức khỏe và ghi chú. Khu vườn và loài cây được giữ nguyên.'
+              : 'Chọn khu vườn và loài cây thực tế từ máy chủ để lưu hồ sơ cây trồng mới.'}
+          </Text>
         </View>
-        <Text style={g.label}>Tìm cây trong mẫu demo</Text>
-        <TextInput
-          value={plantQuery}
-          onChangeText={setPlantQuery}
-          placeholder="Nhập tên cây hoặc tên khoa học"
-          style={g.input}
-        />
-        <Text style={g.label}>1. Chọn cây trồng</Text>
-        {plantCatalog
-          .filter((plant) =>
-            `${plant.name} ${plant.scientificName}`
-              .toLocaleLowerCase()
-              .includes(plantQuery.trim().toLocaleLowerCase())
-          )
-          .map((plant) => (
-            <Pressable
-              key={plant.id}
-              accessibilityRole="button"
-              onPress={() => {
-                setSelected(plant.id);
-                if (!name.trim() || plantCatalog.some((item) => item.name === name)) {
-                  setName(plant.name);
-                }
-              }}
-              style={[g.plantCard, selected === plant.id && g.choiceActive]}
-            >
-              <View style={g.plantImage}>
-                <Text style={g.plantEmoji}>♧</Text>
-              </View>
-              <View style={g.plantCopy}>
-                <Text style={g.plantName}>{plant.name}</Text>
-                <Text style={g.body}>
-                  {plant.scientificName} • {plant.category} • Mẫu demo G5.4
-                </Text>
-              </View>
-              <Text style={g.link}>{selected === plant.id ? '✓' : 'Chọn'}</Text>
-            </Pressable>
-          ))}
 
-        {selectedProfile ? (
+        {submitError ? (
+          <View style={g.errorBanner} accessibilityRole="alert">
+            <Text style={g.errorBannerText}>{submitError}</Text>
+            <Pressable onPress={() => setSubmitError(null)} accessibilityRole="button">
+              <Text style={g.dismissText}>Đóng</Text>
+            </Pressable>
+          </View>
+        ) : null}
+
+        {isEditMode && editingDetail ? (
+          <View style={g.card}>
+            <Text style={g.sectionTitle}>Thông tin liên kết (chỉ đọc)</Text>
+            <Text style={g.body}>
+              Khu vườn: {editingDetail.garden?.name || 'Chưa xác định'}
+            </Text>
+            <Text style={g.body}>
+              Loài cây:{' '}
+              {editingDetail.species
+                ? `${editingDetail.species.commonName} (${editingDetail.species.scientificName})`
+                : 'Chưa xác định'}
+            </Text>
+            <Text style={g.noteLeft}>
+              API cập nhật cây không hỗ trợ đổi khu vườn hoặc loài cây.
+            </Text>
+          </View>
+        ) : (
           <>
             <Text style={g.label}>
-              Tên hiển thị <Text style={g.required}>*</Text>
+              1. Chọn khu vườn <Text style={g.required}>*</Text>
+            </Text>
+            {gardensQuery.isLoading ? (
+              <View style={g.stateCard}>
+                <ActivityIndicator size="small" color={C.primary} />
+                <Text style={g.bodyCenter}>Đang tải danh sách khu vườn...</Text>
+              </View>
+            ) : gardensQuery.isError ? (
+              <View style={g.stateCard} accessibilityRole="alert">
+                <Text style={g.error}>{gardensQuery.error.message}</Text>
+                <ActionButton
+                  label="Thử lại"
+                  secondary
+                  onPress={() => void gardensQuery.refetch()}
+                />
+              </View>
+            ) : gardens.length === 0 ? (
+              <View style={g.stateCard}>
+                <Text style={g.stateTitle}>Bạn chưa có khu vườn nào</Text>
+                <Text style={g.bodyCenter}>
+                  Hãy tạo một khu vườn thực tế trước khi thêm cây trồng.
+                </Text>
+                <ActionButton
+                  label="＋  Tạo khu vườn mới"
+                  onPress={() => router.push('/garden/create' as never)}
+                />
+              </View>
+            ) : (
+              <View style={g.choices}>
+                {gardens.map((garden) => {
+                  const active = selectedGardenId === garden.id;
+                  return (
+                    <Pressable
+                      key={garden.id}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Chọn khu vườn ${garden.name}`}
+                      accessibilityState={{ selected: active }}
+                      onPress={() => {
+                        setSelectedGardenId(garden.id);
+                        if (fieldErrors.gardenId) {
+                          setFieldErrors((prev) => ({ ...prev, gardenId: undefined }));
+                        }
+                      }}
+                      style={[g.choice, active && g.choiceActive]}
+                    >
+                      <Text style={[g.body, active && g.choiceTextActive]}>
+                        {active ? '✓ ' : ''}
+                        {garden.name} ({getSpaceTypeLabel(garden.spaceType)})
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            )}
+            {fieldErrors.gardenId ? <Text style={g.error}>{fieldErrors.gardenId}</Text> : null}
+
+            <Text style={g.label}>
+              2. Tìm & chọn loài cây <Text style={g.required}>*</Text>
             </Text>
             <TextInput
-              value={name}
-              onChangeText={setName}
-              placeholder="Tên cây trong hồ sơ của bạn"
-              style={[g.input, error && !name.trim() && g.inputError]}
-            />
-            <Text style={g.label}>2. Vị trí trồng</Text>
-            <View style={g.choices}>
-              {[
-                'Trong nhà',
-                'Ban công',
-                'Sân thượng',
-                'Sân vườn',
-                'Ngoài sân',
-                'Nhà kính',
-                'Khác',
-                'Chưa xác định',
-              ].map((x) => (
-                <Pressable
-                  key={x}
-                  accessibilityRole="button"
-                  onPress={() => setPlace(x)}
-                  style={[g.choice, place === x && g.choiceActive]}
-                >
-                  <Text style={g.body}>{x}</Text>
-                </Pressable>
-              ))}
-            </View>
-            <Text style={g.label}>Ngày trồng / bắt đầu chăm sóc (không bắt buộc)</Text>
-            <TextInput
-              value={plantedAt}
-              onChangeText={setPlantedAt}
-              placeholder="Ngày/tháng/năm"
+              value={speciesSearch}
+              onChangeText={setSpeciesSearch}
+              placeholder="Tìm tên thường gọi hoặc tên khoa học..."
               style={g.input}
+              accessibilityLabel="Tìm loài cây trong thư viện"
             />
-            <Text style={g.label}>Ghi chú (không bắt buộc)</Text>
-            <TextInput
-              value={note}
-              onChangeText={setNote}
-              placeholder="Ghi chú về cây"
-              style={[g.input, g.multiline]}
-              multiline
-            />
+            {speciesQuery.isLoading && speciesOptions.length === 0 ? (
+              <View style={g.stateCard}>
+                <ActivityIndicator size="small" color={C.primary} />
+                <Text style={g.bodyCenter}>Đang tải thư viện loài cây...</Text>
+              </View>
+            ) : speciesQuery.isError && speciesOptions.length === 0 ? (
+              <View style={g.stateCard} accessibilityRole="alert">
+                <Text style={g.error}>{speciesQuery.error.message}</Text>
+                <ActionButton
+                  label="Thử lại"
+                  secondary
+                  onPress={() => void speciesQuery.refetch()}
+                />
+              </View>
+            ) : speciesOptions.length === 0 ? (
+              <View style={g.stateCard}>
+                <Text style={g.bodyCenter}>
+                  Không tìm thấy loài cây phù hợp từ máy chủ. Thử từ khóa khác.
+                </Text>
+              </View>
+            ) : (
+              speciesOptions.map((species) => {
+                const active = selectedSpeciesId === species.id;
+                return (
+                  <Pressable
+                    key={species.id}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Chọn loài cây ${species.commonName}`}
+                    accessibilityState={{ selected: active }}
+                    onPress={() => {
+                      setSelectedSpeciesId(species.id);
+                      if (fieldErrors.speciesId) {
+                        setFieldErrors((prev) => ({ ...prev, speciesId: undefined }));
+                      }
+                      if (
+                        !displayName.trim() ||
+                        autoSuggestedNameRef.current ||
+                        speciesOptions.some((opt) => opt.commonName === displayName.trim())
+                      ) {
+                        autoSuggestedNameRef.current = true;
+                        setDisplayName(species.commonName);
+                      }
+                    }}
+                    style={[g.plantCard, active && g.choiceActive]}
+                  >
+                    {species.thumbnailUrl ? (
+                      <Image
+                        source={{ uri: species.thumbnailUrl }}
+                        style={g.plantThumb}
+                        contentFit="cover"
+                      />
+                    ) : (
+                      <View style={g.plantImage}>
+                        <Text style={g.plantEmoji}>♧</Text>
+                      </View>
+                    )}
+                    <View style={g.plantCopy}>
+                      <Text style={g.plantName}>{species.commonName}</Text>
+                      <Text style={g.body}>
+                        {species.scientificName} • {species.category}
+                      </Text>
+                    </View>
+                    <Text style={g.link}>{active ? '✓' : 'Chọn'}</Text>
+                  </Pressable>
+                );
+              })
+            )}
+            {fieldErrors.speciesId ? <Text style={g.error}>{fieldErrors.speciesId}</Text> : null}
+          </>
+        )}
+
+        <Text style={g.label}>
+          Tên hiển thị <Text style={g.required}>*</Text>
+        </Text>
+        <TextInput
+          value={displayName}
+          onChangeText={(text) => {
+            autoSuggestedNameRef.current = false;
+            setDisplayName(text);
+            if (fieldErrors.displayName) {
+              setFieldErrors((prev) => ({ ...prev, displayName: undefined }));
+            }
+          }}
+          placeholder="Ví dụ: Trầu bà phòng khách"
+          maxLength={220}
+          style={[g.input, fieldErrors.displayName && g.inputError]}
+          accessibilityLabel="Tên cây hiển thị"
+        />
+        <Text style={g.helperText}>
+          {displayName.trim().length}/{PLANT_DISPLAY_NAME_MAX_LENGTH} ký tự
+        </Text>
+        {fieldErrors.displayName ? <Text style={g.error}>{fieldErrors.displayName}</Text> : null}
+
+        <Text style={g.label}>Vị trí trồng trong vườn (không bắt buộc)</Text>
+        <View style={g.choices}>
+          {LOCATION_SUGGESTIONS.map((preset) => {
+            const active = location.trim() === preset;
+            return (
+              <Pressable
+                key={preset}
+                accessibilityRole="button"
+                onPress={() => {
+                  setLocation(preset);
+                  if (fieldErrors.location) {
+                    setFieldErrors((prev) => ({ ...prev, location: undefined }));
+                  }
+                }}
+                style={[g.choice, active && g.choiceActive]}
+              >
+                <Text style={[g.body, active && g.choiceTextActive]}>{preset}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+        <TextInput
+          value={location}
+          onChangeText={(text) => {
+            setLocation(text);
+            if (fieldErrors.location) {
+              setFieldErrors((prev) => ({ ...prev, location: undefined }));
+            }
+          }}
+          placeholder="Ví dụ: Kệ cửa sổ hướng Đông"
+          maxLength={220}
+          style={[g.input, fieldErrors.location && g.inputError]}
+          accessibilityLabel="Vị trí trồng cây"
+        />
+        <Text style={g.helperText}>
+          {location.trim().length}/{PLANT_LOCATION_MAX_LENGTH} ký tự
+        </Text>
+        {fieldErrors.location ? <Text style={g.error}>{fieldErrors.location}</Text> : null}
+
+        <Text style={g.label}>Ngày trồng (YYYY-MM-DD, không bắt buộc)</Text>
+        <TextInput
+          value={plantedAt}
+          onChangeText={(text) => {
+            setPlantedAt(text);
+            if (fieldErrors.plantedAt) {
+              setFieldErrors((prev) => ({ ...prev, plantedAt: undefined }));
+            }
+          }}
+          placeholder="Ví dụ: 2026-11-11"
+          autoCapitalize="none"
+          style={[g.input, fieldErrors.plantedAt && g.inputError]}
+          accessibilityLabel="Ngày trồng cây"
+        />
+        {fieldErrors.plantedAt ? <Text style={g.error}>{fieldErrors.plantedAt}</Text> : null}
+
+        {isEditMode ? (
+          <>
+            <Text style={g.label}>Tình trạng sức khỏe</Text>
+            <View style={g.choices}>
+              {HEALTH_STATUS_OPTIONS.map((opt) => {
+                const active = healthStatus === opt.value;
+                return (
+                  <Pressable
+                    key={opt.value}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                    onPress={() => setHealthStatus(opt.value)}
+                    style={[g.choice, active && g.choiceActive]}
+                  >
+                    <Text style={[g.body, active && g.choiceTextActive]}>{opt.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
           </>
         ) : null}
 
-        {error ? <Text style={g.error}>Vui lòng nhập đầy đủ thông tin bắt buộc.</Text> : null}
-        <ActionButton label={editId ? 'Cập nhật cây demo' : 'Thêm cây vào vườn'} onPress={submit} />
+        <Text style={g.label}>URL hình ảnh cây (không bắt buộc)</Text>
+        <TextInput
+          value={imageUrl}
+          onChangeText={setImageUrl}
+          placeholder="https://example.com/plant.jpg"
+          autoCapitalize="none"
+          keyboardType="url"
+          style={g.input}
+          accessibilityLabel="URL hình ảnh cây"
+        />
+
+        <Text style={g.label}>Ghi chú (không bắt buộc)</Text>
+        <TextInput
+          value={note}
+          onChangeText={setNote}
+          placeholder="Ghi chú thêm về cây trồng..."
+          style={[g.input, g.multiline]}
+          multiline
+          accessibilityLabel="Ghi chú cây trồng"
+        />
+
+        <View style={g.submitWrap}>
+          <ActionButton
+            label={
+              isPending
+                ? 'Đang lưu...'
+                : isEditMode
+                  ? 'Lưu thay đổi cây'
+                  : 'Thêm cây vào vườn'
+            }
+            disabled={isPending}
+            onPress={() => {
+              void handleSubmit();
+            }}
+          />
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -913,7 +1449,7 @@ export function CreateGardenScreen() {
 }
 
 export function AddGardenPlantScreen() {
-  return <AddPlantDemoForm />;
+  return <UserPlantCreateEditForm />;
 }
 
 const g = StyleSheet.create({

@@ -1,3 +1,5 @@
+import type { HealthStatus } from '@/features/gardens/gardenTypes';
+
 /**
  * Centralized React Query Keys
  */
@@ -12,6 +14,15 @@ export interface SpeciesListQueryKeyParams {
 export interface FavoriteSpeciesQueryKeyParams {
   page: number;
   size: number;
+}
+
+export interface UserPlantListQueryKeyParams {
+  keyword?: string;
+  gardenId?: string;
+  healthStatus?: HealthStatus;
+  page: number;
+  size: number;
+  sort: string;
 }
 
 export const queryKeys = {
@@ -39,11 +50,15 @@ export const queryKeys = {
     list: (userId: string) => ['gardens', userId, 'list'] as const,
     detail: (userId: string, id: string) => ['gardens', userId, 'detail', id] as const,
   },
-  // Placeholders for future phases
   plants: {
-    all: ['plants'] as const,
-    detail: (id: string) => ['plants', id] as const,
-    schedules: (plantId: string) => ['plants', plantId, 'schedules'] as const,
+    all: (userId: string) => ['plants', userId] as const,
+    lists: (userId: string) => ['plants', userId, 'list'] as const,
+    list: (userId: string, params: UserPlantListQueryKeyParams) =>
+      ['plants', userId, 'list', params] as const,
+    details: (userId: string) => ['plants', userId, 'detail'] as const,
+    detail: (userId: string, id: string) => ['plants', userId, 'detail', id] as const,
+    schedules: (userId: string, plantId: string) =>
+      ['plants', userId, 'detail', plantId, 'schedules'] as const,
   },
   schedules: {
     all: ['schedules'] as const,

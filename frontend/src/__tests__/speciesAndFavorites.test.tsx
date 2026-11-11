@@ -1,6 +1,5 @@
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Alert } from 'react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -701,7 +700,6 @@ describe('G5.3 Species & Favorites Integration', () => {
     it('SearchScreen searches backend /species, resets pagination on filter/keyword change, paginates, toggles favorites, and navigates with speciesId', async () => {
       vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(mockSession);
       vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(mockSession.accessToken);
-      const alertSpy = vi.spyOn(Alert, 'alert').mockImplementation(() => {});
 
       const requestedSpeciesParams: Record<string, unknown>[] = [];
       let favStateSp1 = false;
@@ -841,12 +839,15 @@ describe('G5.3 Species & Favorites Integration', () => {
         params: { speciesId: 'sp-1' },
       });
 
-      // Add-plant button previews G5.4 cleanly without breaking
-      const addPreviewBtn = container!.querySelector(
+      // Add-plant button navigates to /garden/add-plant with speciesId (G5.4.1)
+      const addPlantBtn = container!.querySelector(
         '[aria-label="Thêm Trầu bà lá xẻ vào cây của tôi"]'
       );
-      clickElement(addPreviewBtn);
-      expect(alertSpy).toHaveBeenCalled();
+      clickElement(addPlantBtn);
+      expect(mockRouter.push).toHaveBeenCalledWith({
+        pathname: '/garden/add-plant',
+        params: { speciesId: 'sp-1' },
+      });
 
       // Empty backend result renders empty UI (no fallback mock plants!)
       const searchInput = container!.querySelector('[aria-label="Ô tìm kiếm loài cây"]');

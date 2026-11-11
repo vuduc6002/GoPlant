@@ -40,8 +40,10 @@ export type OwnedPlant = {
 };
 
 /**
- * Local sample catalog retained strictly for the G5.4 Add-Plant UI prototype (/garden/add-plant).
- * G5.3 Species & Favorites features must query the REST API via features/species instead.
+ * @deprecated Local sample store from early UI prototype stages (pre-G5.3/G5.4.1).
+ * Species & Favorites flows use features/species; User Plants flows use features/plants/plantHooks
+ * backed by REST API (/api/v1/plants, /api/v1/gardens/{gardenId}/plants).
+ * Retained solely for backwards-compatible wrapper exports.
  */
 export const plantCatalog: PlantProfile[] = [
   { id: 'monstera-deliciosa', name: 'Trầu bà lá xẻ', scientificName: 'Monstera deliciosa', category: 'Cây cảnh' },

@@ -1,14 +1,34 @@
-import { useState, type ReactNode } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GoPlantColors as C, GoPlantTypography as F } from '@/constants/theme';
+import { useAuth } from '@/features/auth/AuthProvider';
 import { GardensTabContent } from '@/features/gardens/GardenScreens';
 import { useGardensList } from '@/features/gardens/gardenHooks';
-import { usePlantData } from '@/features/plants/PlantDataStore';
+import { getHealthStatusMeta, type GardenSummaryDto, type HealthStatus } from '@/features/gardens/gardenTypes';
+import { useDeletePlantMutation, useUserPlantsList } from '@/features/plants/plantHooks';
+import {
+  HEALTH_STATUS_OPTIONS,
+  PLANT_SORT_OPTIONS,
+  type UserPlantSummaryDto,
+} from '@/features/plants/plantTypes';
 import { FavoritesSection } from '@/features/species/FavoritesSection';
 import { useFavoriteSpecies } from '@/features/species/speciesHooks';
+import { AppApiError } from '@/services/api/apiError';
+import type { PageResponse } from '@/services/api/apiTypes';
+import { getSessionGeneration } from '@/services/api/tokenStorage';
 
 type PageKind = 'gardens' | 'plants' | 'journal' | 'schedule' | 'monitoring';
 
@@ -88,18 +108,44 @@ function Tag({ children, tone = 'mint' }: { children: ReactNode; tone?: 'mint' |
 function Action({
   label,
   muted = false,
+  danger = false,
+  disabled = false,
+  accessibilityLabel,
   onPress,
 }: {
   label: string;
   muted?: boolean;
+  danger?: boolean;
+  disabled?: boolean;
+  accessibilityLabel?: string;
   onPress?: () => void;
 }) {
   return (
     <Pressable
-      onPress={onPress ?? (() => Alert.alert('Bản xem trước', `${label} sẽ được triển khai theo thiết kế.`))}
-      style={[s.action, muted && s.actionMuted]}
+      disabled={disabled}
+      onPress={
+        onPress ??
+        (() => Alert.alert('Bản xem trước', `${label} sẽ được triển khai theo thiết kế.`))
+      }
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel ?? label}
+      accessibilityState={{ disabled }}
+      style={[
+        s.action,
+        muted && s.actionMuted,
+        danger && s.actionDanger,
+        disabled && s.actionDisabled,
+      ]}
     >
-      <Text style={[s.actionText, muted && s.actionMutedText]}>{label}</Text>
+      <Text
+        style={[
+          s.actionText,
+          muted && s.actionMutedText,
+          danger && s.actionDangerText,
+        ]}
+      >
+        {label}
+      </Text>
     </Pressable>
   );
 }
@@ -129,13 +175,126 @@ function EmptyCard({
   );
 }
 
-function PlantsManagementBody() {
-  const { ownedPlants, removePlant } = usePlantData();
-  const [plantQuery, setPlantQuery] = useState('');
-  const normalized = plantQuery.trim().toLocaleLowerCase();
-  const visiblePlants = ownedPlants.filter((plant) =>
-    `${plant.name} ${plant.scientificName} ${plant.location}`.toLocaleLowerCase().includes(normalized)
-  );
+const PLANTS_PAGE_SIZE = 20;
+
+interface PlantsBodyProps {
+  plantQuery: string;
+  onChangePlantQuery: (value: string) => void;
+  onSubmitSearch: () => void;
+  onClearSearch: () => void;
+  selectedGardenId: string;
+  onSelectGarden: (gardenId: string) => void;
+  selectedHealthStatus: HealthStatus | '';
+  onSelectHealthStatus: (status: HealthStatus | '') => void;
+  sort: string;
+  onSelectSort: (sort: string) => void;
+  page: number;
+  onChangePage: (page: number) => void;
+  onResetFilters: () => void;
+  onRefreshAll: () => void;
+  gardens: GardenSummaryDto[];
+  plantsData: PageResponse<UserPlantSummaryDto> | undefined;
+  isLoading: boolean;
+  isFetching: boolean;
+  isError: boolean;
+  errorMessage: string | undefined;
+  onRetry: () => void;
+  hasActiveFilters: boolean;
+}
+
+function PlantsManagementBody({
+  plantQuery,
+  onChangePlantQuery,
+  onSubmitSearch,
+  onClearSearch,
+  selectedGardenId,
+  onSelectGarden,
+  selectedHealthStatus,
+  onSelectHealthStatus,
+  sort,
+  onSelectSort,
+  page,
+  onChangePage,
+  onResetFilters,
+  onRefreshAll,
+  gardens,
+  plantsData,
+  isLoading,
+  isFetching,
+  isError,
+  errorMessage,
+  onRetry,
+  hasActiveFilters,
+}: PlantsBodyProps) {
+  const { user } = useAuth();
+  const currentUserId = typeof user?.id === 'string' ? user.id.trim() : '';
+  const currentUserIdRef = useRef(currentUserId);
+  const prevUserIdRef = useRef(currentUserId);
+
+  const deletePlantMutation = useDeletePlantMutation();
+  const [deletingPlantId, setDeletingPlantId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const prevUserId = prevUserIdRef.current;
+    prevUserIdRef.current = currentUserId;
+    currentUserIdRef.current = currentUserId;
+    if (prevUserId && prevUserId !== currentUserId) {
+      setDeletingPlantId(null);
+      setDeleteError(null);
+    }
+  }, [currentUserId]);
+
+  const visiblePlants = plantsData?.content ?? [];
+  const totalElements = plantsData?.totalElements ?? 0;
+  const totalPages = plantsData?.totalPages ?? 0;
+
+  const handleRequestDeletePlant = (plant: UserPlantSummaryDto) => {
+    const initiatedGeneration = getSessionGeneration();
+    const initiatedByUserId = currentUserIdRef.current;
+    const hasSwitchedSession = () =>
+      getSessionGeneration() !== initiatedGeneration ||
+      (Boolean(initiatedByUserId) && currentUserIdRef.current !== initiatedByUserId);
+
+    Alert.alert(
+      'Xác nhận xóa cây trồng',
+      `Bạn có chắc chắn muốn xóa cây “${plant.displayName}”? Việc xóa cây sẽ đồng thời xóa toàn bộ lịch chăm sóc (Care Schedules), lịch sử chăm sóc (Care Logs) và nhật ký phát triển (Growth Journals) liên quan trên máy chủ. Thao tác này không thể hoàn tác.`,
+      [
+        { text: 'Hủy', style: 'cancel' },
+        {
+          text: 'Xóa cây',
+          style: 'destructive',
+          onPress: () => {
+            if (hasSwitchedSession()) {
+              return;
+            }
+            setDeleteError(null);
+            setDeletingPlantId(plant.id);
+            void deletePlantMutation
+              .mutateAsync(plant.id)
+              .catch((err) => {
+                if (hasSwitchedSession()) {
+                  return;
+                }
+                if (err instanceof AppApiError) {
+                  if (err.code === 'SESSION_USER_MISMATCH') {
+                    return;
+                  }
+                  setDeleteError(err.message);
+                  return;
+                }
+                setDeleteError('Không thể xóa cây trồng. Vui lòng thử lại.');
+              })
+              .finally(() => {
+                if (!hasSwitchedSession()) {
+                  setDeletingPlantId(null);
+                }
+              });
+          },
+        },
+      ]
+    );
+  };
 
   return (
     <>
@@ -143,12 +302,25 @@ function PlantsManagementBody() {
         <Text style={s.searchGlyph}>⌕</Text>
         <TextInput
           value={plantQuery}
-          onChangeText={setPlantQuery}
-          placeholder="Tìm theo tên cây, loài hoặc vị trí..."
+          onChangeText={onChangePlantQuery}
+          onSubmitEditing={onSubmitSearch}
+          placeholder="Tìm theo tên cây hoặc tên loài..."
           placeholderTextColor={C.mutedText}
           style={s.searchInput}
+          returnKeyType="search"
+          accessibilityLabel="Tìm kiếm cây đang sở hữu"
         />
+        {plantQuery ? (
+          <Pressable
+            onPress={onClearSearch}
+            accessibilityRole="button"
+            accessibilityLabel="Xóa từ khóa tìm cây"
+          >
+            <Text style={s.clearGlyph}>×</Text>
+          </Pressable>
+        ) : null}
       </View>
+
       <View style={s.managementActions}>
         <Action label="＋  Thêm cây" onPress={() => router.push('/garden/add-plant' as never)} />
         <Action
@@ -156,84 +328,251 @@ function PlantsManagementBody() {
           muted
           onPress={() => router.push('/search' as never)}
         />
+        <Pressable
+          disabled={isFetching}
+          onPress={onRefreshAll}
+          accessibilityRole="button"
+          accessibilityLabel="Làm mới danh sách cây"
+          accessibilityState={{ disabled: isFetching }}
+          style={[s.refreshBtn, isFetching && s.actionDisabled]}
+        >
+          <Text style={s.refreshBtnText}>{isFetching ? 'Đang tải...' : 'Làm mới'}</Text>
+        </Pressable>
       </View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.pills}>
-        {[
-          `Cây demo sở hữu (${ownedPlants.length})`,
-          'Thư viện loài cây (API)',
-        ].map((x, i) => (
-          <Pressable key={x} onPress={() => i === 1 && router.push('/search' as never)}>
-            <Tag tone={i === 0 ? 'mint' : 'plain'}>{x}</Tag>
+
+      <View style={s.filterGroup}>
+        <Text style={s.filterLabel}>Lọc theo khu vườn</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.pills}>
+          <Pressable
+            onPress={() => onSelectGarden('')}
+            accessibilityRole="button"
+            accessibilityState={{ selected: !selectedGardenId }}
+            style={[s.filterPill, !selectedGardenId && s.filterPillActive]}
+          >
+            <Text style={[s.filterPillText, !selectedGardenId && s.filterPillTextActive]}>
+              Tất cả vườn
+            </Text>
           </Pressable>
-        ))}
-      </ScrollView>
+          {gardens.map((garden) => {
+            const active = selectedGardenId === garden.id;
+            return (
+              <Pressable
+                key={garden.id}
+                onPress={() => onSelectGarden(garden.id)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+                style={[s.filterPill, active && s.filterPillActive]}
+              >
+                <Text style={[s.filterPillText, active && s.filterPillTextActive]}>
+                  {garden.name}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      </View>
+
+      <View style={s.filterGroup}>
+        <Text style={s.filterLabel}>Tình trạng sức khỏe</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.pills}>
+          <Pressable
+            onPress={() => onSelectHealthStatus('')}
+            accessibilityRole="button"
+            accessibilityState={{ selected: !selectedHealthStatus }}
+            style={[s.filterPill, !selectedHealthStatus && s.filterPillActive]}
+          >
+            <Text style={[s.filterPillText, !selectedHealthStatus && s.filterPillTextActive]}>
+              Tất cả trạng thái
+            </Text>
+          </Pressable>
+          {HEALTH_STATUS_OPTIONS.map((opt) => {
+            const active = selectedHealthStatus === opt.value;
+            return (
+              <Pressable
+                key={opt.value}
+                onPress={() => onSelectHealthStatus(opt.value)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+                style={[s.filterPill, active && s.filterPillActive]}
+              >
+                <Text style={[s.filterPillText, active && s.filterPillTextActive]}>
+                  {opt.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      </View>
+
+      <View style={s.filterGroup}>
+        <Text style={s.filterLabel}>Sắp xếp</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.pills}>
+          {PLANT_SORT_OPTIONS.map((opt) => {
+            const active = sort === opt.value;
+            return (
+              <Pressable
+                key={opt.value}
+                onPress={() => onSelectSort(opt.value)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+                style={[s.filterPill, active && s.filterPillActive]}
+              >
+                <Text style={[s.filterPillText, active && s.filterPillTextActive]}>
+                  {opt.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      </View>
 
       <FavoritesSection />
 
-      <Section title="Cây đang sở hữu (Demo G5.4)" hint={`${visiblePlants.length} cây`}>
-        {visiblePlants.length === 0 ? (
+      <Section
+        title="Cây đang sở hữu"
+        hint={isLoading ? 'Đang tải...' : `${totalElements} cây`}
+      >
+        {deleteError ? (
+          <View style={s.errorBanner} accessibilityRole="alert">
+            <Text style={s.errorBannerText}>{deleteError}</Text>
+            <Pressable onPress={() => setDeleteError(null)} accessibilityRole="button">
+              <Text style={s.dismissText}>Đóng</Text>
+            </Pressable>
+          </View>
+        ) : null}
+
+        {isLoading ? (
+          <View style={s.emptyCard}>
+            <ActivityIndicator size="large" color={C.primary} />
+            <Text style={s.emptyDescription}>Đang tải danh sách cây trồng từ máy chủ...</Text>
+          </View>
+        ) : isError ? (
+          <View style={s.emptyCard} accessibilityRole="alert">
+            <Text style={s.cardTitle}>Không thể tải danh sách cây trồng</Text>
+            <Text style={s.emptyDescription}>
+              {errorMessage || 'Đã có lỗi xảy ra khi kết nối máy chủ.'}
+            </Text>
+            <Action label="Thử lại" onPress={onRetry} />
+          </View>
+        ) : visiblePlants.length === 0 ? (
           <EmptyCard
             icon="♧"
-            title={plantQuery ? 'Không tìm thấy cây phù hợp' : 'Vườn của bạn chưa có cây (Demo G5.4)'}
+            title={hasActiveFilters ? 'Không tìm thấy cây phù hợp' : 'Bạn chưa có cây trồng nào'}
             description={
-              plantQuery
-                ? 'Thử tên cây, tên khoa học hoặc vị trí khác.'
-                : 'API quản lý cây sở hữu sẽ được tích hợp ở giai đoạn G5.4. Bạn vẫn có thể dùng bản demo cục bộ.'
+              hasActiveFilters
+                ? 'Thử tên cây khác hoặc xóa bộ lọc khu vườn / tình trạng để xem lại.'
+                : 'Chọn một khu vườn và loài cây từ thư viện để bắt đầu quản lý cây của bạn.'
             }
-            action={plantQuery ? undefined : '＋  Thêm cây demo'}
-            onPress={plantQuery ? undefined : () => router.push('/garden/add-plant' as never)}
+            action={hasActiveFilters ? 'Xóa bộ lọc' : '＋  Thêm cây mới'}
+            onPress={
+              hasActiveFilters
+                ? onResetFilters
+                : () => router.push('/garden/add-plant' as never)
+            }
           />
         ) : (
-          visiblePlants.map((plant) => (
-            <View key={plant.id} style={s.plantCard}>
-              <View style={s.rowTop}>
-                <View style={s.plantImage}>
-                  <Text style={s.plantEmoji}>♧</Text>
+          <>
+            {visiblePlants.map((plant) => {
+              const health = getHealthStatusMeta(plant.healthStatus);
+              const isDeletingThis = deletePlantMutation.isPending && deletingPlantId === plant.id;
+              return (
+                <View key={plant.id} style={s.plantCard}>
+                  <View style={s.rowTop}>
+                    {plant.imageUrl ? (
+                      <Image
+                        source={{ uri: plant.imageUrl }}
+                        style={s.plantThumbImage}
+                        contentFit="cover"
+                      />
+                    ) : (
+                      <View style={s.plantImage}>
+                        <Text style={s.plantEmoji}>♧</Text>
+                      </View>
+                    )}
+                    <View style={s.cardCopy}>
+                      <Text style={s.cardTitle}>{plant.displayName}</Text>
+                      {plant.scientificName ? (
+                        <Text style={s.latin}>{plant.scientificName}</Text>
+                      ) : null}
+                      <Text style={s.body}>
+                        {plant.speciesName || 'Chưa gắn loài'}
+                        {plant.category ? ` • ${plant.category}` : ''}
+                      </Text>
+                      <Text style={s.body}>
+                        {plant.gardenName ? `⌂ ${plant.gardenName}` : 'Chưa gắn khu vườn'} •{' '}
+                        {health.label}
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={s.row}>
+                    <Action
+                      label="Chi tiết"
+                      muted
+                      accessibilityLabel={`Xem chi tiết ${plant.displayName}`}
+                      onPress={() =>
+                        router.push({
+                          pathname: '/plant-detail',
+                          params: { plantId: plant.id },
+                        } as never)
+                      }
+                    />
+                    <Action
+                      label="Chỉnh sửa"
+                      muted
+                      disabled={deletePlantMutation.isPending}
+                      accessibilityLabel={`Chỉnh sửa ${plant.displayName}`}
+                      onPress={() =>
+                        router.push({
+                          pathname: '/garden/add-plant',
+                          params: { editPlantId: plant.id },
+                        } as never)
+                      }
+                    />
+                    <Action
+                      label={isDeletingThis ? 'Đang xóa...' : 'Xóa'}
+                      muted
+                      danger
+                      disabled={deletePlantMutation.isPending}
+                      accessibilityLabel={`Xóa ${plant.displayName}`}
+                      onPress={() => handleRequestDeletePlant(plant)}
+                    />
+                  </View>
                 </View>
-                <View style={s.cardCopy}>
-                  <Text style={s.cardTitle}>{plant.name}</Text>
-                  <Text style={s.latin}>{plant.scientificName}</Text>
-                  <Text style={s.body}>
-                    {plant.category} • {plant.location}
-                  </Text>
-                  <Text style={s.body}>
-                    Ngày thêm: {plant.plantedAt || 'Chưa có dữ liệu'} • Tình trạng: Chưa đánh giá
-                  </Text>
-                </View>
+              );
+            })}
+
+            {totalPages > 1 || page > 0 ? (
+              <View style={s.paginationRow}>
+                <Pressable
+                  disabled={page <= 0 || isFetching}
+                  onPress={() => onChangePage(Math.max(0, page - 1))}
+                  style={[s.pageButton, (page <= 0 || isFetching) && s.actionDisabled]}
+                  accessibilityRole="button"
+                >
+                  <Text style={s.pageButtonText}>Trang trước</Text>
+                </Pressable>
+                <Text style={s.body}>
+                  Trang {page + 1} / {Math.max(1, totalPages)}
+                </Text>
+                <Pressable
+                  disabled={Boolean(plantsData?.last) || isFetching}
+                  onPress={() => onChangePage(page + 1)}
+                  style={[
+                    s.pageButton,
+                    (Boolean(plantsData?.last) || isFetching) && s.actionDisabled,
+                  ]}
+                  accessibilityRole="button"
+                >
+                  <Text style={s.pageButtonText}>Trang sau</Text>
+                </Pressable>
               </View>
-              <View style={s.row}>
-                <Action
-                  label="Chi tiết"
-                  muted
-                  onPress={() =>
-                    router.push({ pathname: '/plant-detail', params: { ownedId: plant.id } } as never)
-                  }
-                />
-                <Action
-                  label="Chỉnh sửa"
-                  muted
-                  onPress={() =>
-                    router.push({ pathname: '/garden/add-plant', params: { editId: plant.id } } as never)
-                  }
-                />
-                <Action
-                  label="Xóa"
-                  muted
-                  onPress={() =>
-                    Alert.alert('Xóa cây', `Xóa hồ sơ “${plant.name}” khỏi danh sách demo?`, [
-                      { text: 'Hủy', style: 'cancel' },
-                      { text: 'Xóa', style: 'destructive', onPress: () => removePlant(plant.id) },
-                    ])
-                  }
-                />
-              </View>
-            </View>
-          ))
+            ) : null}
+          </>
         )}
       </Section>
 
       <Text style={s.mockNote}>
-        Mục “Loài cây yêu thích” đồng bộ trực tiếp với REST API máy chủ; mục “Cây đang sở hữu” là dữ liệu demo cục bộ chờ tích hợp G5.4.
+        Mục “Loài cây yêu thích” và “Cây đang sở hữu” được đồng bộ trực tiếp với REST API máy chủ.
       </Text>
     </>
   );
@@ -244,7 +583,7 @@ function PageBody({ kind }: { kind: PageKind }) {
     return <GardensTabContent />;
   }
   if (kind === 'plants') {
-    return <PlantsManagementBody />;
+    return null;
   }
   if (kind === 'journal') {
     return (
@@ -396,12 +735,64 @@ function PageBody({ kind }: { kind: PageKind }) {
 }
 
 function PageContent({ kind }: { kind: PageKind }) {
-  const { ownedPlants } = usePlantData();
-  const gardensQuery = useGardensList({ enabled: kind === 'gardens' || kind === 'plants' });
-  const favoritesQuery = useFavoriteSpecies({ page: 0, size: 20 }, { enabled: kind === 'plants' });
+  const { user } = useAuth();
+  const currentUserId = typeof user?.id === 'string' ? user.id.trim() : '';
+  const prevUserIdRef = useRef(currentUserId);
 
-  const gardensCount = gardensQuery.data?.length ?? 0;
+  const [plantQuery, setPlantQuery] = useState('');
+  const [debouncedKeyword, setDebouncedKeyword] = useState('');
+  const [selectedGardenId, setSelectedGardenId] = useState('');
+  const [selectedHealthStatus, setSelectedHealthStatus] = useState<HealthStatus | ''>('');
+  const [sort, setSort] = useState('createdAt,desc');
+  const [page, setPage] = useState(0);
+
+  useEffect(() => {
+    const prevUserId = prevUserIdRef.current;
+    prevUserIdRef.current = currentUserId;
+    if (prevUserId && prevUserId !== currentUserId) {
+      setPlantQuery('');
+      setDebouncedKeyword('');
+      setSelectedGardenId('');
+      setSelectedHealthStatus('');
+      setSort('createdAt,desc');
+      setPage(0);
+    }
+  }, [currentUserId]);
+
+  useEffect(() => {
+    const trimmed = plantQuery.trim();
+    if (trimmed === debouncedKeyword) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      setDebouncedKeyword(trimmed);
+      setPage(0);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [plantQuery, debouncedKeyword]);
+
+  const isPlantsTab = kind === 'plants';
+  const gardensQuery = useGardensList({ enabled: kind === 'gardens' || isPlantsTab });
+  const favoritesQuery = useFavoriteSpecies({ page: 0, size: 20 }, { enabled: isPlantsTab });
+  const plantsQuery = useUserPlantsList(
+    {
+      keyword: debouncedKeyword || undefined,
+      gardenId: selectedGardenId || undefined,
+      healthStatus: selectedHealthStatus || undefined,
+      page,
+      size: PLANTS_PAGE_SIZE,
+      sort,
+    },
+    { enabled: isPlantsTab }
+  );
+
+  const gardens = gardensQuery.data ?? [];
+  const gardensCount = gardens.length;
   const favCount = favoritesQuery.data?.totalElements ?? 0;
+  const plantsTotal = plantsQuery.data?.totalElements ?? 0;
+  const hasActiveFilters = Boolean(
+    debouncedKeyword || selectedGardenId || selectedHealthStatus
+  );
 
   const config: Record<PageKind, { title: string; subtitle: string; intro: string }> = {
     gardens: {
@@ -416,7 +807,9 @@ function PageContent({ kind }: { kind: PageKind }) {
     plants: {
       title: 'Cây Trồng',
       subtitle: 'Quản lý cây trồng',
-      intro: `${favCount} loài yêu thích • ${ownedPlants.length} cây demo • ${gardensCount} khu vườn`,
+      intro: plantsQuery.isLoading
+        ? `${favCount} loài yêu thích • Đang tải cây sở hữu... • ${gardensCount} khu vườn`
+        : `${favCount} loài yêu thích • ${plantsTotal} cây sở hữu • ${gardensCount} khu vườn`,
     },
     journal: { title: 'Nhật ký', subtitle: 'Nhật ký phát triển', intro: 'Chưa có ghi nhận nào' },
     schedule: { title: 'Lịch Chăm Sóc', subtitle: 'Lập lịch chăm sóc', intro: 'Chưa có lịch chăm sóc nào' },
@@ -430,6 +823,69 @@ function PageContent({ kind }: { kind: PageKind }) {
   const { title, subtitle, intro } = config[kind];
   const route = `/${kind}`;
 
+  const renderBody = () => {
+    if (kind === 'plants') {
+      return (
+        <PlantsManagementBody
+          plantQuery={plantQuery}
+          onChangePlantQuery={setPlantQuery}
+          onSubmitSearch={() => {
+            setDebouncedKeyword(plantQuery.trim());
+            setPage(0);
+          }}
+          onClearSearch={() => {
+            setPlantQuery('');
+            setDebouncedKeyword('');
+            setPage(0);
+          }}
+          selectedGardenId={selectedGardenId}
+          onSelectGarden={(nextGardenId) => {
+            setSelectedGardenId(nextGardenId);
+            setPage(0);
+          }}
+          selectedHealthStatus={selectedHealthStatus}
+          onSelectHealthStatus={(nextStatus) => {
+            setSelectedHealthStatus(nextStatus);
+            setPage(0);
+          }}
+          sort={sort}
+          onSelectSort={(nextSort) => {
+            setSort(nextSort);
+            setPage(0);
+          }}
+          page={page}
+          onChangePage={setPage}
+          onResetFilters={() => {
+            setPlantQuery('');
+            setDebouncedKeyword('');
+            setSelectedGardenId('');
+            setSelectedHealthStatus('');
+            setSort('createdAt,desc');
+            setPage(0);
+          }}
+          onRefreshAll={() => {
+            void Promise.all([
+              plantsQuery.refetch(),
+              gardensQuery.refetch(),
+              favoritesQuery.refetch(),
+            ]);
+          }}
+          gardens={gardens}
+          plantsData={plantsQuery.data}
+          isLoading={plantsQuery.isLoading}
+          isFetching={plantsQuery.isFetching}
+          isError={plantsQuery.isError}
+          errorMessage={plantsQuery.error?.message}
+          onRetry={() => {
+            void plantsQuery.refetch();
+          }}
+          hasActiveFilters={hasActiveFilters}
+        />
+      );
+    }
+    return <PageBody kind={kind} />;
+  };
+
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
       <PageHeader title={title} subtitle={subtitle} />
@@ -440,7 +896,7 @@ function PageContent({ kind }: { kind: PageKind }) {
             <Text style={s.body}>{intro}</Text>
           </View>
         </View>
-        <PageBody kind={kind} />
+        {renderBody()}
       </ScrollView>
       <BottomNav current={route} />
     </SafeAreaView>
@@ -533,6 +989,45 @@ const s = StyleSheet.create({
   actionText: { color: C.surface, fontFamily: F.semiBold, fontSize: 11 },
   actionMuted: { flex: 1, backgroundColor: C.softSurface },
   actionMutedText: { color: C.secondaryText },
+  actionDanger: { backgroundColor: '#FDECEC', borderWidth: 1, borderColor: '#F5C2C0' },
+  actionDangerText: { color: '#991B1B' },
+  actionDisabled: { opacity: 0.5 },
+  clearGlyph: { color: C.secondaryText, fontSize: 20, paddingHorizontal: 4 },
+  refreshBtn: {
+    minHeight: 34,
+    paddingHorizontal: 11,
+    borderRadius: 9,
+    backgroundColor: '#E7EEE8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  refreshBtnText: { color: C.forest, fontFamily: F.semiBold, fontSize: 11 },
+  filterGroup: { gap: 4 },
+  filterLabel: { color: C.secondaryText, fontFamily: F.semiBold, fontSize: 10 },
+  filterPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 99,
+    backgroundColor: C.surface,
+    borderWidth: 1,
+    borderColor: '#DDE8E0',
+  },
+  filterPillActive: { backgroundColor: C.forest, borderColor: C.forest },
+  filterPillText: { color: C.secondaryText, fontFamily: F.regular, fontSize: 10 },
+  filterPillTextActive: { color: C.surface, fontFamily: F.semiBold },
+  errorBanner: {
+    padding: 10,
+    borderRadius: 10,
+    backgroundColor: '#FDECEC',
+    borderWidth: 1,
+    borderColor: '#F5C2C0',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  errorBannerText: { flex: 1, color: '#991B1B', fontFamily: F.regular, fontSize: 11 },
+  dismissText: { color: '#991B1B', fontFamily: F.semiBold, fontSize: 11 },
   pills: { flexDirection: 'row', gap: 7, paddingVertical: 3 },
   recommend: { padding: 13, borderRadius: 13, backgroundColor: '#D9F2E3', gap: 6 },
   search: {
@@ -547,6 +1042,7 @@ const s = StyleSheet.create({
   searchGlyph: { width: 23, textAlign: 'center', color: C.secondaryText, fontSize: 24 },
   searchInput: { flex: 1, paddingVertical: 7, color: C.text, fontFamily: F.regular, fontSize: 12 },
   plantCard: { padding: 9, borderRadius: 14, backgroundColor: C.surface, gap: 7 },
+  plantThumbImage: { width: 54, height: 54, borderRadius: 10, backgroundColor: '#E4F0E7' },
   plantImage: {
     width: 54,
     height: 54,
@@ -557,6 +1053,9 @@ const s = StyleSheet.create({
   },
   plantEmoji: { fontSize: 25 },
   latin: { color: C.mutedText, fontFamily: F.regular, fontSize: 10, fontStyle: 'italic' },
+  paginationRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 4 },
+  pageButton: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 9, backgroundColor: C.softSurface },
+  pageButtonText: { color: C.forest, fontFamily: F.semiBold, fontSize: 11 },
   metrics: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
   metric: { width: '48%', minHeight: 54, padding: 9, borderRadius: 12, backgroundColor: C.surface },
   metricValue: { color: C.forest, fontFamily: F.bold, fontSize: 15 },

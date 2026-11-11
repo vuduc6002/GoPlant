@@ -1,5 +1,14 @@
 import { useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -8,7 +17,8 @@ import { GoPlantColors as C, GoPlantTypography as F } from '@/constants/theme';
 import { useAuth } from '@/features/auth/AuthProvider';
 import { useUserProfile } from '@/features/auth/authHooks';
 import { useGardensList } from '@/features/gardens/gardenHooks';
-import { getSpaceTypeLabel } from '@/features/gardens/gardenTypes';
+import { getHealthStatusMeta, getSpaceTypeLabel } from '@/features/gardens/gardenTypes';
+import { useUserPlantsList } from '@/features/plants/plantHooks';
 import { SPECIES_CATEGORY_OPTIONS } from '@/features/species/speciesTypes';
 
 function SectionTitle({
@@ -115,6 +125,115 @@ export function HomeGardensSection() {
             <Text style={styles.white}>
               {gardensQuery.isError ? 'Thử lại' : '＋  Tạo khu vườn mới'}
             </Text>
+          </Pressable>
+        </View>
+      )}
+    </>
+  );
+}
+
+export function HomePlantsSection() {
+  const plantsQuery = useUserPlantsList({ page: 0, size: 10, sort: 'createdAt,desc' });
+  const plantsPage = plantsQuery.data;
+  const plants = plantsPage?.content ?? [];
+  const totalElements = plantsPage?.totalElements ?? 0;
+  const navigate = (route: string) => router.push(route as never);
+
+  return (
+    <>
+      <SectionTitle
+        title="Cây trồng của bạn"
+        trailing={
+          plantsQuery.isLoading ? 'Đang tải...' : `${totalElements} cây • Quản lý ›`
+        }
+        onTrailingPress={() => navigate('/plants')}
+      />
+      {plantsQuery.isLoading ? (
+        <View style={styles.emptyHomeCard}>
+          <ActivityIndicator size="small" color={C.primary} />
+          <Text style={styles.bodyText}>Đang tải cây trồng của bạn...</Text>
+        </View>
+      ) : plantsQuery.isError ? (
+        <View style={styles.emptyHomeCard} accessibilityRole="alert">
+          <Text style={styles.emptyHomeArt}>♧</Text>
+          <Text style={styles.emptyHomeTitle}>Không tải được danh sách cây trồng</Text>
+          <Text style={styles.bodyText}>{plantsQuery.error.message}</Text>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => {
+              void plantsQuery.refetch();
+            }}
+            style={styles.emptyHomeButton}
+          >
+            <Text style={styles.white}>Thử lại</Text>
+          </Pressable>
+        </View>
+      ) : plants.length > 0 ? (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.horizontalCards}
+        >
+          {plants.map((plant) => {
+            const health = getHealthStatusMeta(plant.healthStatus);
+            return (
+              <Pressable
+                key={plant.id}
+                onPress={() =>
+                  router.push({
+                    pathname: '/plant-detail',
+                    params: { plantId: plant.id },
+                  } as never)
+                }
+                accessibilityRole="button"
+                accessibilityLabel={`Xem chi tiết ${plant.displayName}`}
+                style={styles.gardenCard}
+              >
+                <View style={styles.gardenCardThumb}>
+                  {plant.imageUrl ? (
+                    <Image
+                      source={{ uri: plant.imageUrl }}
+                      style={styles.gardenCardImage}
+                      contentFit="cover"
+                    />
+                  ) : (
+                    <Text style={styles.gardenCardGlyph}>♧</Text>
+                  )}
+                </View>
+                <Text style={styles.gardenName} numberOfLines={1}>
+                  {plant.displayName}
+                </Text>
+                <Text style={styles.caption} numberOfLines={1}>
+                  {plant.speciesName || 'Chưa gắn loài'}
+                  {plant.gardenName ? ` • ${plant.gardenName}` : ''}
+                </Text>
+                <View style={styles.divider} />
+                <Text style={styles.gardenStatus}>{health.label}</Text>
+              </Pressable>
+            );
+          })}
+          <Pressable
+            onPress={() => navigate('/garden/add-plant')}
+            accessibilityRole="button"
+            style={styles.addGarden}
+          >
+            <Text style={styles.addPlus}>＋</Text>
+            <Text style={styles.caption}>Thêm cây mới</Text>
+          </Pressable>
+        </ScrollView>
+      ) : (
+        <View style={styles.emptyHomeCard}>
+          <Text style={styles.emptyHomeArt}>♧</Text>
+          <Text style={styles.emptyHomeTitle}>Bạn chưa có cây trồng nào</Text>
+          <Text style={styles.bodyText}>
+            Chọn khu vườn và loài cây từ thư viện để bắt đầu theo dõi sự phát triển.
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => navigate('/garden/add-plant')}
+            style={styles.emptyHomeButton}
+          >
+            <Text style={styles.white}>＋  Thêm cây mới</Text>
           </Pressable>
         </View>
       )}
@@ -328,15 +447,7 @@ export default function HomeScreen() {
 
         <HomeGardensSection />
 
-        <SectionTitle title="Cây trồng & chăm sóc" trailing="Bản xem trước G5.4" />
-        <View style={styles.emptyHomeCard}>
-          <Text style={styles.emptyHomeArt}>♧</Text>
-          <Text style={styles.emptyHomeTitle}>Quản lý cây trồng cá nhân (G5.4)</Text>
-          <Text style={styles.bodyText}>Thêm cây demo để xem trước hoặc mở Quản lý cây yêu thích.</Text>
-          <Pressable onPress={() => navigate('/garden/add-plant')} style={styles.emptyHomeButton}>
-            <Text style={styles.white}>＋  Thêm cây demo</Text>
-          </Pressable>
-        </View>
+        <HomePlantsSection />
 
         <SectionTitle
           title="Khám phá thư viện cây"
