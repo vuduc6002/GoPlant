@@ -2074,4 +2074,739 @@ describe('G5.3 Species & Favorites Integration', () => {
       ).toEqual(['sp-2']);
     });
   });
+
+  describe('G5.3.1.2 Owner-Scoped Placeholder Isolation Regression (Section 4.B)', () => {
+    const userA = {
+      id: 'usr_placeholder_a',
+      fullName: 'Người Dùng A',
+      email: 'placeholder-a@goplant.vn',
+      roles: ['ROLE_USER'],
+    };
+    const userB = {
+      id: 'usr_placeholder_b',
+      fullName: 'Người Dùng B',
+      email: 'placeholder-b@goplant.vn',
+      roles: ['ROLE_USER'],
+    };
+    const sessionA: AuthSession = {
+      accessToken: 'jwt-placeholder-a',
+      tokenType: 'Bearer',
+      expiresIn: 3600,
+      user: userA,
+      savedAt: Date.now(),
+    };
+    const sessionB: AuthSession = {
+      accessToken: 'jwt-placeholder-b',
+      tokenType: 'Bearer',
+      expiresIn: 3600,
+      user: userB,
+      savedAt: Date.now(),
+    };
+    const profileA: UserProfileDto = { ...mockProfile, ...userA };
+    const profileB: UserProfileDto = { ...mockProfile, ...userB };
+
+    function renderWithRealAuth(ui: React.ReactElement) {
+      act(() => {
+        root!.render(
+          <QueryClientProvider client={qc}>
+            <AuthProvider>
+              <PlantDataProvider>{ui}</PlantDataProvider>
+            </AuthProvider>
+          </QueryClientProvider>
+        );
+      });
+    }
+
+    it('Test 1: Species list does NOT leak User A data or isFavorited badge as placeholder while User B request is pending', async () => {
+      await tokenStorage.saveSession(sessionA);
+      const pendingSpeciesB = createDeferred<PageResponse<SpeciesSummaryDto>>();
+
+      const speciesAOnly: SpeciesSummaryDto = {
+        ...speciesOne,
+        id: 'sp-a-secret',
+        commonName: 'Cây bí mật của A',
+        isFavorited: true,
+      };
+      const speciesBOnly: SpeciesSummaryDto = {
+        ...speciesTwo,
+        id: 'sp-b-public',
+        commonName: 'Lan hồ điệp của B',
+        isFavorited: false,
+      };
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        const authHeader = config.headers?.Authorization as string | undefined;
+        const isB = authHeader === `Bearer ${sessionB.accessToken}`;
+
+        if (config.url === '/auth/login' && config.method === 'post') {
+          return { status: 200, data: { success: true, data: sessionB }, headers: {}, config };
+        }
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: isB ? profileB : profileA }, headers: {}, config };
+        }
+        if (config.url === '/species') {
+          if (isB) {
+            const pageB = await pendingSpeciesB.promise;
+            return { status: 200, data: { success: true, data: pageB }, headers: {}, config };
+          }
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: [speciesAOnly],
+                page: 0,
+                size: 20,
+                totalElements: 1,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+      });
+
+      let authCtx!: ReturnType<typeof useAuth>;
+      let listResult!: ReturnType<typeof useSpeciesList>;
+      function Probe() {
+        authCtx = useAuth();
+        listResult = useSpeciesList({ page: 0, size: 20 });
+        return null;
+      }
+
+      renderWithRealAuth(
+        <>
+          <Probe />
+          <SearchScreen />
+        </>
+      );
+
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(userA.id);
+        expect(listResult.data?.content[0].id).toBe('sp-a-secret');
+        expect(container!.textContent).toContain('Cây bí mật của A');
+        expect(container!.querySelector('[aria-label="Bỏ yêu thích Cây bí mật của A"]')).toBeTruthy();
+      });
+
+      // Switch to User B while B's GET /species stays pending
+      await act(async () => {
+        await authCtx.logout();
+        await authCtx.login({ account: userB.email, password: 'Password123@' });
+      });
+
+      // Wait for User B query to be actively pending
+      await waitFor(() => {
+        expect(authCtx.status).toBe('authenticated');
+        expect(authCtx.user?.id).toBe(userB.id);
+        expect(listResult.isFetching).toBe(true);
+      });
+      await flushAsync(40);
+
+      // CRITICAL: During pending B fetch, hook & UI MUST NOT show A's data as placeholder
+      expect(listResult.data).toBeUndefined();
+      expect(listResult.isLoading).toBe(true);
+      expect(listResult.isPlaceholderData).toBe(false);
+      expect(container!.textContent).toContain('Đang tải danh sách loài cây từ máy chủ...');
+      expect(container!.textContent).not.toContain('Cây bí mật của A');
+      expect(container!.querySelector('[aria-label="Bỏ yêu thích Cây bí mật của A"]')).toBeNull();
+
+      // Now resolve User B response
+      await act(async () => {
+        pendingSpeciesB.resolve({
+          content: [speciesBOnly],
+          page: 0,
+          size: 20,
+          totalElements: 1,
+          totalPages: 1,
+          last: true,
+        });
+      });
+
+      await waitFor(() => {
+        expect(listResult.data?.content[0].id).toBe('sp-b-public');
+        expect(listResult.data?.content[0].isFavorited).toBe(false);
+        expect(container!.textContent).toContain('Lan hồ điệp của B');
+        expect(container!.querySelector('[aria-label="Yêu thích Lan hồ điệp của B"]')).toBeTruthy();
+      });
+      expect(container!.textContent).not.toContain('Cây bí mật của A');
+    });
+
+    it('Test 2: FavoritesSection does NOT render User A favorite items while User B GET /species/favorites is pending', async () => {
+      await tokenStorage.saveSession(sessionA);
+      const pendingFavB = createDeferred<PageResponse<SpeciesSummaryDto>>();
+
+      const favAItem: SpeciesSummaryDto = {
+        ...speciesOne,
+        id: 'sp-fav-a',
+        commonName: 'Cây yêu thích riêng của A',
+        isFavorited: true,
+      };
+      const favBItem: SpeciesSummaryDto = {
+        ...speciesTwo,
+        id: 'sp-fav-b',
+        commonName: 'Xương rồng riêng của B',
+        isFavorited: true,
+      };
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        const authHeader = config.headers?.Authorization as string | undefined;
+        const isB = authHeader === `Bearer ${sessionB.accessToken}`;
+
+        if (config.url === '/auth/login' && config.method === 'post') {
+          return { status: 200, data: { success: true, data: sessionB }, headers: {}, config };
+        }
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: isB ? profileB : profileA }, headers: {}, config };
+        }
+        if (config.url === '/species/favorites') {
+          if (isB) {
+            const pageB = await pendingFavB.promise;
+            return { status: 200, data: { success: true, data: pageB }, headers: {}, config };
+          }
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: [favAItem],
+                page: 0,
+                size: 20,
+                totalElements: 1,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+      });
+
+      let authCtx!: ReturnType<typeof useAuth>;
+      let favResult!: ReturnType<typeof useFavoriteSpecies>;
+      function Probe() {
+        authCtx = useAuth();
+        favResult = useFavoriteSpecies({ page: 0, size: 20 });
+        return null;
+      }
+
+      renderWithRealAuth(
+        <>
+          <Probe />
+          <FavoritesSection />
+        </>
+      );
+
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(userA.id);
+        expect(favResult.data?.content[0].id).toBe('sp-fav-a');
+        expect(container!.textContent).toContain('Cây yêu thích riêng của A');
+        expect(container!.textContent).toContain('1 loài đã lưu');
+      });
+
+      await act(async () => {
+        await authCtx.logout();
+        await authCtx.login({ account: userB.email, password: 'Password123@' });
+      });
+
+      await waitFor(() => {
+        expect(authCtx.status).toBe('authenticated');
+        expect(authCtx.user?.id).toBe(userB.id);
+        expect(favResult.isFetching).toBe(true);
+      });
+      await flushAsync(40);
+
+      // During entire pending window of B, User A's favorites must NEVER appear
+      expect(favResult.data).toBeUndefined();
+      expect(favResult.isLoading).toBe(true);
+      expect(favResult.isPlaceholderData).toBe(false);
+      expect(container!.textContent).toContain('Đang tải danh sách loài cây yêu thích...');
+      expect(container!.textContent).not.toContain('Cây yêu thích riêng của A');
+      expect(container!.textContent).not.toContain('1 loài đã lưu');
+
+      await act(async () => {
+        pendingFavB.resolve({
+          content: [favBItem],
+          page: 0,
+          size: 20,
+          totalElements: 1,
+          totalPages: 1,
+          last: true,
+        });
+      });
+
+      await waitFor(() => {
+        expect(favResult.data?.content[0].id).toBe('sp-fav-b');
+        expect(container!.textContent).toContain('Xương rồng riêng của B');
+        expect(container!.textContent).toContain('1 loài đã lưu');
+      });
+      expect(container!.textContent).not.toContain('Cây yêu thích riêng của A');
+    });
+
+    it('Test 3: Logging out clears User A Species & Favorites data from hooks and UI (never retained on __unauthenticated__ query)', async () => {
+      await tokenStorage.saveSession(sessionA);
+
+      const userAPlant: SpeciesSummaryDto = {
+        ...speciesOne,
+        id: 'sp-logout-check',
+        commonName: 'Sen đá riêng của A',
+        isFavorited: true,
+      };
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: profileA }, headers: {}, config };
+        }
+        if (config.url === '/species') {
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: [userAPlant],
+                page: 0,
+                size: 20,
+                totalElements: 1,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/species/favorites') {
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: [userAPlant],
+                page: 0,
+                size: 20,
+                totalElements: 1,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+      });
+
+      let authCtx!: ReturnType<typeof useAuth>;
+      let listResult!: ReturnType<typeof useSpeciesList>;
+      let favResult!: ReturnType<typeof useFavoriteSpecies>;
+      function Probe() {
+        authCtx = useAuth();
+        listResult = useSpeciesList({ page: 0, size: 20 });
+        favResult = useFavoriteSpecies({ page: 0, size: 20 });
+        return null;
+      }
+
+      renderWithRealAuth(
+        <>
+          <Probe />
+          <SearchScreen />
+          <FavoritesSection />
+        </>
+      );
+
+      await waitFor(() => {
+        expect(authCtx.status).toBe('authenticated');
+        expect(listResult.data?.content[0].id).toBe('sp-logout-check');
+        expect(favResult.data?.content[0].id).toBe('sp-logout-check');
+        expect(container!.textContent).toContain('Sen đá riêng của A');
+        expect(container!.querySelector('[aria-label="Bỏ yêu thích Sen đá riêng của A"]')).toBeTruthy();
+      });
+
+      await act(async () => {
+        await authCtx.logout();
+      });
+      await flushAsync(40);
+
+      expect(authCtx.status).toBe('unauthenticated');
+      expect(listResult.data).toBeUndefined();
+      expect(listResult.isPlaceholderData).toBe(false);
+      expect(favResult.data).toBeUndefined();
+      expect(favResult.isPlaceholderData).toBe(false);
+      expect(container!.textContent).not.toContain('Sen đá riêng của A');
+      expect(container!.textContent).not.toContain('1 loài đã lưu');
+      expect(container!.querySelector('[aria-label="Bỏ yêu thích Sen đá riêng của A"]')).toBeNull();
+    });
+
+    it('Test 4: Same-account pagination keeps previous page as placeholder, respects keepPreviousData: false, and never leaks mid-pagination placeholder to User B', async () => {
+      await tokenStorage.saveSession(sessionA);
+      const pendingPage1 = createDeferred<PageResponse<SpeciesSummaryDto>>();
+      const pendingFavPage1 = createDeferred<PageResponse<SpeciesSummaryDto>>();
+      const pendingListB = createDeferred<PageResponse<SpeciesSummaryDto>>();
+      const pendingFavB = createDeferred<PageResponse<SpeciesSummaryDto>>();
+
+      const page0Plant: SpeciesSummaryDto = {
+        ...speciesOne,
+        id: 'sp-page-0',
+        commonName: 'Cây Trang 0 của A',
+        isFavorited: false,
+      };
+      const page1Plant: SpeciesSummaryDto = {
+        ...speciesTwo,
+        id: 'sp-page-1',
+        commonName: 'Cây Trang 1 của A',
+        isFavorited: true,
+      };
+      const favPage0Plant: SpeciesSummaryDto = {
+        ...speciesOne,
+        id: 'sp-fav-page-0',
+        commonName: 'Yêu thích Trang 0 của A',
+        isFavorited: true,
+      };
+      const favPage1Plant: SpeciesSummaryDto = {
+        ...speciesTwo,
+        id: 'sp-fav-page-1',
+        commonName: 'Yêu thích Trang 1 của A',
+        isFavorited: true,
+      };
+      const userBPlant: SpeciesSummaryDto = {
+        ...speciesOne,
+        id: 'sp-user-b',
+        commonName: 'Cây sạch của B',
+        isFavorited: false,
+      };
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        const authHeader = config.headers?.Authorization as string | undefined;
+        const isB = authHeader === `Bearer ${sessionB.accessToken}`;
+
+        if (config.url === '/auth/login' && config.method === 'post') {
+          return { status: 200, data: { success: true, data: sessionB }, headers: {}, config };
+        }
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: isB ? profileB : profileA }, headers: {}, config };
+        }
+        if (config.url === '/species') {
+          if (isB) {
+            const dataB = await pendingListB.promise;
+            return { status: 200, data: { success: true, data: dataB }, headers: {}, config };
+          }
+          const reqPage = Number((config.params as { page?: number })?.page ?? 0);
+          if (reqPage === 0) {
+            return {
+              status: 200,
+              data: {
+                success: true,
+                data: {
+                  content: [page0Plant],
+                  page: 0,
+                  size: 20,
+                  totalElements: 25,
+                  totalPages: 2,
+                  last: false,
+                },
+              },
+              headers: {},
+              config,
+            };
+          }
+          const page1Data = await pendingPage1.promise;
+          return { status: 200, data: { success: true, data: page1Data }, headers: {}, config };
+        }
+        if (config.url === '/species/favorites') {
+          if (isB) {
+            const dataB = await pendingFavB.promise;
+            return { status: 200, data: { success: true, data: dataB }, headers: {}, config };
+          }
+          const reqPage = Number((config.params as { page?: number })?.page ?? 0);
+          if (reqPage === 0) {
+            return {
+              status: 200,
+              data: {
+                success: true,
+                data: {
+                  content: [favPage0Plant],
+                  page: 0,
+                  size: 20,
+                  totalElements: 25,
+                  totalPages: 2,
+                  last: false,
+                },
+              },
+              headers: {},
+              config,
+            };
+          }
+          const favPage1Data = await pendingFavPage1.promise;
+          return { status: 200, data: { success: true, data: favPage1Data }, headers: {}, config };
+        }
+        throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+      });
+
+      let authCtx!: ReturnType<typeof useAuth>;
+      let listWithPlaceholder!: ReturnType<typeof useSpeciesList>;
+      let listWithoutPlaceholder!: ReturnType<typeof useSpeciesList>;
+      let favWithPlaceholder!: ReturnType<typeof useFavoriteSpecies>;
+      let favWithoutPlaceholder!: ReturnType<typeof useFavoriteSpecies>;
+      let setHookPage!: (p: number) => void;
+
+      function Probe() {
+        const [hookPage, setLocalHookPage] = React.useState(0);
+        setHookPage = setLocalHookPage;
+        authCtx = useAuth();
+        listWithPlaceholder = useSpeciesList({ page: hookPage, size: 20 });
+        listWithoutPlaceholder = useSpeciesList(
+          { page: hookPage, size: 20, keyword: 'no-placeholder' },
+          { keepPreviousData: false }
+        );
+        favWithPlaceholder = useFavoriteSpecies({ page: hookPage, size: 20 });
+        favWithoutPlaceholder = useFavoriteSpecies(
+          { page: hookPage, size: 15 },
+          { keepPreviousData: false }
+        );
+        return null;
+      }
+
+      renderWithRealAuth(
+        <>
+          <Probe />
+          <SearchScreen />
+        </>
+      );
+
+      await waitFor(() => {
+        expect(listWithPlaceholder.data?.page).toBe(0);
+        expect(listWithPlaceholder.isPlaceholderData).toBe(false);
+        expect(listWithoutPlaceholder.data?.page).toBe(0);
+        expect(favWithPlaceholder.data?.page).toBe(0);
+        expect(favWithPlaceholder.isPlaceholderData).toBe(false);
+        expect(favWithoutPlaceholder.data?.page).toBe(0);
+        expect(container!.textContent).toContain('Cây Trang 0 của A');
+        expect(container!.textContent).toContain('Trang sau');
+      });
+
+      // Paginate same User A -> page 1 while request stays pending
+      act(() => {
+        setHookPage(1);
+      });
+      const nextPageBtn = Array.from(container!.querySelectorAll('[role="button"]')).find(
+        (el) => el.textContent === 'Trang sau'
+      );
+      clickElement(nextPageBtn);
+
+      await waitFor(() => {
+        expect(listWithPlaceholder.isFetching).toBe(true);
+        expect(listWithoutPlaceholder.isFetching).toBe(true);
+        expect(favWithPlaceholder.isFetching).toBe(true);
+        expect(favWithoutPlaceholder.isFetching).toBe(true);
+      });
+
+      // Same-owner placeholder works when enabled & stays disabled when keepPreviousData: false
+      expect(listWithPlaceholder.data?.page).toBe(0);
+      expect(listWithPlaceholder.data?.content[0].commonName).toBe('Cây Trang 0 của A');
+      expect(listWithPlaceholder.isPlaceholderData).toBe(true);
+      expect(favWithPlaceholder.data?.page).toBe(0);
+      expect(favWithPlaceholder.data?.content[0].commonName).toBe('Yêu thích Trang 0 của A');
+      expect(favWithPlaceholder.isPlaceholderData).toBe(true);
+      expect(container!.textContent).toContain('Cây Trang 0 của A');
+      expect(container!.textContent).toContain('Đang cập nhật...');
+      expect(listWithoutPlaceholder.data).toBeUndefined();
+      expect(favWithoutPlaceholder.data).toBeUndefined();
+
+      // Also verify that even while User A is currently showing placeholderData (isPlaceholderData === true),
+      // switching to User B drops placeholder completely while B is pending!
+      await act(async () => {
+        await authCtx.logout();
+        await authCtx.login({ account: userB.email, password: 'Password123@' });
+      });
+
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(userB.id);
+        expect(listWithPlaceholder.isFetching).toBe(true);
+        expect(favWithPlaceholder.isFetching).toBe(true);
+      });
+      await flushAsync(30);
+
+      expect(listWithPlaceholder.data).toBeUndefined();
+      expect(listWithPlaceholder.isLoading).toBe(true);
+      expect(listWithPlaceholder.isPlaceholderData).toBe(false);
+      expect(favWithPlaceholder.data).toBeUndefined();
+      expect(favWithPlaceholder.isLoading).toBe(true);
+      expect(favWithPlaceholder.isPlaceholderData).toBe(false);
+      expect(container!.textContent).not.toContain('Cây Trang 0 của A');
+
+      // Cleanly settle deferred promises
+      await act(async () => {
+        pendingPage1.resolve({
+          content: [page1Plant],
+          page: 1,
+          size: 20,
+          totalElements: 25,
+          totalPages: 2,
+          last: true,
+        });
+        pendingFavPage1.resolve({
+          content: [favPage1Plant],
+          page: 1,
+          size: 20,
+          totalElements: 25,
+          totalPages: 2,
+          last: true,
+        });
+        pendingListB.resolve({
+          content: [userBPlant],
+          page: 0,
+          size: 20,
+          totalElements: 1,
+          totalPages: 1,
+          last: true,
+        });
+        pendingFavB.resolve({
+          content: [],
+          page: 0,
+          size: 20,
+          totalElements: 0,
+          totalPages: 0,
+          last: true,
+        });
+      });
+
+      await waitFor(() => {
+        expect(listWithPlaceholder.data?.content[0].id).toBe('sp-user-b');
+        expect(favWithPlaceholder.data?.content).toEqual([]);
+        expect(container!.textContent).toContain('Cây sạch của B');
+      });
+    });
+
+    it('Test 5: Same speciesId with isFavorited=true on A vs isFavorited=false on B never leaks A favorite flag while B list or detail is loading', async () => {
+      await tokenStorage.saveSession(sessionA);
+      routeParamsState.current = { speciesId: 'sp-1' };
+
+      const pendingListB = createDeferred<PageResponse<SpeciesSummaryDto>>();
+      const pendingDetailB = createDeferred<SpeciesDetailDto>();
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        const authHeader = config.headers?.Authorization as string | undefined;
+        const isB = authHeader === `Bearer ${sessionB.accessToken}`;
+
+        if (config.url === '/auth/login' && config.method === 'post') {
+          return { status: 200, data: { success: true, data: sessionB }, headers: {}, config };
+        }
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: isB ? profileB : profileA }, headers: {}, config };
+        }
+        if (config.url === '/species') {
+          if (isB) {
+            const pageB = await pendingListB.promise;
+            return { status: 200, data: { success: true, data: pageB }, headers: {}, config };
+          }
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: [{ ...speciesOne, isFavorited: true }],
+                page: 0,
+                size: 20,
+                totalElements: 1,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/species/sp-1') {
+          if (isB) {
+            const detailB = await pendingDetailB.promise;
+            return { status: 200, data: { success: true, data: detailB }, headers: {}, config };
+          }
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: { ...speciesOneDetail, isFavorited: true },
+            },
+            headers: {},
+            config,
+          };
+        }
+        throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+      });
+
+      let authCtx!: ReturnType<typeof useAuth>;
+      let listResult!: ReturnType<typeof useSpeciesList>;
+      let detailResult!: ReturnType<typeof useSpeciesDetail>;
+      function Probe() {
+        authCtx = useAuth();
+        listResult = useSpeciesList({ page: 0, size: 20 });
+        detailResult = useSpeciesDetail('sp-1');
+        return null;
+      }
+
+      renderWithRealAuth(
+        <>
+          <Probe />
+          <SearchScreen />
+          <PlantDetailScreen />
+        </>
+      );
+
+      // User A sees sp-1 with isFavorited: true on both list and detail
+      await waitFor(() => {
+        expect(listResult.data?.content[0].isFavorited).toBe(true);
+        expect(detailResult.data?.isFavorited).toBe(true);
+        expect(container!.querySelector('[aria-label="Bỏ yêu thích Trầu bà lá xẻ"]')).toBeTruthy();
+        expect(container!.querySelector('[aria-label="Bỏ yêu thích"]')).toBeTruthy();
+        expect(container!.textContent).toContain('♥ Đã yêu thích');
+      });
+
+      // Switch to User B while B's requests are pending
+      await act(async () => {
+        await authCtx.logout();
+        await authCtx.login({ account: userB.email, password: 'Password123@' });
+      });
+
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(userB.id);
+        expect(listResult.isFetching).toBe(true);
+        expect(detailResult.isFetching).toBe(true);
+      });
+      await flushAsync(40);
+
+      // Neither list nor detail may expose A's isFavorited=true while B is loading
+      expect(listResult.data).toBeUndefined();
+      expect(listResult.isPlaceholderData).toBe(false);
+      expect(detailResult.data).toBeUndefined();
+      expect(detailResult.isPlaceholderData).toBe(false);
+      expect(container!.querySelector('[aria-label="Bỏ yêu thích Trầu bà lá xẻ"]')).toBeNull();
+      expect(container!.querySelector('[aria-label="Bỏ yêu thích"]')).toBeNull();
+      expect(container!.textContent).not.toContain('♥ Đã yêu thích');
+
+      // Resolve User B responses with isFavorited: false
+      await act(async () => {
+        pendingListB.resolve({
+          content: [{ ...speciesOne, isFavorited: false }],
+          page: 0,
+          size: 20,
+          totalElements: 1,
+          totalPages: 1,
+          last: true,
+        });
+        pendingDetailB.resolve({ ...speciesOneDetail, isFavorited: false });
+      });
+
+      await waitFor(() => {
+        expect(listResult.data?.content[0].isFavorited).toBe(false);
+        expect(detailResult.data?.isFavorited).toBe(false);
+        expect(container!.querySelector('[aria-label="Yêu thích Trầu bà lá xẻ"]')).toBeTruthy();
+        expect(container!.querySelector('[aria-label="Thêm yêu thích"]')).toBeTruthy();
+      });
+      expect(container!.textContent).not.toContain('♥ Đã yêu thích');
+    });
+  });
 });

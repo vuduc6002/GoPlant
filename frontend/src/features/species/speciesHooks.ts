@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore, type MutableRefObject } from 'react';
 import {
-  keepPreviousData,
   useMutation,
   useQuery,
   useQueryClient,
+  type PlaceholderDataFunction,
   type QueryClient,
   type QueryKey,
 } from '@tanstack/react-query';
@@ -285,6 +285,33 @@ function invalidateSpeciesQueries(qc: QueryClient, userId: string, speciesId: st
   qc.invalidateQueries({ queryKey: queryKeys.species.detail(userId, speciesId) });
 }
 
+function useOwnerScopedPlaceholderData<TData>(
+  cacheOwnerId: string,
+  enabled: boolean
+): PlaceholderDataFunction<TData, AppApiError, TData, QueryKey> | undefined {
+  const placeholderDataFn = useCallback<
+    PlaceholderDataFunction<TData, AppApiError, TData, QueryKey>
+  >(
+    (previousData, previousQuery) => {
+      if (!cacheOwnerId || cacheOwnerId === UNAUTHENTICATED_CACHE_OWNER) {
+        return undefined;
+      }
+      const previousOwnerId = Array.isArray(previousQuery?.queryKey)
+        ? previousQuery.queryKey[1]
+        : undefined;
+      return typeof previousOwnerId === 'string' && previousOwnerId === cacheOwnerId
+        ? previousData
+        : undefined;
+    },
+    [cacheOwnerId]
+  );
+
+  if (!enabled || !cacheOwnerId || cacheOwnerId === UNAUTHENTICATED_CACHE_OWNER) {
+    return undefined;
+  }
+  return placeholderDataFn;
+}
+
 export function useSpeciesList(
   params?: SpeciesListParams,
   options?: { enabled?: boolean; keepPreviousData?: boolean }
@@ -293,6 +320,10 @@ export function useSpeciesList(
   const userId = getAuthenticatedUserId(status, user);
   const cacheOwnerId = userId || UNAUTHENTICATED_CACHE_OWNER;
   const normalized = normalizeSpeciesListParams(params);
+  const placeholderData = useOwnerScopedPlaceholderData<PageResponse<SpeciesSummaryDto>>(
+    cacheOwnerId,
+    options?.keepPreviousData !== false
+  );
 
   return useQuery<PageResponse<SpeciesSummaryDto>, AppApiError>({
     queryKey: queryKeys.species.list(cacheOwnerId, normalized),
@@ -311,7 +342,7 @@ export function useSpeciesList(
       });
     },
     enabled: status === 'authenticated' && Boolean(userId) && (options?.enabled ?? true),
-    placeholderData: options?.keepPreviousData === false ? undefined : keepPreviousData,
+    placeholderData,
   });
 }
 
@@ -353,6 +384,10 @@ export function useFavoriteSpecies(
   const userId = getAuthenticatedUserId(status, user);
   const cacheOwnerId = userId || UNAUTHENTICATED_CACHE_OWNER;
   const normalized = normalizeFavoriteSpeciesParams(params);
+  const placeholderData = useOwnerScopedPlaceholderData<PageResponse<SpeciesSummaryDto>>(
+    cacheOwnerId,
+    options?.keepPreviousData !== false
+  );
 
   return useQuery<PageResponse<SpeciesSummaryDto>, AppApiError>({
     queryKey: queryKeys.species.favorites(cacheOwnerId, normalized),
@@ -371,7 +406,7 @@ export function useFavoriteSpecies(
       });
     },
     enabled: status === 'authenticated' && Boolean(userId) && (options?.enabled ?? true),
-    placeholderData: options?.keepPreviousData === false ? undefined : keepPreviousData,
+    placeholderData,
   });
 }
 

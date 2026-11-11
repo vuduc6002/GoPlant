@@ -21,7 +21,7 @@ Sau các lượt hoàn thiện nền tảng **G5.2.1 – G5.2.1.1.4**, tích h�
 - **Loại bỏ trùng lặp Request Profile**: React Query đóng vai trò nguồn dữ liệu duy nhất cho `GET /api/v1/users/me`, loại bỏ hoàn toàn tình trạng gọi 2 request profile song song khi đăng nhập.
 - **Quản lý Server State**: Tích hợp **TanStack React Query v5** quản lý cache (`staleTime: 2 phút` theo `queryClient.ts`), auth-gating chỉ query khi `status === 'authenticated'`, phân lập cache chống rò rỉ dữ liệu giữa các tài khoản, và chính sách retry nghiêm ngặt (chỉ retry network/timeout/5xx tối đa 2 lần).
 - **Phân hệ Species, Favorites & Gardens (G5.3)**: Kết nối REST API thật cho thư viện loài cây (`GET /species`, `GET /species/{speciesId}`), danh sách yêu thích (`POST/DELETE /species/{speciesId}/favorite`, `GET /species/favorites`) và CRUD khu vườn (`GET/POST /gardens`, `GET/PUT/DELETE /gardens/{gardenId}`) với phân trang 0-based, đồng bộ cache nhiều cấp, chống race-condition/double-tap khi thả tim, validation enum `SpaceType` và xác nhận cascade delete.
-- **Kiểm thử tự động toàn diện**: Bộ kiểm thử **Vitest** với **120 bài test** trên 6 file kiểm thử bao phủ lưu trữ phiên & schema, trusted origin/`baseURL` & session identity guard, chuẩn hóa lỗi & retry policy, auth flow, Species & Favorites (bao gồm concurrency lock & rollback isolation), và Gardens CRUD (bao gồm account-switch cache isolation).
+- **Kiểm thử tự động toàn diện**: Bộ kiểm thử **Vitest** với **125 bài test** trên 6 file kiểm thử bao phủ lưu trữ phiên & schema, trusted origin/`baseURL` & session identity guard, chuẩn hóa lỗi & retry policy, auth flow, Species & Favorites (bao gồm concurrency lock, rollback isolation & owner-scoped placeholder data), và Gardens CRUD (bao gồm account-switch cache isolation).
 
 Các phân hệ nghiệp vụ kế tiếp (**Cây trồng cá nhân / User Plants**, **Lịch chăm sóc / Care Schedules**, **Nhật ký / Care Logs & Growth Journals**) vẫn giữ giao diện xem trước/demo cục bộ (cho `/garden/add-plant` và các tab tương ứng) và sẽ được tích hợp REST API từ Giai đoạn **G5.4**.
 
@@ -98,7 +98,7 @@ Các phân hệ nghiệp vụ kế tiếp (**Cây trồng cá nhân / User Plant
   - Gardens: `GET /api/v1/gardens`, `POST /api/v1/gardens`, `GET /api/v1/gardens/{gardenId}`, `PUT /api/v1/gardens/{gardenId}`, `DELETE /api/v1/gardens/{gardenId}`.
 - **Phân trang & Sort an toàn**: Chuẩn hóa phân trang 0-based (`page >= 0`, `size` mặc định `20` giới hạn `[1, 100]`), danh sách sort allowlist theo tên thuộc tính JPA (`commonName`, `scientificName`, `category`, `difficulty`, `createdAt`, `updatedAt`, mặc định `commonName,asc`).
 - **Đồng bộ Cache & Bảo vệ Race Condition cho Favorites (G5.3.1)**: `useFavoriteToggle()` sử dụng khóa tuần tự toàn ứng dụng (`activeFavoriteOp`) chỉ cho phép một favorite mutation chạy tại một thời điểm (chặn double-tap cùng `speciesId`, từ chối request song song khác `speciesId` bằng mã lỗi `FAVORITE_OPERATION_IN_PROGRESS` mà không trả nhầm Promise, luôn giải phóng khóa trong `finally` kể cả khi lỗi mạng/timeout/5xx/logout) và vô hiệu hóa toàn bộ nút yêu thích khi đang xử lý; đồng bộ cache giữa `species.lists(userId)`, `species.detail(userId, id)` và `species.favoritesAll(userId)`, giữ rollback an toàn và đối chiếu theo server truth khi nhận `409 Conflict` hoặc `404 Not Found`.
-- **Phân lập Cache & Request Guard theo tài khoản (G5.3.1)**: Toàn bộ query key của Species, Favorites và Gardens đều gắn namespace `userId`; mọi mutation đều capture `ownerUserId` + `sessionGeneration` tại thời điểm khởi tạo và xác minh chủ sở hữu trước khi ghi/rollback cache; `apiClient` kiểm tra `expectedUserId`/`expectedSessionGeneration` trước khi gắn JWT (`SESSION_USER_MISMATCH`) và chặn HTTP 401 trễ từ phiên cũ gây đăng xuất nhầm phiên mới.
+- **Phân lập Cache, Placeholder Data & Request Guard theo tài khoản (G5.3.1 – G5.3.1.2)**: Toàn bộ query key của Species, Favorites và Gardens đều gắn namespace `userId`; `useSpeciesList` và `useFavoriteSpecies` sử dụng `placeholderData` ràng buộc theo `cacheOwnerId` (`previousQuery?.queryKey?.[1] === cacheOwnerId`) nên chỉ giữ trang trước khi phân trang/lọc trên cùng tài khoản và trả về `undefined` khi đổi tài khoản hoặc đăng xuất (`__unauthenticated__`); mọi mutation đều capture `ownerUserId` + `sessionGeneration` tại thời điểm khởi tạo và xác minh chủ sở hữu trước khi ghi/rollback cache; `apiClient` kiểm tra `expectedUserId`/`expectedSessionGeneration` trước khi gắn JWT (`SESSION_USER_MISMATCH`) và chặn HTTP 401 trễ từ phiên cũ gây đăng xuất nhầm phiên mới.
 - **Mapping & An toàn dữ liệu Gardens**: Sử dụng đúng enum `SpaceType` (`BAN_CONG`, `SAN_THUONG`, `TRONG_NHA`, `SAN_VUON`, `KHAC`) và `HealthStatus` (`HEALTHY`, `NEEDS_ATTENTION`, `CRITICAL`, `UNKNOWN`); validate tên vườn 1–200 ký tự và vị trí trước khi gửi; hiển thị lỗi field `name` từ HTTP 409 trùng tên; xác nhận xóa có cảnh báo cascade xóa cây/lịch/nhật ký và hủy + xóa sạch cache `queryKeys.gardens.detail(userId, gardenId)` sau khi xóa.
 
 ---
@@ -123,12 +123,12 @@ frontend/
 │   ├── services/
 │   │   ├── api/                 # apiClient, apiConfig, apiError, apiTypes, tokenStorage
 │   │   └── query/               # queryClient, queryKeys
-│   ├── __tests__/               # Automated Test Suite (Vitest — 120 tests)
+│   ├── __tests__/               # Automated Test Suite (Vitest — 125 tests)
 │   │   ├── tokenStorage.test.ts         # Lưu trữ an toàn, AuthSession schema & phân loại lỗi (31 tests)
 │   │   ├── apiClient.test.ts            # Trusted origin, baseURL guard, session identity guard, interceptor & HTTP 401 (31 tests)
 │   │   ├── apiErrorAndRetry.test.ts     # Chuẩn hóa lỗi & chính sách retry (15 tests)
 │   │   ├── authFlow.test.tsx            # Khôi phục session, cleanup error, retry, login, logout (12 tests)
-│   │   ├── speciesAndFavorites.test.tsx # Species API, Favorites serialization/concurrency, account isolation & UI integration (18 tests)
+│   │   ├── speciesAndFavorites.test.tsx # Species API, Favorites serialization/concurrency, placeholder/account isolation & UI integration (23 tests)
 │   │   ├── gardensIntegration.test.tsx  # Gardens API, CRUD cache/account isolation, Home/Main/Garden UI & G5.4 demo preservation (13 tests)
 │   │   └── setup.ts                     # Cấu hình môi trường mock cho Vitest
 ├── vitest.config.mjs            # Cấu hình Vitest runner (alias @/assets & @ -> src)
@@ -179,7 +179,7 @@ npm.cmd run typecheck
 # 3. Phân tích mã nguồn với ESLint (0 errors)
 npm.cmd run lint
 
-# 4. Chạy toàn bộ kiểm thử tự động với Vitest (120/120 PASS)
+# 4. Chạy toàn bộ kiểm thử tự động với Vitest (125/125 PASS)
 npm.cmd test
 
 # 5. Xác minh cấu hình Expo hợp lệ
@@ -203,5 +203,6 @@ cd E:\GoPlant
 - [x] **G5.2.1.1 – G5.2.1.1.4**: Hoàn thiện phân loại lỗi lưu trữ, khôi phục session an toàn, xử lý lỗi xóa token (`storage-cleanup-error`), loại bỏ request `/users/me` trùng lặp, siết chặt Trusted API Origin, từ chối `baseURL` override rỗng/không hợp lệ và chuẩn hóa `AuthSession` schema.
 - [x] **G5.3**: Tích hợp Backend REST API cho Loài cây (`Species`), Yêu thích (`Favorites`) và Khu vườn (`Gardens`); phủ 103 tests Vitest frontend.
 - [x] **G5.3.1**: Serialize thao tác Favorites chống multi-species rollback race, phân lập Query Cache & Mutation Identity Guard theo `userId` + `sessionGeneration`, bổ sung `SESSION_USER_MISMATCH` guard trong `apiClient`, sửa `HealthStatus` (`CRITICAL`) và mở rộng lên 120 tests Vitest.
+- [x] **G5.3.1.2**: Khắc phục rò rỉ `placeholderData` giữa các tài khoản trong `useSpeciesList` / `useFavoriteSpecies` theo `cacheOwnerId` (`previousQuery.queryKey[1]`) và bổ sung 5 regression tests lúc chuyển A → B còn pending (125 tests Vitest).
 - [ ] **G5.4**: Tích hợp Backend REST API cho Cây trồng cá nhân (User Plants), Lịch chăm sóc (Care Schedules), Nhật ký chăm sóc (Care Logs) và Nhật ký sinh trưởng (Growth Journals).
 - [ ] **G5.5**: Tích hợp các tính năng nâng cao (Chẩn đoán AI, Camera, Thông báo nhắc nhở).
