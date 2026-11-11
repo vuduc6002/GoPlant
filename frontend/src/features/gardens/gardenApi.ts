@@ -1,4 +1,4 @@
-import { apiClient } from '@/services/api/apiClient';
+import { apiClient, type ApiUserScopeOptions } from '@/services/api/apiClient';
 import { AppApiError } from '@/services/api/apiError';
 import type { ApiResponse, SimpleMessageResponseDto } from '@/services/api/apiTypes';
 import type {
@@ -143,8 +143,23 @@ export function buildUpdateGardenPayload(request: UpdateGardenRequestDto): Updat
   return payload;
 }
 
-export async function getGardensList(): Promise<GardenSummaryDto[]> {
-  const response = await apiClient.get<ApiResponse<GardenSummaryDto[]>>('/gardens');
+function buildScopeConfig(scope?: ApiUserScopeOptions): ApiUserScopeOptions {
+  if (!scope) {
+    return {};
+  }
+  return {
+    ...(scope.expectedUserId !== undefined ? { expectedUserId: scope.expectedUserId } : {}),
+    ...(scope.expectedSessionGeneration !== undefined
+      ? { expectedSessionGeneration: scope.expectedSessionGeneration }
+      : {}),
+  };
+}
+
+export async function getGardensList(scope?: ApiUserScopeOptions): Promise<GardenSummaryDto[]> {
+  const response = await apiClient.get<ApiResponse<GardenSummaryDto[]>>(
+    '/gardens',
+    buildScopeConfig(scope)
+  );
   if (!Array.isArray(response.data?.data)) {
     throw new AppApiError({
       message: 'Dữ liệu danh sách khu vườn không hợp lệ.',
@@ -154,9 +169,16 @@ export async function getGardensList(): Promise<GardenSummaryDto[]> {
   return response.data.data.map(normalizeGardenSummary);
 }
 
-export async function createGarden(request: CreateGardenRequestDto): Promise<GardenDetailDto> {
+export async function createGarden(
+  request: CreateGardenRequestDto,
+  scope?: ApiUserScopeOptions
+): Promise<GardenDetailDto> {
   const payload = buildCreateGardenPayload(request);
-  const response = await apiClient.post<ApiResponse<GardenDetailDto>>('/gardens', payload);
+  const response = await apiClient.post<ApiResponse<GardenDetailDto>>(
+    '/gardens',
+    payload,
+    buildScopeConfig(scope)
+  );
   if (!response.data?.data) {
     throw new AppApiError({
       message: 'Không thể tạo khu vườn mới.',
@@ -166,10 +188,14 @@ export async function createGarden(request: CreateGardenRequestDto): Promise<Gar
   return normalizeGardenDetail(response.data.data);
 }
 
-export async function getGardenDetail(gardenId: string): Promise<GardenDetailDto> {
+export async function getGardenDetail(
+  gardenId: string,
+  scope?: ApiUserScopeOptions
+): Promise<GardenDetailDto> {
   const cleanId = assertValidGardenId(gardenId);
   const response = await apiClient.get<ApiResponse<GardenDetailDto>>(
-    `/gardens/${encodeURIComponent(cleanId)}`
+    `/gardens/${encodeURIComponent(cleanId)}`,
+    buildScopeConfig(scope)
   );
   if (!response.data?.data) {
     throw new AppApiError({
@@ -182,13 +208,15 @@ export async function getGardenDetail(gardenId: string): Promise<GardenDetailDto
 
 export async function updateGarden(
   gardenId: string,
-  request: UpdateGardenRequestDto
+  request: UpdateGardenRequestDto,
+  scope?: ApiUserScopeOptions
 ): Promise<GardenDetailDto> {
   const cleanId = assertValidGardenId(gardenId);
   const payload = buildUpdateGardenPayload(request);
   const response = await apiClient.put<ApiResponse<GardenDetailDto>>(
     `/gardens/${encodeURIComponent(cleanId)}`,
-    payload
+    payload,
+    buildScopeConfig(scope)
   );
   if (!response.data?.data) {
     throw new AppApiError({
@@ -199,10 +227,14 @@ export async function updateGarden(
   return normalizeGardenDetail(response.data.data);
 }
 
-export async function deleteGarden(gardenId: string): Promise<SimpleMessageResponseDto> {
+export async function deleteGarden(
+  gardenId: string,
+  scope?: ApiUserScopeOptions
+): Promise<SimpleMessageResponseDto> {
   const cleanId = assertValidGardenId(gardenId);
   const response = await apiClient.delete<ApiResponse<SimpleMessageResponseDto>>(
-    `/gardens/${encodeURIComponent(cleanId)}`
+    `/gardens/${encodeURIComponent(cleanId)}`,
+    buildScopeConfig(scope)
   );
   if (!response.data?.data) {
     return { message: response.data?.message || 'Khu vườn đã được xóa.' };

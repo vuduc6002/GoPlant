@@ -14,8 +14,10 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GoPlantColors as C, GoPlantTypography as F } from '@/constants/theme';
+import { useAuth } from '@/features/auth/AuthProvider';
 import { plantCatalog, usePlantData } from '@/features/plants/PlantDataStore';
 import { AppApiError } from '@/services/api/apiError';
+import { getSessionGeneration } from '@/services/api/tokenStorage';
 import { GARDEN_NAME_MAX_LENGTH } from './gardenApi';
 import {
   useCreateGardenMutation,
@@ -228,6 +230,11 @@ export function GardensTabContent() {
 }
 
 export function GardenDetailScreen() {
+  const { user } = useAuth();
+  const currentUserId = typeof user?.id === 'string' ? user.id.trim() : '';
+  const currentUserIdRef = useRef(currentUserId);
+  const prevDetailUserIdRef = useRef(currentUserId);
+
   const { gardenId } = useLocalSearchParams<{ gardenId?: string }>();
   const cleanGardenId = typeof gardenId === 'string' ? gardenId.trim() : '';
 
@@ -238,6 +245,17 @@ export function GardenDetailScreen() {
     enabled: !isDeleted && !deleteMutation.isPending,
   });
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const prevUserId = prevDetailUserIdRef.current;
+    prevDetailUserIdRef.current = currentUserId;
+    currentUserIdRef.current = currentUserId;
+    if (prevUserId && prevUserId !== currentUserId) {
+      setIsDeleted(false);
+      setDeletingSnapshot(null);
+      setDeleteError(null);
+    }
+  }, [currentUserId]);
 
   if (!cleanGardenId) {
     return (
@@ -305,16 +323,31 @@ export function GardenDetailScreen() {
   }
 
   const executeDelete = async () => {
+    const initiatedGeneration = getSessionGeneration();
+    const initiatedByUserId = currentUserIdRef.current;
+    const hasSwitchedSession = () =>
+      getSessionGeneration() !== initiatedGeneration ||
+      (Boolean(initiatedByUserId) && currentUserIdRef.current !== initiatedByUserId);
+
     setDeleteError(null);
     setDeletingSnapshot(garden);
     setIsDeleted(true);
     try {
       await deleteMutation.mutateAsync(garden.id);
+      if (hasSwitchedSession()) {
+        return;
+      }
       router.replace('/gardens' as never);
     } catch (err) {
+      if (hasSwitchedSession()) {
+        return;
+      }
       setIsDeleted(false);
       setDeletingSnapshot(null);
       if (err instanceof AppApiError) {
+        if (err.code === 'SESSION_USER_MISMATCH') {
+          return;
+        }
         setDeleteError(err.message);
       } else {
         setDeleteError('Không thể xóa khu vườn. Vui lòng thử lại.');
@@ -466,6 +499,11 @@ export function GardenDetailScreen() {
 }
 
 function GardenCreateEditForm({ gardenId }: { gardenId?: string }) {
+  const { user } = useAuth();
+  const currentUserId = typeof user?.id === 'string' ? user.id.trim() : '';
+  const currentUserIdRef = useRef(currentUserId);
+  const prevFormUserIdRef = useRef(currentUserId);
+
   const cleanGardenId = gardenId?.trim() ?? '';
   const isEditMode = Boolean(cleanGardenId);
 
@@ -481,6 +519,17 @@ function GardenCreateEditForm({ gardenId }: { gardenId?: string }) {
   const [fieldErrors, setFieldErrors] = useState<{ name?: string; location?: string }>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const hydratedIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const prevUserId = prevFormUserIdRef.current;
+    prevFormUserIdRef.current = currentUserId;
+    currentUserIdRef.current = currentUserId;
+    if (prevUserId && prevUserId !== currentUserId) {
+      hydratedIdRef.current = null;
+      setFieldErrors({});
+      setSubmitError(null);
+    }
+  }, [currentUserId]);
 
   useEffect(() => {
     if (isEditMode && detailQuery.data && hydratedIdRef.current !== detailQuery.data.id) {
@@ -541,6 +590,12 @@ function GardenCreateEditForm({ gardenId }: { gardenId?: string }) {
   };
 
   const handleSubmit = async () => {
+    const initiatedGeneration = getSessionGeneration();
+    const initiatedByUserId = currentUserIdRef.current;
+    const hasSwitchedSession = () =>
+      getSessionGeneration() !== initiatedGeneration ||
+      (Boolean(initiatedByUserId) && currentUserIdRef.current !== initiatedByUserId);
+
     setSubmitError(null);
     if (!validateLocal()) {
       return;
@@ -558,6 +613,9 @@ function GardenCreateEditForm({ gardenId }: { gardenId?: string }) {
             coverImageUrl: coverImageUrl.trim(),
           },
         });
+        if (hasSwitchedSession()) {
+          return;
+        }
         if (router.canGoBack()) {
           router.back();
         } else {
@@ -571,10 +629,19 @@ function GardenCreateEditForm({ gardenId }: { gardenId?: string }) {
           description: description.trim() || undefined,
           coverImageUrl: coverImageUrl.trim() || undefined,
         });
+        if (hasSwitchedSession()) {
+          return;
+        }
         router.replace({ pathname: '/garden-detail', params: { gardenId: created.id } } as never);
       }
     } catch (err) {
+      if (hasSwitchedSession()) {
+        return;
+      }
       if (err instanceof AppApiError) {
+        if (err.code === 'SESSION_USER_MISMATCH') {
+          return;
+        }
         if (err.field === 'name') {
           setFieldErrors((prev) => ({ ...prev, name: err.message }));
         } else if (err.field === 'location') {

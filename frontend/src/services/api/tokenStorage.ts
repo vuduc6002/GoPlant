@@ -42,12 +42,56 @@ export class StorageError extends Error {
  * This session is transient and automatically discarded on page refresh.
  */
 let webMemorySession: AuthSession | null = null;
+let sessionGeneration = 0;
+
+export type SessionChangeReason = 'save' | 'clear' | 'reset';
+
+export interface SessionChangeEvent {
+  generation: number;
+  reason: SessionChangeReason;
+  userId: string | null;
+}
+
+type SessionChangeListener = (event: SessionChangeEvent) => void;
+const sessionChangeListeners = new Set<SessionChangeListener>();
+
+function advanceSessionGeneration(reason: SessionChangeReason, userId: string | null): number {
+  sessionGeneration += 1;
+  const event: SessionChangeEvent = {
+    generation: sessionGeneration,
+    reason,
+    userId,
+  };
+  for (const listener of sessionChangeListeners) {
+    listener(event);
+  }
+  return sessionGeneration;
+}
+
+/**
+ * Monotonic counter incremented on every saveSession, clearSession, or test reset.
+ * Allows requests and mutations to detect session changes even across logout -> re-login of the same user.
+ */
+export function getSessionGeneration(): number {
+  return sessionGeneration;
+}
+
+/**
+ * Subscribes to session transitions triggered through saveSession/clearSession/_resetWebMemorySession.
+ */
+export function subscribeSessionChange(listener: SessionChangeListener): () => void {
+  sessionChangeListeners.add(listener);
+  return () => {
+    sessionChangeListeners.delete(listener);
+  };
+}
 
 /**
  * Testing helper to reset in-memory web session between test runs.
  */
 export function _resetWebMemorySession(): void {
   webMemorySession = null;
+  advanceSessionGeneration('reset', null);
 }
 
 /**
@@ -167,6 +211,7 @@ export async function saveSession(session: AuthSession): Promise<void> {
 
   if (Platform.OS === 'web') {
     webMemorySession = { ...session };
+    advanceSessionGeneration('save', session.user.id);
     return;
   }
 
@@ -177,6 +222,7 @@ export async function saveSession(session: AuthSession): Promise<void> {
     await SecureStore.setItemAsync(SESSION_STORAGE_KEY, payload, {
       keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
     });
+    advanceSessionGeneration('save', session.user.id);
   } catch (err) {
     throw new StorageError({
       code: 'WRITE_FAILED',
@@ -259,6 +305,8 @@ export async function getAccessToken(): Promise<string | null> {
  * Completely clears the stored session upon logout or 401 unrecoverable error.
  */
 export async function clearSession(): Promise<void> {
+  advanceSessionGeneration('clear', null);
+
   if (Platform.OS === 'web') {
     webMemorySession = null;
     return;

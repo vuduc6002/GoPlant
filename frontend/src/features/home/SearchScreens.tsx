@@ -14,6 +14,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GoPlantColors as C, GoPlantTypography as F } from '@/constants/theme';
+import { useAuth } from '@/features/auth/AuthProvider';
 import { usePlantData, type OwnedPlant } from '@/features/plants/PlantDataStore';
 import {
   matchesPlantFilters,
@@ -28,6 +29,7 @@ import {
   type SpeciesSummaryDto,
 } from '@/features/species/speciesTypes';
 import { AppApiError } from '@/services/api/apiError';
+import { getSessionGeneration } from '@/services/api/tokenStorage';
 
 const DEFAULT_PAGE_SIZE = 20;
 const QUICK_SUGGESTIONS = ['Trầu bà', 'Monstera', 'Philodendron', 'Cẩm thạch'];
@@ -92,12 +94,14 @@ function SearchHeader({
 function SpeciesResultCard({
   item,
   isPending,
+  isAnyFavoritePending,
   onToggleFavorite,
   onOpenDetail,
   onAddPlantPreview,
 }: {
   item: SpeciesSummaryDto;
   isPending: boolean;
+  isAnyFavoritePending: boolean;
   onToggleFavorite: () => void;
   onOpenDetail: () => void;
   onAddPlantPreview: () => void;
@@ -120,14 +124,14 @@ function SpeciesResultCard({
           </Text>
         </View>
         <Pressable
-          disabled={isPending}
+          disabled={isAnyFavoritePending}
           onPress={onToggleFavorite}
           accessibilityRole="button"
           accessibilityLabel={
             item.isFavorited ? `Bỏ yêu thích ${item.commonName}` : `Yêu thích ${item.commonName}`
           }
-          accessibilityState={{ disabled: isPending }}
-          style={[ss.favButton, isPending && ss.favButtonDisabled]}
+          accessibilityState={{ disabled: isAnyFavoritePending }}
+          style={[ss.favButton, isAnyFavoritePending && ss.favButtonDisabled]}
         >
           <Text style={ss.favorite}>{isPending ? '…' : item.isFavorited ? '♥' : '♡'}</Text>
         </Pressable>
@@ -199,6 +203,11 @@ export function SearchScreen() {
 
   const initialScope =
     params.scope === 'owned' || params.scope === 'Trong vườn của tôi' ? 'owned' : 'catalog';
+
+  const { user } = useAuth();
+  const currentUserId = typeof user?.id === 'string' ? user.id.trim() : '';
+  const currentUserIdRef = useRef(currentUserId);
+  const prevUserIdRef = useRef(currentUserId);
 
   const { ownedPlants } = usePlantData();
   const [scope, setScope] = useState<'catalog' | 'owned'>(initialScope);
@@ -285,7 +294,17 @@ export function SearchScreen() {
     { enabled: scope === 'catalog' }
   );
 
-  const { toggleFavorite, isSpeciesPending } = useFavoriteToggle();
+  const { toggleFavorite, isSpeciesPending, isAnyFavoritePending } = useFavoriteToggle();
+
+  useEffect(() => {
+    const prevUserId = prevUserIdRef.current;
+    prevUserIdRef.current = currentUserId;
+    currentUserIdRef.current = currentUserId;
+    if (prevUserId && prevUserId !== currentUserId) {
+      setPage(0);
+      setFavError(null);
+    }
+  }, [currentUserId]);
 
   const filteredOwnedPlants = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase();
@@ -324,11 +343,22 @@ export function SearchScreen() {
   };
 
   const handleFavoriteToggle = async (item: SpeciesSummaryDto) => {
+    const initiatedGeneration = getSessionGeneration();
+    const initiatedByUserId = currentUserIdRef.current;
     setFavError(null);
     try {
       await toggleFavorite(item.id, item.isFavorited);
     } catch (err) {
+      if (
+        getSessionGeneration() !== initiatedGeneration ||
+        (Boolean(initiatedByUserId) && currentUserIdRef.current !== initiatedByUserId)
+      ) {
+        return;
+      }
       if (err instanceof AppApiError) {
+        if (err.code === 'FAVORITE_OPERATION_IN_PROGRESS' || err.code === 'SESSION_USER_MISMATCH') {
+          return;
+        }
         if (err.statusCode === 409) {
           setFavError('Loài cây đã có trong danh sách yêu thích, đã đồng bộ trạng thái mới nhất.');
           return;
@@ -501,8 +531,9 @@ export function SearchScreen() {
                     key={item.id}
                     item={item}
                     isPending={isSpeciesPending(item.id)}
+                    isAnyFavoritePending={isAnyFavoritePending}
                     onToggleFavorite={() => {
-                      handleFavoriteToggle(item);
+                      void handleFavoriteToggle(item);
                     }}
                     onOpenDetail={() =>
                       router.push({

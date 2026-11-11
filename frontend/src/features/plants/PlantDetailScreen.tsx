@@ -1,13 +1,15 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import { router, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GoPlantColors as C, GoPlantTypography as F } from '@/constants/theme';
+import { useAuth } from '@/features/auth/AuthProvider';
 import { plantCatalog, usePlantData } from '@/features/plants/PlantDataStore';
 import { useFavoriteToggle, useSpeciesDetail } from '@/features/species/speciesHooks';
 import { AppApiError } from '@/services/api/apiError';
+import { getSessionGeneration } from '@/services/api/tokenStorage';
 
 const missing = 'Chưa có dữ liệu';
 
@@ -25,6 +27,11 @@ export default function PlantDetailScreen() {
   const cleanSpeciesId = typeof speciesId === 'string' ? speciesId.trim() : '';
   const cleanOwnedId = typeof ownedId === 'string' ? ownedId.trim() : '';
 
+  const { user } = useAuth();
+  const currentUserId = typeof user?.id === 'string' ? user.id.trim() : '';
+  const currentUserIdRef = useRef(currentUserId);
+  const prevUserIdRef = useRef(currentUserId);
+
   const { ownedPlants } = usePlantData();
   const owned = cleanOwnedId ? ownedPlants.find((item) => item.id === cleanOwnedId) : undefined;
 
@@ -32,8 +39,17 @@ export default function PlantDetailScreen() {
   const speciesQuery = useSpeciesDetail(cleanSpeciesId, {
     enabled: Boolean(cleanSpeciesId) && !isOwnedDemoMode,
   });
-  const { toggleFavorite, isSpeciesPending } = useFavoriteToggle();
+  const { toggleFavorite, isSpeciesPending, isAnyFavoritePending } = useFavoriteToggle();
   const [favoriteError, setFavoriteError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const prevUserId = prevUserIdRef.current;
+    prevUserIdRef.current = currentUserId;
+    currentUserIdRef.current = currentUserId;
+    if (prevUserId && prevUserId !== currentUserId) {
+      setFavoriteError(null);
+    }
+  }, [currentUserId]);
 
   if (isOwnedDemoMode && owned) {
     const sampleRef = plantCatalog.find((item) => item.id === owned.catalogId);
@@ -170,11 +186,22 @@ export default function PlantDetailScreen() {
   const favPending = isSpeciesPending(species.id);
 
   const handleToggleFavorite = async () => {
+    const initiatedGeneration = getSessionGeneration();
+    const initiatedByUserId = currentUserIdRef.current;
     setFavoriteError(null);
     try {
       await toggleFavorite(species.id, species.isFavorited);
     } catch (err) {
+      if (
+        getSessionGeneration() !== initiatedGeneration ||
+        (Boolean(initiatedByUserId) && currentUserIdRef.current !== initiatedByUserId)
+      ) {
+        return;
+      }
       if (err instanceof AppApiError) {
+        if (err.code === 'FAVORITE_OPERATION_IN_PROGRESS' || err.code === 'SESSION_USER_MISMATCH') {
+          return;
+        }
         if (err.statusCode === 409) {
           setFavoriteError('Loài cây này đã có trong danh sách yêu thích, đã đồng bộ lại trạng thái.');
           return;
@@ -198,12 +225,14 @@ export default function PlantDetailScreen() {
         </Pressable>
         <Text style={d.headerTitle}>Chi tiết loài cây</Text>
         <Pressable
-          disabled={favPending}
-          onPress={handleToggleFavorite}
+          disabled={isAnyFavoritePending}
+          onPress={() => {
+            void handleToggleFavorite();
+          }}
           accessibilityRole="button"
           accessibilityLabel={species.isFavorited ? 'Bỏ yêu thích' : 'Thêm yêu thích'}
-          accessibilityState={{ disabled: favPending }}
-          style={[d.heartButton, favPending && d.heartButtonDisabled]}
+          accessibilityState={{ disabled: isAnyFavoritePending }}
+          style={[d.heartButton, isAnyFavoritePending && d.heartButtonDisabled]}
         >
           <Text style={d.heart}>{favPending ? '…' : species.isFavorited ? '♥' : '♡'}</Text>
         </Pressable>

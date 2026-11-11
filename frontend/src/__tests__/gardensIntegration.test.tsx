@@ -204,6 +204,16 @@ function changeInputValue(el: Element | null | undefined, nextValue: string) {
   });
 }
 
+function createDeferred<T = unknown>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('G5.3 Gardens REST API Integration', () => {
   const originalAdapter = apiClient.defaults.adapter;
   let container: HTMLDivElement | null = null;
@@ -213,6 +223,7 @@ describe('G5.3 Gardens REST API Integration', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     routeParamsState.current = {};
+    tokenStorage._resetWebMemorySession();
     qc = createTestQueryClient();
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -230,6 +241,7 @@ describe('G5.3 Gardens REST API Integration', () => {
       container.remove();
       container = null;
     }
+    tokenStorage._resetWebMemorySession();
     qc.clear();
     apiClient.defaults.adapter = originalAdapter;
     vi.restoreAllMocks();
@@ -552,8 +564,10 @@ describe('G5.3 Gardens REST API Integration', () => {
       });
 
       await waitFor(() => {
-        expect(qc.getQueryData<GardenSummaryDto[]>(queryKeys.gardens.list)).toHaveLength(1);
-        expect(qc.getQueryData<GardenDetailDto>(queryKeys.gardens.detail('grd-1'))?.id).toBe('grd-1');
+        expect(qc.getQueryData<GardenSummaryDto[]>(queryKeys.gardens.list(mockUser.id))).toHaveLength(1);
+        expect(qc.getQueryData<GardenDetailDto>(queryKeys.gardens.detail(mockUser.id, 'grd-1'))?.id).toBe(
+          'grd-1'
+        );
       });
 
       // Create updates list & sets created detail cache
@@ -565,9 +579,9 @@ describe('G5.3 Gardens REST API Integration', () => {
         });
       });
       await waitFor(() => {
-        expect(qc.getQueryData<GardenDetailDto>(queryKeys.gardens.detail('grd-created'))?.name).toBe(
-          'Vườn mới tạo'
-        );
+        expect(
+          qc.getQueryData<GardenDetailDto>(queryKeys.gardens.detail(mockUser.id, 'grd-created'))?.name
+        ).toBe('Vườn mới tạo');
       });
 
       // Update syncs detail & list
@@ -578,7 +592,7 @@ describe('G5.3 Gardens REST API Integration', () => {
         });
       });
       await waitFor(() => {
-        expect(qc.getQueryData<GardenDetailDto>(queryKeys.gardens.detail('grd-1'))?.name).toBe(
+        expect(qc.getQueryData<GardenDetailDto>(queryKeys.gardens.detail(mockUser.id, 'grd-1'))?.name).toBe(
           'Ban công đã sửa'
         );
       });
@@ -588,9 +602,9 @@ describe('G5.3 Gardens REST API Integration', () => {
         await deleteMut.mutateAsync('grd-1');
       });
       await waitFor(() => {
-        expect(qc.getQueryData(queryKeys.gardens.detail('grd-1'))).toBeUndefined();
+        expect(qc.getQueryData(queryKeys.gardens.detail(mockUser.id, 'grd-1'))).toBeUndefined();
         const remainingIds =
-          qc.getQueryData<GardenSummaryDto[]>(queryKeys.gardens.list)?.map((g) => g.id) ?? [];
+          qc.getQueryData<GardenSummaryDto[]>(queryKeys.gardens.list(mockUser.id))?.map((g) => g.id) ?? [];
         expect(remainingIds).not.toContain('grd-1');
         expect(remainingIds).toContain('grd-created');
       });
@@ -917,7 +931,7 @@ describe('G5.3 Gardens REST API Integration', () => {
       await waitFor(() => {
         expect(deletedCalled).toBe(true);
         expect(mockRouter.replace).toHaveBeenCalledWith('/gardens');
-        expect(qc.getQueryData(queryKeys.gardens.detail('grd-1'))).toBeUndefined();
+        expect(qc.getQueryData(queryKeys.gardens.detail(mockUser.id, 'grd-1'))).toBeUndefined();
       });
       // Must NOT trigger an extra spurious GET /gardens/grd-1 refetch after delete removes cache
       expect(getDetailCalls).toBe(detailCallsBeforeDelete);
@@ -1074,6 +1088,419 @@ describe('G5.3 Gardens REST API Integration', () => {
         expect(container!.textContent).toContain('Trầu bà đế vương');
         expect(container!.textContent).toContain('Cây đang sở hữu (Demo G5.4)');
       });
+    });
+  });
+
+  describe('G5.3.1 Account Switch Cache Isolation Regression (Section 5 - Gardens)', () => {
+    const userA = {
+      id: 'usr_garden_acc_a',
+      fullName: 'Chủ vườn A',
+      email: 'gardena@goplant.vn',
+      roles: ['ROLE_USER'],
+    };
+    const userB = {
+      id: 'usr_garden_acc_b',
+      fullName: 'Chủ vườn B',
+      email: 'gardenb@goplant.vn',
+      roles: ['ROLE_USER'],
+    };
+    const sessionA: AuthSession = {
+      accessToken: 'jwt-garden-user-a',
+      tokenType: 'Bearer',
+      expiresIn: 3600,
+      user: userA,
+      savedAt: Date.now(),
+    };
+    const sessionB: AuthSession = {
+      accessToken: 'jwt-garden-user-b',
+      tokenType: 'Bearer',
+      expiresIn: 3600,
+      user: userB,
+      savedAt: Date.now(),
+    };
+    const profileA: UserProfileDto = { ...mockProfile, ...userA };
+    const profileB: UserProfileDto = { ...mockProfile, ...userB };
+
+    const gardenBList: GardenSummaryDto[] = [
+      {
+        id: 'grd-b-1',
+        name: 'Vườn riêng của User B',
+        location: 'Phòng khách B',
+        spaceType: 'TRONG_NHA',
+        coverImageUrl: null,
+        plantCount: 2,
+        createdAt: '2026-02-01T00:00:00Z',
+      },
+    ];
+
+    function mountWithRealAuth(ui: React.ReactElement) {
+      act(() => {
+        root!.render(
+          <QueryClientProvider client={qc}>
+            <AuthProvider>
+              <PlantDataProvider>{ui}</PlantDataProvider>
+            </AuthProvider>
+          </QueryClientProvider>
+        );
+      });
+    }
+
+    it('Section 5 Test 3: pending User A garden creation resolved after switching to User B does NOT leak User A garden into User B cache or UI', async () => {
+      await tokenStorage.saveSession(sessionA);
+      const pendingCreateA = createDeferred<unknown>();
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        const authHeader = config.headers?.Authorization as string | undefined;
+        const isB = authHeader === `Bearer ${sessionB.accessToken}`;
+
+        if (config.url === '/auth/login' && config.method === 'post') {
+          return { status: 200, data: { success: true, data: sessionB }, headers: {}, config };
+        }
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: isB ? profileB : profileA }, headers: {}, config };
+        }
+        if (config.url === '/gardens' && config.method === 'get') {
+          return {
+            status: 200,
+            data: { success: true, data: isB ? gardenBList : [gardenSummaryBalcony] },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/gardens' && config.method === 'post') {
+          expect(authHeader).toBe(`Bearer ${sessionA.accessToken}`);
+          const payload = JSON.parse(String(config.data));
+          await pendingCreateA.promise;
+          return {
+            status: 201,
+            data: {
+              success: true,
+              data: {
+                id: 'grd-a-created',
+                name: payload.name,
+                location: payload.location,
+                spaceType: payload.spaceType,
+                description: null,
+                coverImageUrl: null,
+                plants: [],
+                createdAt: '2026-02-05T00:00:00Z',
+                updatedAt: '2026-02-05T00:00:00Z',
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+      });
+
+      let authCtx!: ReturnType<typeof useAuth>;
+      let createMut!: ReturnType<typeof useCreateGardenMutation>;
+      function Probe() {
+        authCtx = useAuth();
+        createMut = useCreateGardenMutation();
+        return null;
+      }
+
+      mountWithRealAuth(
+        <>
+          <Probe />
+          <GardensTabContent />
+        </>
+      );
+
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(userA.id);
+        expect(container!.textContent).toContain('Ban công nắng sáng');
+      });
+
+      // User A initiates garden creation (POST held pending)
+      let pendingCreatePromise!: Promise<unknown>;
+      act(() => {
+        pendingCreatePromise = createMut
+          .mutateAsync({
+            name: 'Vườn bí mật của A',
+            location: 'Sân thượng A',
+            spaceType: 'SAN_THUONG',
+          })
+          .catch((err) => err);
+      });
+      await waitFor(() => expect(createMut.isPending).toBe(true));
+
+      // Switch to User B while User A's POST is pending
+      await act(async () => {
+        await authCtx.logout();
+        await authCtx.login({ account: userB.email, password: 'Password123@' });
+      });
+
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(userB.id);
+        expect(container!.textContent).toContain('Vườn riêng của User B');
+      });
+
+      // Now resolve User A's stale POST
+      await act(async () => {
+        pendingCreateA.resolve(undefined);
+        await pendingCreatePromise;
+      });
+      await flushAsync(40);
+
+      // Verify User B cache and UI never contain User A's created garden
+      const listB = qc.getQueryData<GardenSummaryDto[]>(queryKeys.gardens.list(userB.id));
+      expect(listB?.map((item) => item.id)).toEqual(['grd-b-1']);
+      expect(qc.getQueryData(queryKeys.gardens.detail(userB.id, 'grd-a-created'))).toBeUndefined();
+      expect(container!.textContent).toContain('Vườn riêng của User B');
+      expect(container!.textContent).not.toContain('Vườn bí mật của A');
+      expect(mockRouter.replace).not.toHaveBeenCalled();
+    });
+
+    it('Section 5 Test 4: pending User A garden update & delete resolved after switching to User B never corrupt User B cache or trigger UI navigation/alerts', async () => {
+      await tokenStorage.saveSession(sessionA);
+      const pendingUpdateA = createDeferred<unknown>();
+      const pendingDeleteA = createDeferred<unknown>();
+      vi.spyOn(Alert, 'alert').mockImplementation(() => {});
+
+      const gardenDetailForB: GardenDetailDto = {
+        ...gardenDetailOne,
+        id: 'grd-1',
+        name: 'Vườn của User B (grd-1)',
+        location: 'Phòng khách B',
+        plants: [],
+      };
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        const authHeader = config.headers?.Authorization as string | undefined;
+        const isB = authHeader === `Bearer ${sessionB.accessToken}`;
+
+        if (config.url === '/auth/login' && config.method === 'post') {
+          const payload = JSON.parse(String(config.data)) as { account?: string };
+          return {
+            status: 200,
+            data: { success: true, data: payload.account === userA.email ? sessionA : sessionB },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: isB ? profileB : profileA }, headers: {}, config };
+        }
+        if (config.url === '/gardens' && config.method === 'get') {
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: isB ? [{ ...gardenSummaryBalcony, name: 'Vườn của User B (grd-1)' }] : [gardenSummaryBalcony],
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/gardens/grd-1' && config.method === 'get') {
+          return {
+            status: 200,
+            data: { success: true, data: isB ? gardenDetailForB : gardenDetailOne },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/gardens/grd-1' && config.method === 'put') {
+          expect(authHeader).toBe(`Bearer ${sessionA.accessToken}`);
+          await pendingUpdateA.promise;
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: { ...gardenDetailOne, name: 'Tên bị đổi bởi User A' },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/gardens/grd-1' && config.method === 'delete') {
+          expect(authHeader).toBe(`Bearer ${sessionA.accessToken}`);
+          await pendingDeleteA.promise;
+          return {
+            status: 200,
+            data: { success: true, data: { message: 'Deleted by User A' } },
+            headers: {},
+            config,
+          };
+        }
+        throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+      });
+
+      let authCtx!: ReturnType<typeof useAuth>;
+      let updateMut!: ReturnType<typeof useUpdateGardenMutation>;
+      let deleteMut!: ReturnType<typeof useDeleteGardenMutation>;
+      function Probe() {
+        authCtx = useAuth();
+        useGardensList();
+        useGardenDetail('grd-1');
+        updateMut = useUpdateGardenMutation();
+        deleteMut = useDeleteGardenMutation();
+        return null;
+      }
+
+      routeParamsState.current = { gardenId: 'grd-1' };
+      mountWithRealAuth(
+        <>
+          <Probe />
+          <GardenDetailScreen />
+        </>
+      );
+
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(userA.id);
+        expect(container!.textContent).toContain('Ban công nắng sáng');
+      });
+
+      // Start update for A, hold pending, switch to User B
+      let pendingUpdatePromise!: Promise<unknown>;
+      act(() => {
+        pendingUpdatePromise = updateMut
+          .mutateAsync({ gardenId: 'grd-1', data: { name: 'Tên bị đổi bởi User A' } })
+          .catch((err) => err);
+      });
+      await waitFor(() => expect(updateMut.isPending).toBe(true));
+
+      await act(async () => {
+        await authCtx.logout();
+        await authCtx.login({ account: userB.email, password: 'Password123@' });
+      });
+
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(userB.id);
+        expect(container!.textContent).toContain('Vườn của User B (grd-1)');
+        expect(qc.getQueryData<GardenDetailDto>(queryKeys.gardens.detail(userB.id, 'grd-1'))?.name).toBe(
+          'Vườn của User B (grd-1)'
+        );
+      });
+
+      // Resolve A's stale PUT -> User B detail & list cache stay untouched!
+      await act(async () => {
+        pendingUpdateA.resolve(undefined);
+        await pendingUpdatePromise;
+      });
+      await flushAsync(40);
+
+      expect(qc.getQueryData<GardenDetailDto>(queryKeys.gardens.detail(userB.id, 'grd-1'))?.name).toBe(
+        'Vườn của User B (grd-1)'
+      );
+      expect(qc.getQueryData<GardenSummaryDto[]>(queryKeys.gardens.list(userB.id))?.[0].name).toBe(
+        'Vườn của User B (grd-1)'
+      );
+      expect(container!.textContent).not.toContain('Tên bị đổi bởi User A');
+
+      // Now switch back to A, start DELETE on grd-1, switch to User B, resolve DELETE -> User B grd-1 must NOT be removed!
+      await act(async () => {
+        await authCtx.logout();
+        await authCtx.login({ account: userA.email, password: 'Password123@' });
+      });
+      await waitFor(() => expect(authCtx.user?.id).toBe(userA.id));
+
+      let pendingDeletePromise!: Promise<unknown>;
+      act(() => {
+        pendingDeletePromise = deleteMut.mutateAsync('grd-1').catch((err) => err);
+      });
+      await waitFor(() => expect(deleteMut.isPending).toBe(true));
+
+      await act(async () => {
+        await authCtx.logout();
+        await authCtx.login({ account: userB.email, password: 'Password123@' });
+      });
+
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(userB.id);
+        expect(container!.textContent).toContain('Vườn của User B (grd-1)');
+      });
+
+      await act(async () => {
+        pendingDeleteA.resolve(undefined);
+        await pendingDeletePromise;
+      });
+      await flushAsync(40);
+
+      // User B's detail & list cache are completely preserved and no stale redirect happened
+      expect(qc.getQueryData<GardenDetailDto>(queryKeys.gardens.detail(userB.id, 'grd-1'))?.name).toBe(
+        'Vườn của User B (grd-1)'
+      );
+      expect(qc.getQueryData<GardenSummaryDto[]>(queryKeys.gardens.list(userB.id))?.length).toBe(1);
+      expect(mockRouter.replace).not.toHaveBeenCalled();
+    });
+
+    it('Section 5 Test 5 (Gardens): mounted useGardensList and useGardenDetail hooks create strictly distinct user-scoped query keys for User A vs User B', async () => {
+      await tokenStorage.saveSession(sessionA);
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        const authHeader = config.headers?.Authorization as string | undefined;
+        const isB = authHeader === `Bearer ${sessionB.accessToken}`;
+
+        if (config.url === '/auth/login' && config.method === 'post') {
+          return { status: 200, data: { success: true, data: sessionB }, headers: {}, config };
+        }
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: isB ? profileB : profileA }, headers: {}, config };
+        }
+        if (config.url === '/gardens') {
+          return {
+            status: 200,
+            data: { success: true, data: isB ? gardenBList : [gardenSummaryBalcony] },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/gardens/grd-1') {
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                ...gardenDetailOne,
+                name: isB ? 'User B Detail grd-1' : 'User A Detail grd-1',
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        throw new Error(`Unexpected call: ${config.url}`);
+      });
+
+      let authCtx!: ReturnType<typeof useAuth>;
+      let listQuery!: ReturnType<typeof useGardensList>;
+      let detailQuery!: ReturnType<typeof useGardenDetail>;
+
+      function GardenKeyProbe() {
+        authCtx = useAuth();
+        listQuery = useGardensList();
+        detailQuery = useGardenDetail('grd-1');
+        return null;
+      }
+
+      mountWithRealAuth(<GardenKeyProbe />);
+
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(userA.id);
+        expect(listQuery.data?.[0].id).toBe('grd-1');
+        expect(detailQuery.data?.name).toBe('User A Detail grd-1');
+      });
+
+      await act(async () => {
+        await authCtx.logout();
+        await authCtx.login({ account: userB.email, password: 'Password123@' });
+      });
+
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(userB.id);
+        expect(listQuery.data?.[0].id).toBe('grd-b-1');
+        expect(detailQuery.data?.name).toBe('User B Detail grd-1');
+      });
+
+      const allQueryKeys = qc.getQueryCache().getAll().map((entry) => entry.queryKey);
+      expect(allQueryKeys).toContainEqual(queryKeys.gardens.list(userA.id));
+      expect(allQueryKeys).toContainEqual(queryKeys.gardens.list(userB.id));
+      expect(allQueryKeys).toContainEqual(queryKeys.gardens.detail(userA.id, 'grd-1'));
+      expect(allQueryKeys).toContainEqual(queryKeys.gardens.detail(userB.id, 'grd-1'));
     });
   });
 });

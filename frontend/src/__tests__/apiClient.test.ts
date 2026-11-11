@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { Platform } from 'react-native';
 import {
   apiClient,
   registerUnauthorizedHandler,
@@ -11,6 +12,8 @@ import {
 import * as tokenStorage from '../services/api/tokenStorage';
 import { StorageError } from '../services/api/tokenStorage';
 import { AppApiError } from '../services/api/apiError';
+import type { AuthSession } from '../services/api/apiTypes';
+import { shouldRetry } from '../services/query/queryClient';
 
 describe('apiClient & Authentication Interceptors', () => {
   const originalAdapter = apiClient.defaults.adapter;
@@ -745,6 +748,239 @@ describe('apiClient & Authentication Interceptors', () => {
         )
       ).rejects.toMatchObject({ statusCode: 401 });
       expect(unauthorizedSpy).toHaveBeenCalledTimes(2);
+
+      unregister();
+    });
+  });
+
+  describe('Session Identity Guard (expectedUserId & expectedSessionGeneration - G5.3.1)', () => {
+    const originalPlatformOS = Platform.OS;
+
+    const sessionUserA: AuthSession = {
+      accessToken: 'jwt-token-user-a',
+      tokenType: 'Bearer',
+      expiresIn: 3600,
+      user: {
+        id: 'usr_A',
+        fullName: 'User A',
+        email: 'a@goplant.vn',
+        roles: ['ROLE_USER'],
+      },
+      savedAt: Date.now(),
+    };
+
+    const sessionUserB: AuthSession = {
+      accessToken: 'jwt-token-user-b',
+      tokenType: 'Bearer',
+      expiresIn: 3600,
+      user: {
+        id: 'usr_B',
+        fullName: 'User B',
+        email: 'b@goplant.vn',
+        roles: ['ROLE_USER'],
+      },
+      savedAt: Date.now(),
+    };
+
+    beforeEach(() => {
+      (Platform as { OS: string }).OS = 'web';
+      tokenStorage._resetWebMemorySession();
+    });
+
+    afterEach(() => {
+      tokenStorage._resetWebMemorySession();
+      (Platform as { OS: string }).OS = originalPlatformOS;
+      vi.restoreAllMocks();
+    });
+
+    it('attaches Bearer token when expectedUserId and expectedSessionGeneration match active session', async () => {
+      await tokenStorage.saveSession(sessionUserA);
+      const genA = tokenStorage.getSessionGeneration();
+
+      const capturedHeaders: (string | undefined)[] = [];
+      const mockAdapter = vi.fn().mockImplementation((config) => {
+        capturedHeaders.push(config.headers?.Authorization as string | undefined);
+        return Promise.resolve({
+          status: 200,
+          data: { success: true, data: [] },
+          headers: {},
+          config,
+        });
+      });
+      apiClient.defaults.adapter = mockAdapter;
+
+      await apiClient.get('/gardens', {
+        expectedUserId: 'usr_A',
+        expectedSessionGeneration: genA,
+      });
+
+      expect(mockAdapter).toHaveBeenCalledTimes(1);
+      expect(capturedHeaders).toEqual(['Bearer jwt-token-user-a']);
+    });
+
+    it('aborts request BEFORE sending or leaking User B JWT when session changed from A to B (SESSION_USER_MISMATCH, non-retryable, no fake 401)', async () => {
+      await tokenStorage.saveSession(sessionUserA);
+      const genA = tokenStorage.getSessionGeneration();
+
+      // Switch active session to User B cleanly
+      await tokenStorage.clearSession();
+      await tokenStorage.saveSession(sessionUserB);
+
+      const mockAdapter = vi.fn();
+      apiClient.defaults.adapter = mockAdapter;
+      const unauthorizedSpy = vi.fn();
+      const unregister = registerUnauthorizedHandler(unauthorizedSpy);
+
+      let caughtError: AppApiError | null = null;
+      try {
+        await apiClient.post(
+          '/gardens',
+          { name: 'Stale A garden', location: 'Loc', spaceType: 'BAN_CONG' },
+          {
+            expectedUserId: 'usr_A',
+            expectedSessionGeneration: genA,
+          }
+        );
+      } catch (err) {
+        caughtError = err as AppApiError;
+      }
+
+      expect(caughtError).toBeInstanceOf(AppApiError);
+      expect(caughtError?.code).toBe('SESSION_USER_MISMATCH');
+      expect(caughtError?.statusCode).toBeUndefined();
+      expect(shouldRetry(0, caughtError)).toBe(false);
+      expect(mockAdapter).not.toHaveBeenCalled();
+      expect(unauthorizedSpy).not.toHaveBeenCalled();
+      unregister();
+    });
+
+    it('aborts request when active session belongs to same user after logout + re-login (stale expectedSessionGeneration)', async () => {
+      await tokenStorage.saveSession(sessionUserA);
+      const oldGenA = tokenStorage.getSessionGeneration();
+
+      await tokenStorage.clearSession();
+      await tokenStorage.saveSession(sessionUserA);
+      const newGenA = tokenStorage.getSessionGeneration();
+      expect(newGenA).not.toBe(oldGenA);
+
+      const mockAdapter = vi.fn();
+      apiClient.defaults.adapter = mockAdapter;
+
+      await expect(
+        apiClient.post(
+          '/species/sp-1/favorite',
+          undefined,
+          {
+            expectedUserId: 'usr_A',
+            expectedSessionGeneration: oldGenA,
+          }
+        )
+      ).rejects.toMatchObject({
+        code: 'SESSION_USER_MISMATCH',
+      });
+
+      expect(mockAdapter).not.toHaveBeenCalled();
+    });
+
+    it('rejects empty/whitespace expectedUserId locally without reading storage or hitting network', async () => {
+      await tokenStorage.saveSession(sessionUserA);
+      const getSessionSpy = vi.spyOn(tokenStorage, 'getSession');
+      const mockAdapter = vi.fn();
+      apiClient.defaults.adapter = mockAdapter;
+
+      await expect(
+        apiClient.get('/species', { expectedUserId: '   ' })
+      ).rejects.toMatchObject({ code: 'SESSION_USER_MISMATCH' });
+
+      expect(getSessionSpy).not.toHaveBeenCalled();
+      expect(mockAdapter).not.toHaveBeenCalled();
+    });
+
+    it('rejects locally with SESSION_USER_MISMATCH if User A session switches to User B even without expectedSessionGeneration', async () => {
+      await tokenStorage.saveSession(sessionUserB);
+
+      const mockAdapter = vi.fn();
+      apiClient.defaults.adapter = mockAdapter;
+      const unauthorizedSpy = vi.fn();
+      const unregister = registerUnauthorizedHandler(unauthorizedSpy);
+
+      await expect(
+        apiClient.get('/species/favorites', { expectedUserId: 'usr_A' })
+      ).rejects.toMatchObject({ code: 'SESSION_USER_MISMATCH' });
+
+      expect(mockAdapter).not.toHaveBeenCalled();
+      expect(unauthorizedSpy).not.toHaveBeenCalled();
+      unregister();
+    });
+
+    it('never triggers unauthorizedListener for a delayed HTTP 401 belonging to a previous session or user', async () => {
+      await tokenStorage.saveSession(sessionUserA);
+      const genA = tokenStorage.getSessionGeneration();
+
+      const unauthorizedSpy = vi.fn();
+      const unregister = registerUnauthorizedHandler(unauthorizedSpy);
+
+      let resolveDeferred!: (value: unknown) => void;
+      const deferred401 = new Promise((resolve) => {
+        resolveDeferred = resolve;
+      });
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        await deferred401;
+        return Promise.reject({
+          isAxiosError: true,
+          response: {
+            status: 401,
+            data: {
+              success: false,
+              error: { code: 'UNAUTHORIZED', message: 'Expired token from A' },
+            },
+          },
+          config,
+        });
+      });
+
+      const pendingRequest = apiClient
+        .get('/gardens', {
+          expectedUserId: 'usr_A',
+          expectedSessionGeneration: genA,
+        })
+        .catch((err) => err);
+
+      // Give request interceptor time to pass and enter adapter
+      await new Promise((r) => setTimeout(r, 10));
+
+      // Switch session to User B before A's 401 response arrives
+      await tokenStorage.clearSession();
+      await tokenStorage.saveSession(sessionUserB);
+
+      resolveDeferred(undefined);
+      const settledErr = await pendingRequest;
+
+      expect(settledErr).toBeInstanceOf(AppApiError);
+      expect((settledErr as AppApiError).statusCode).toBe(401);
+      // Must NOT log out active User B
+      expect(unauthorizedSpy).not.toHaveBeenCalled();
+
+      // A genuine 401 for active User B STILL triggers unauthorizedListener
+      apiClient.defaults.adapter = vi.fn().mockRejectedValue({
+        isAxiosError: true,
+        response: {
+          status: 401,
+          data: {
+            success: false,
+            error: { code: 'UNAUTHORIZED', message: 'Expired token from B' },
+          },
+        },
+        config: { url: '/gardens' },
+      });
+      await expect(
+        apiClient.get('/gardens', {
+          expectedUserId: 'usr_B',
+          expectedSessionGeneration: tokenStorage.getSessionGeneration(),
+        })
+      ).rejects.toMatchObject({ statusCode: 401 });
+      expect(unauthorizedSpy).toHaveBeenCalledTimes(1);
 
       unregister();
     });

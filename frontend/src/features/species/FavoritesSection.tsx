@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
 
 import { GoPlantColors as C, GoPlantTypography as F } from '@/constants/theme';
+import { useAuth } from '@/features/auth/AuthProvider';
 import { AppApiError } from '@/services/api/apiError';
+import { getSessionGeneration } from '@/services/api/tokenStorage';
 import { useFavoriteSpecies, useFavoriteToggle } from './speciesHooks';
 import type { SpeciesSummaryDto } from './speciesTypes';
 
@@ -13,16 +15,31 @@ export interface FavoritesSectionProps {
 }
 
 export function FavoritesSection({ pageSize = 20 }: FavoritesSectionProps) {
+  const { user } = useAuth();
+  const currentUserId = typeof user?.id === 'string' ? user.id.trim() : '';
+  const currentUserIdRef = useRef(currentUserId);
+  const prevUserIdRef = useRef(currentUserId);
+
   const [page, setPage] = useState(0);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const favoritesQuery = useFavoriteSpecies({ page, size: pageSize });
-  const { toggleFavorite, isSpeciesPending } = useFavoriteToggle();
+  const { toggleFavorite, isSpeciesPending, isAnyFavoritePending } = useFavoriteToggle();
 
   const data = favoritesQuery.data;
   const items = data?.content ?? [];
   const totalElements = data?.totalElements ?? 0;
   const totalPages = data?.totalPages ?? 0;
+
+  useEffect(() => {
+    const prevUserId = prevUserIdRef.current;
+    prevUserIdRef.current = currentUserId;
+    currentUserIdRef.current = currentUserId;
+    if (prevUserId && prevUserId !== currentUserId) {
+      setPage(0);
+      setActionError(null);
+    }
+  }, [currentUserId]);
 
   // Keep current page within bounds when unfavoriting the final item on a page
   useEffect(() => {
@@ -34,11 +51,22 @@ export function FavoritesSection({ pageSize = 20 }: FavoritesSectionProps) {
   }, [data, page, totalPages]);
 
   const handleRemoveFavorite = async (item: SpeciesSummaryDto) => {
+    const initiatedGeneration = getSessionGeneration();
+    const initiatedByUserId = currentUserIdRef.current;
     setActionError(null);
     try {
       await toggleFavorite(item.id, true);
     } catch (err) {
+      if (
+        getSessionGeneration() !== initiatedGeneration ||
+        (Boolean(initiatedByUserId) && currentUserIdRef.current !== initiatedByUserId)
+      ) {
+        return;
+      }
       if (err instanceof AppApiError) {
+        if (err.code === 'FAVORITE_OPERATION_IN_PROGRESS' || err.code === 'SESSION_USER_MISMATCH') {
+          return;
+        }
         if (err.statusCode === 404) {
           setActionError('Loài cây này không còn trong danh sách yêu thích, đã đồng bộ lại dữ liệu.');
           return;
@@ -125,14 +153,14 @@ export function FavoritesSection({ pageSize = 20 }: FavoritesSectionProps) {
                   </View>
                 </Pressable>
                 <Pressable
-                  disabled={pending}
+                  disabled={isAnyFavoritePending}
                   onPress={() => {
-                    handleRemoveFavorite(plant);
+                    void handleRemoveFavorite(plant);
                   }}
                   accessibilityRole="button"
                   accessibilityLabel={`Bỏ yêu thích ${plant.commonName}`}
-                  accessibilityState={{ disabled: pending }}
-                  style={[fs.favButton, pending && fs.favButtonDisabled]}
+                  accessibilityState={{ disabled: isAnyFavoritePending }}
+                  style={[fs.favButton, isAnyFavoritePending && fs.favButtonDisabled]}
                 >
                   <Text style={fs.heart}>{pending ? '…' : '♥'}</Text>
                 </Pressable>

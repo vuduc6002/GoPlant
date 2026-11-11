@@ -20,6 +20,8 @@ import {
   removeFavoriteSpecies,
 } from '@/features/species/speciesApi';
 import {
+  _resetFavoriteLockForTests,
+  useFavoritePendingState,
   useFavoriteSpecies,
   useFavoriteToggle,
   useSpeciesDetail,
@@ -218,6 +220,16 @@ function submitInput(el: Element | null | undefined) {
   });
 }
 
+function createDeferred<T = unknown>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('G5.3 Species & Favorites Integration', () => {
   const originalAdapter = apiClient.defaults.adapter;
   let container: HTMLDivElement | null = null;
@@ -227,6 +239,8 @@ describe('G5.3 Species & Favorites Integration', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     routeParamsState.current = {};
+    _resetFavoriteLockForTests();
+    tokenStorage._resetWebMemorySession();
     qc = createTestQueryClient();
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -244,6 +258,8 @@ describe('G5.3 Species & Favorites Integration', () => {
       container.remove();
       container = null;
     }
+    _resetFavoriteLockForTests();
+    tokenStorage._resetWebMemorySession();
     qc.clear();
     apiClient.defaults.adapter = originalAdapter;
     vi.restoreAllMocks();
@@ -602,11 +618,11 @@ describe('G5.3 Species & Favorites Integration', () => {
       });
 
       await waitFor(() => {
-        expect(qc.getQueryData(queryKeys.species.detail('sp-1'))).toBeDefined();
+        expect(qc.getQueryData(queryKeys.species.detail(mockUser.id, 'sp-1'))).toBeDefined();
         expect(
-          qc.getQueryData(queryKeys.species.list({ page: 0, size: 20, sort: 'commonName,asc' }))
+          qc.getQueryData(queryKeys.species.list(mockUser.id, { page: 0, size: 20, sort: 'commonName,asc' }))
         ).toBeDefined();
-        expect(qc.getQueryData(queryKeys.species.favorites({ page: 0, size: 20 }))).toBeDefined();
+        expect(qc.getQueryData(queryKeys.species.favorites(mockUser.id, { page: 0, size: 20 }))).toBeDefined();
       });
 
       // Concurrent double-call for sp-1 dispatches ONLY ONE POST request
@@ -618,13 +634,14 @@ describe('G5.3 Species & Favorites Integration', () => {
 
       expect(postFavCalls).toBe(1);
 
-      const listKey = queryKeys.species.list({ page: 0, size: 20, sort: 'commonName,asc' });
+      const listKey = queryKeys.species.list(mockUser.id, { page: 0, size: 20, sort: 'commonName,asc' });
       await waitFor(() => {
         expect(qc.getQueryData<PageResponse<SpeciesSummaryDto>>(listKey)?.content[0].isFavorited).toBe(true);
-        expect(qc.getQueryData<SpeciesDetailDto>(queryKeys.species.detail('sp-1'))?.isFavorited).toBe(true);
+        expect(qc.getQueryData<SpeciesDetailDto>(queryKeys.species.detail(mockUser.id, 'sp-1'))?.isFavorited).toBe(true);
         expect(
-          qc.getQueryData<PageResponse<SpeciesSummaryDto>>(queryKeys.species.favorites({ page: 0, size: 20 }))
-            ?.totalElements
+          qc.getQueryData<PageResponse<SpeciesSummaryDto>>(
+            queryKeys.species.favorites(mockUser.id, { page: 0, size: 20 })
+          )?.totalElements
         ).toBe(2);
       });
 
@@ -640,7 +657,9 @@ describe('G5.3 Species & Favorites Integration', () => {
         }
       });
       // Cache stays reconciled to isFavorited = true (not rolled back to false!)
-      expect(qc.getQueryData<SpeciesDetailDto>(queryKeys.species.detail('sp-1'))?.isFavorited).toBe(true);
+      expect(
+        qc.getQueryData<SpeciesDetailDto>(queryKeys.species.detail(mockUser.id, 'sp-1'))?.isFavorited
+      ).toBe(true);
 
       // Simulate DELETE hitting 404 (already removed on server): reconciles favorites cache by removing sp-2
       force404OnDelete = true;
@@ -657,7 +676,7 @@ describe('G5.3 Species & Favorites Integration', () => {
         const remainingFavIds =
           qc
             .getQueryData<PageResponse<SpeciesSummaryDto>>(
-              queryKeys.species.favorites({ page: 0, size: 20 })
+              queryKeys.species.favorites(mockUser.id, { page: 0, size: 20 })
             )
             ?.content.map((item) => item.id) ?? [];
         expect(remainingFavIds).not.toContain('sp-2');
@@ -1108,6 +1127,951 @@ describe('G5.3 Species & Favorites Integration', () => {
         expect(container!.textContent).not.toContain('Trầu bà lá xẻ');
       });
       expect(container!.textContent).toContain('Húng quế ngọt');
+    });
+  });
+
+  describe('G5.3.1 Favorites Serialization & Concurrency Safety (Section 3.3)', () => {
+    function setupApp(ui: React.ReactElement) {
+      act(() => {
+        root!.render(
+          <QueryClientProvider client={qc}>
+            <AuthProvider>
+              <PlantDataProvider>{ui}</PlantDataProvider>
+            </AuthProvider>
+          </QueryClientProvider>
+        );
+      });
+    }
+
+    it('serializes favorite operations across species, prevents multi-species rollback race, disables all UI heart buttons while pending, and unlocks for subsequent species B', async () => {
+      await tokenStorage.saveSession(mockSession);
+
+      const postADeferred = createDeferred<unknown>();
+      const delBDeferred = createDeferred<unknown>();
+      let postACalls = 0;
+      let deleteBCalls = 0;
+      let sp1ServerFav = false;
+      let sp2ServerFav = true;
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: mockProfile }, headers: {}, config };
+        }
+        if (config.url === '/species') {
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: [
+                  { ...speciesOne, isFavorited: sp1ServerFav },
+                  { ...speciesTwo, isFavorited: sp2ServerFav },
+                ],
+                page: 0,
+                size: 20,
+                totalElements: 2,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/species/favorites') {
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: sp2ServerFav ? [{ ...speciesTwo, isFavorited: true }] : [],
+                page: 0,
+                size: 20,
+                totalElements: sp2ServerFav ? 1 : 0,
+                totalPages: sp2ServerFav ? 1 : 0,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/species/sp-1/favorite' && config.method === 'post') {
+          postACalls += 1;
+          await postADeferred.promise;
+          return Promise.reject({
+            isAxiosError: true,
+            response: {
+              status: 500,
+              data: {
+                success: false,
+                error: { code: 'INTERNAL_SERVER_ERROR', message: 'Lỗi hệ thống tạm thời' },
+              },
+            },
+            config,
+          });
+        }
+        if (config.url === '/species/sp-2/favorite' && config.method === 'delete') {
+          deleteBCalls += 1;
+          await delBDeferred.promise;
+          sp2ServerFav = false;
+          return {
+            status: 200,
+            data: { success: true, data: { message: 'Đã bỏ khỏi danh sách yêu thích.' } },
+            headers: {},
+            config,
+          };
+        }
+        throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+      });
+
+      let favToggle!: ReturnType<typeof useFavoriteToggle>;
+      let pendingState!: ReturnType<typeof useFavoritePendingState>;
+      function Probe() {
+        favToggle = useFavoriteToggle();
+        pendingState = useFavoritePendingState();
+        return null;
+      }
+
+      setupApp(
+        <>
+          <Probe />
+          <SearchScreen />
+        </>
+      );
+
+      await waitFor(() => {
+        expect(container!.querySelector('[aria-label="Yêu thích Trầu bà lá xẻ"]')).toBeTruthy();
+        expect(container!.querySelector('[aria-label="Bỏ yêu thích Húng quế ngọt"]')).toBeTruthy();
+      });
+
+      // 1. Trigger Species A add-favorite (held pending) + tap A again -> ONLY 1 POST dispatched, same Promise returned
+      let pA1!: Promise<unknown>;
+      let pA2!: Promise<unknown>;
+      act(() => {
+        const rawA1 = favToggle.toggleFavorite('sp-1', false);
+        const rawA2 = favToggle.toggleFavorite('sp-1', false);
+        expect(rawA1).toBe(rawA2);
+        pA1 = rawA1.catch((err) => err);
+        pA2 = rawA2.catch((err) => err);
+      });
+      void pA2;
+
+      await waitFor(() => {
+        expect(postACalls).toBe(1);
+        expect(pendingState.isAnyPending).toBe(true);
+        expect(pendingState.activeSpeciesId).toBe('sp-1');
+        expect(pendingState.isSpeciesPending('sp-1')).toBe(true);
+        expect(pendingState.isSpeciesPending('sp-2')).toBe(false);
+      });
+
+      // 2. While A is pending, ALL heart buttons in SearchScreen (including Species B) are disabled
+      const heartA = container!.querySelector('[aria-label="Bỏ yêu thích Trầu bà lá xẻ"], [aria-label="Yêu thích Trầu bà lá xẻ"]');
+      const heartB = container!.querySelector('[aria-label="Bỏ yêu thích Húng quế ngọt"]');
+      expect(heartA?.getAttribute('aria-disabled')).toBe('true');
+      expect(heartB?.getAttribute('aria-disabled')).toBe('true');
+      expect(heartA?.textContent).toBe('…');
+      expect(heartB?.textContent).toBe('♥');
+
+      // Clicking disabled Species B button in DOM causes zero API calls & zero unhandled rejections
+      clickElement(heartB);
+      expect(deleteBCalls).toBe(0);
+
+      // 3. Programmatically attempting Species B while A is pending MUST NOT send B and MUST NOT return A's Promise
+      let pB!: Promise<unknown>;
+      await act(async () => {
+        pB = favToggle.toggleFavorite('sp-2', true);
+        expect(pB).not.toBe(pA1);
+        await expect(pB).rejects.toMatchObject({ code: 'FAVORITE_OPERATION_IN_PROGRESS' });
+      });
+      expect(deleteBCalls).toBe(0);
+
+      // 4. Reject Species A with HTTP 500 -> rolls back sp-1 cleanly without corrupting sp-2, and unlocks ALL heart buttons
+      await act(async () => {
+        postADeferred.resolve(undefined);
+        await pA1;
+      });
+
+      await waitFor(() => {
+        expect(pendingState.isAnyPending).toBe(false);
+        expect(pendingState.activeSpeciesId).toBeNull();
+        const unlockedA = container!.querySelector('[aria-label="Yêu thích Trầu bà lá xẻ"]');
+        const unlockedB = container!.querySelector('[aria-label="Bỏ yêu thích Húng quế ngọt"]');
+        expect(unlockedA?.getAttribute('aria-disabled')).not.toBe('true');
+        expect(unlockedB?.getAttribute('aria-disabled')).not.toBe('true');
+      });
+
+      const listData = qc.getQueryData<PageResponse<SpeciesSummaryDto>>(
+        queryKeys.species.list(mockUser.id, { page: 0, size: 20, sort: 'commonName,asc' })
+      );
+      expect(listData?.content.find((i) => i.id === 'sp-1')?.isFavorited).toBe(false);
+      expect(listData?.content.find((i) => i.id === 'sp-2')?.isFavorited).toBe(true);
+
+      // 5. After A completed/settled, Species B can now execute cleanly!
+      let pBNext!: Promise<unknown>;
+      act(() => {
+        pBNext = favToggle.toggleFavorite('sp-2', true);
+      });
+      await waitFor(() => {
+        expect(deleteBCalls).toBe(1);
+        expect(pendingState.activeSpeciesId).toBe('sp-2');
+      });
+      await act(async () => {
+        delBDeferred.resolve(undefined);
+        await pBNext;
+      });
+      await waitFor(() => {
+        expect(pendingState.isAnyPending).toBe(false);
+        expect(container!.querySelector('[aria-label="Yêu thích Húng quế ngọt"]')).toBeTruthy();
+      });
+    });
+
+    it('disables heart buttons in FavoritesSection & PlantDetailScreen while another species favorite op is active', async () => {
+      await tokenStorage.saveSession(mockSession);
+
+      const postDeferred = createDeferred<unknown>();
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: mockProfile }, headers: {}, config };
+        }
+        if (config.url === '/species/favorites') {
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: [{ ...speciesOne, isFavorited: true }, speciesTwo],
+                page: 0,
+                size: 20,
+                totalElements: 2,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/species/sp-1') {
+          return {
+            status: 200,
+            data: { success: true, data: speciesOneDetail },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/species/sp-99/favorite' && config.method === 'post') {
+          await postDeferred.promise;
+          return {
+            status: 201,
+            data: { success: true, data: { message: 'Đã thêm vào danh sách yêu thích.' } },
+            headers: {},
+            config,
+          };
+        }
+        throw new Error(`Unexpected: ${config.method} ${config.url}`);
+      });
+
+      routeParamsState.current = { speciesId: 'sp-1' };
+      let favToggle!: ReturnType<typeof useFavoriteToggle>;
+      function Control() {
+        favToggle = useFavoriteToggle();
+        return null;
+      }
+
+      setupApp(
+        <>
+          <Control />
+          <FavoritesSection />
+          <PlantDetailScreen />
+        </>
+      );
+
+      await waitFor(() => {
+        expect(container!.querySelector('[aria-label="Bỏ yêu thích Húng quế ngọt"]')).toBeTruthy();
+        expect(container!.querySelector('[aria-label="Thêm yêu thích"]')).toBeTruthy();
+      });
+
+      let op!: Promise<unknown>;
+      act(() => {
+        op = favToggle.toggleFavorite('sp-99', false);
+      });
+
+      await waitFor(() => {
+        const favBtnSp2 = container!.querySelector('[aria-label="Bỏ yêu thích Húng quế ngọt"]');
+        const detailHeartBtn = container!.querySelector('[aria-label="Thêm yêu thích"]');
+        expect(favBtnSp2?.getAttribute('aria-disabled')).toBe('true');
+        expect(detailHeartBtn?.getAttribute('aria-disabled')).toBe('true');
+      });
+
+      await act(async () => {
+        postDeferred.resolve(undefined);
+        await op;
+      });
+
+      await waitFor(() => {
+        const favBtnSp2 = container!.querySelector('[aria-label="Bỏ yêu thích Húng quế ngọt"]');
+        const detailHeartBtn = container!.querySelector('[aria-label="Thêm yêu thích"]');
+        expect(favBtnSp2?.getAttribute('aria-disabled')).not.toBe('true');
+        expect(detailHeartBtn?.getAttribute('aria-disabled')).not.toBe('true');
+      });
+    });
+
+    it('releases pending lock in finally on network error, timeout error, and 5xx without ever leaving pending state stuck', async () => {
+      await tokenStorage.saveSession(mockSession);
+
+      let mode: 'network' | 'timeout' | 'server500' = 'network';
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: mockProfile }, headers: {}, config };
+        }
+        if (config.url === '/species/sp-1/favorite') {
+          if (mode === 'network') {
+            return Promise.reject({ isAxiosError: true, message: 'Network Error', config });
+          }
+          if (mode === 'timeout') {
+            return Promise.reject({
+              isAxiosError: true,
+              code: 'ECONNABORTED',
+              message: 'timeout of 15000ms exceeded',
+              config,
+            });
+          }
+          return Promise.reject({
+            isAxiosError: true,
+            response: {
+              status: 502,
+              data: { success: false, error: { code: 'BAD_GATEWAY', message: 'Upstream down' } },
+            },
+            config,
+          });
+        }
+        throw new Error(`Unexpected: ${config.url}`);
+      });
+
+      let favToggle!: ReturnType<typeof useFavoriteToggle>;
+      function Probe() {
+        favToggle = useFavoriteToggle();
+        return null;
+      }
+
+      setupApp(<Probe />);
+      await waitFor(() => expect(favToggle).toBeDefined());
+      await flushAsync(40);
+
+      for (const nextMode of ['network', 'timeout', 'server500'] as const) {
+        mode = nextMode;
+        await act(async () => {
+          await expect(favToggle.toggleFavorite('sp-1', false)).rejects.toBeInstanceOf(AppApiError);
+        });
+        expect(favToggle.isAnyFavoritePending).toBe(false);
+        expect(favToggle.isSpeciesPending('sp-1')).toBe(false);
+      }
+    });
+
+    it('reconciles 409/404 to server truth while throwing AppApiError to UI cleanly and releasing lock', async () => {
+      await tokenStorage.saveSession(mockSession);
+
+      let favoritesOnServer: SpeciesSummaryDto[] = [{ ...speciesOne, isFavorited: true }, speciesTwo];
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: mockProfile }, headers: {}, config };
+        }
+        if (config.url === '/species') {
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: [{ ...speciesOne, isFavorited: false }],
+                page: 0,
+                size: 20,
+                totalElements: 1,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/species/favorites') {
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: favoritesOnServer,
+                page: 0,
+                size: 20,
+                totalElements: favoritesOnServer.length,
+                totalPages: favoritesOnServer.length ? 1 : 0,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/species/sp-1/favorite' && config.method === 'post') {
+          favoritesOnServer = [{ ...speciesOne, isFavorited: true }, speciesTwo];
+          return Promise.reject({
+            isAxiosError: true,
+            response: {
+              status: 409,
+              data: { success: false, error: { code: 'CONFLICT', message: 'Đã tồn tại trong yêu thích.' } },
+            },
+            config,
+          });
+        }
+        if (config.url === '/species/sp-2/favorite' && config.method === 'delete') {
+          favoritesOnServer = favoritesOnServer.filter((s) => s.id !== 'sp-2');
+          return Promise.reject({
+            isAxiosError: true,
+            response: {
+              status: 404,
+              data: { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'Chưa có trong yêu thích.' } },
+            },
+            config,
+          });
+        }
+        throw new Error(`Unexpected: ${config.method} ${config.url}`);
+      });
+
+      setupApp(
+        <>
+          <SearchScreen />
+          <FavoritesSection />
+        </>
+      );
+
+      await waitFor(() => {
+        expect(container!.querySelector('[aria-label="Yêu thích Trầu bà lá xẻ"]')).toBeTruthy();
+        expect(container!.querySelector('[aria-label="Bỏ yêu thích Húng quế ngọt"]')).toBeTruthy();
+      });
+
+      // Trigger 409 Conflict from SearchScreen UI
+      clickElement(container!.querySelector('[aria-label="Yêu thích Trầu bà lá xẻ"]'));
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Loài cây đã có trong danh sách yêu thích, đã đồng bộ trạng thái mới nhất.');
+        // Heart button reflects server truth (favorited) & unlocked
+        const syncedHeart = container!.querySelector('[aria-label="Bỏ yêu thích Trầu bà lá xẻ"]');
+        expect(syncedHeart).toBeTruthy();
+        expect(syncedHeart?.getAttribute('aria-disabled')).not.toBe('true');
+      });
+
+      // Trigger 404 Not Found from FavoritesSection UI
+      clickElement(container!.querySelector('[aria-label="Bỏ yêu thích Húng quế ngọt"]'));
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Loài cây này không còn trong danh sách yêu thích, đã đồng bộ lại dữ liệu.');
+      });
+    });
+
+    it('clears pending favorite lock immediately on logout and produces zero cross-account or unauthenticated cache writes when late promise settles', async () => {
+      await tokenStorage.saveSession(mockSession);
+      const pendingDeferred = createDeferred<unknown>();
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: mockProfile }, headers: {}, config };
+        }
+        if (config.url === '/species/sp-1/favorite' && config.method === 'post') {
+          await pendingDeferred.promise;
+          return {
+            status: 201,
+            data: { success: true, data: { message: 'Late resolve after logout' } },
+            headers: {},
+            config,
+          };
+        }
+        throw new Error(`Unexpected: ${config.url}`);
+      });
+
+      let authCtx!: ReturnType<typeof useAuth>;
+      let favToggle!: ReturnType<typeof useFavoriteToggle>;
+      function Probe() {
+        authCtx = useAuth();
+        favToggle = useFavoriteToggle();
+        return null;
+      }
+
+      setupApp(<Probe />);
+      await waitFor(() => expect(authCtx.status).toBe('authenticated'));
+
+      let pendingPromise!: Promise<unknown>;
+      act(() => {
+        pendingPromise = favToggle.toggleFavorite('sp-1', false).catch((err) => err);
+      });
+      await waitFor(() => expect(favToggle.isAnyFavoritePending).toBe(true));
+
+      // Logout while POST is still pending
+      await act(async () => {
+        await authCtx.logout();
+      });
+
+      expect(authCtx.status).toBe('unauthenticated');
+      expect(favToggle.isAnyFavoritePending).toBe(false);
+
+      // Now resolve the stale POST from before logout
+      await act(async () => {
+        pendingDeferred.resolve(undefined);
+        await pendingPromise;
+      });
+
+      // Must have created zero cache entries under __unauthenticated__ or another account
+      expect(
+        qc.getQueriesData({ queryKey: queryKeys.species.all('__unauthenticated__') })
+      ).toHaveLength(0);
+      expect(qc.getQueryData(queryKeys.species.detail(mockUser.id, 'sp-1'))).toBeUndefined();
+    });
+  });
+
+  describe('G5.3.1 Account Switch Cache Isolation Regression (Section 5 - Species & Favorites)', () => {
+    const userA = {
+      id: 'usr_account_a',
+      fullName: 'Người Dùng A',
+      email: 'a@goplant.vn',
+      roles: ['ROLE_USER'],
+    };
+    const userB = {
+      id: 'usr_account_b',
+      fullName: 'Người Dùng B',
+      email: 'b@goplant.vn',
+      roles: ['ROLE_USER'],
+    };
+    const sessionA: AuthSession = {
+      accessToken: 'jwt-user-a-token',
+      tokenType: 'Bearer',
+      expiresIn: 3600,
+      user: userA,
+      savedAt: Date.now(),
+    };
+    const sessionB: AuthSession = {
+      accessToken: 'jwt-user-b-token',
+      tokenType: 'Bearer',
+      expiresIn: 3600,
+      user: userB,
+      savedAt: Date.now(),
+    };
+    const profileA: UserProfileDto = { ...mockProfile, ...userA };
+    const profileB: UserProfileDto = { ...mockProfile, ...userB };
+
+    function renderWithRealAuth(ui: React.ReactElement) {
+      act(() => {
+        root!.render(
+          <QueryClientProvider client={qc}>
+            <AuthProvider>
+              <PlantDataProvider>{ui}</PlantDataProvider>
+            </AuthProvider>
+          </QueryClientProvider>
+        );
+      });
+    }
+
+    it('Section 5 Test 1 & Test 5: isolates Species list, Species detail & Favorites cache between User A and User B via mounted query hooks', async () => {
+      await tokenStorage.saveSession(sessionA);
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        const authHeader = config.headers?.Authorization as string | undefined;
+        const isA = authHeader === `Bearer ${sessionA.accessToken}`;
+        const isB = authHeader === `Bearer ${sessionB.accessToken}`;
+
+        if (config.url === '/auth/login' && config.method === 'post') {
+          return { status: 200, data: { success: true, data: sessionB }, headers: {}, config };
+        }
+        if (config.url === '/users/me') {
+          return {
+            status: 200,
+            data: { success: true, data: isB ? profileB : profileA },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/species') {
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: [{ ...speciesOne, isFavorited: isA }],
+                page: 0,
+                size: 20,
+                totalElements: 1,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/species/sp-1') {
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: { ...speciesOneDetail, isFavorited: isA },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/species/favorites') {
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: isB ? [{ ...speciesTwo, isFavorited: true }] : [{ ...speciesOne, isFavorited: true }],
+                page: 0,
+                size: 20,
+                totalElements: 1,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        throw new Error(`Unexpected request: ${config.url} auth=${authHeader}`);
+      });
+
+      let authCtx!: ReturnType<typeof useAuth>;
+      let listResult!: ReturnType<typeof useSpeciesList>;
+      let detailResult!: ReturnType<typeof useSpeciesDetail>;
+      let favResult!: ReturnType<typeof useFavoriteSpecies>;
+
+      function SpeciesHooksProbe() {
+        authCtx = useAuth();
+        listResult = useSpeciesList({ page: 0, size: 20 });
+        detailResult = useSpeciesDetail('sp-1');
+        favResult = useFavoriteSpecies({ page: 0, size: 20 });
+        return null;
+      }
+
+      renderWithRealAuth(<SpeciesHooksProbe />);
+
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(userA.id);
+        expect(listResult.data?.content[0].isFavorited).toBe(true);
+        expect(detailResult.data?.isFavorited).toBe(true);
+        expect(favResult.data?.content[0].id).toBe('sp-1');
+      });
+
+      // Verify cache entries carry User A key identity
+      expect(
+        qc.getQueryData<PageResponse<SpeciesSummaryDto>>(
+          queryKeys.species.list(userA.id, { page: 0, size: 20, sort: 'commonName,asc' })
+        )?.content[0].isFavorited
+      ).toBe(true);
+      expect(
+        qc.getQueryData<SpeciesDetailDto>(queryKeys.species.detail(userA.id, 'sp-1'))?.isFavorited
+      ).toBe(true);
+      expect(
+        qc.getQueryData<PageResponse<SpeciesSummaryDto>>(
+          queryKeys.species.favorites(userA.id, { page: 0, size: 20 })
+        )?.content[0].id
+      ).toBe('sp-1');
+
+      // Switch to User B on the EXACT same QueryClient (without calling qc.clear)
+      await act(async () => {
+        await authCtx.logout();
+        await authCtx.login({ account: userB.email, password: 'Password123@' });
+      });
+
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(userB.id);
+        expect(listResult.data?.content[0].isFavorited).toBe(false);
+        expect(detailResult.data?.isFavorited).toBe(false);
+        expect(favResult.data?.content[0].id).toBe('sp-2');
+      });
+
+      // Verify Test 5 via live mounted query cache entries: distinct keys for A vs B
+      const allKeys = qc.getQueryCache().getAll().map((q) => q.queryKey);
+      expect(allKeys).toContainEqual(
+        queryKeys.species.list(userA.id, { page: 0, size: 20, sort: 'commonName,asc' })
+      );
+      expect(allKeys).toContainEqual(
+        queryKeys.species.list(userB.id, { page: 0, size: 20, sort: 'commonName,asc' })
+      );
+      expect(allKeys).toContainEqual(queryKeys.species.detail(userA.id, 'sp-1'));
+      expect(allKeys).toContainEqual(queryKeys.species.detail(userB.id, 'sp-1'));
+      expect(allKeys).toContainEqual(queryKeys.species.favorites(userA.id, { page: 0, size: 20 }));
+      expect(allKeys).toContainEqual(queryKeys.species.favorites(userB.id, { page: 0, size: 20 }));
+
+      // User A cache remains intact in its own namespace while User B sees ONLY B data
+      expect(
+        qc.getQueryData<PageResponse<SpeciesSummaryDto>>(
+          queryKeys.species.favorites(userA.id, { page: 0, size: 20 })
+        )?.content[0].id
+      ).toBe('sp-1');
+      expect(
+        qc.getQueryData<PageResponse<SpeciesSummaryDto>>(
+          queryKeys.species.favorites(userB.id, { page: 0, size: 20 })
+        )?.content[0].id
+      ).toBe('sp-2');
+    });
+
+    it('Section 5 Test 2 (Add resolved late): pending User A add-favorite resolved after switching to User B does NOT alter User B cache or UI', async () => {
+      await tokenStorage.saveSession(sessionA);
+      const pendingAddA = createDeferred<unknown>();
+      let favFetchCountB = 0;
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        const authHeader = config.headers?.Authorization as string | undefined;
+        const isB = authHeader === `Bearer ${sessionB.accessToken}`;
+
+        if (config.url === '/auth/login' && config.method === 'post') {
+          return { status: 200, data: { success: true, data: sessionB }, headers: {}, config };
+        }
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: isB ? profileB : profileA }, headers: {}, config };
+        }
+        if (config.url === '/species') {
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: [{ ...speciesOne, isFavorited: false }],
+                page: 0,
+                size: 20,
+                totalElements: 1,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/species/favorites') {
+          if (isB) favFetchCountB += 1;
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: { content: [], page: 0, size: 20, totalElements: 0, totalPages: 0, last: true },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/species/sp-1/favorite' && config.method === 'post') {
+          expect(authHeader).toBe(`Bearer ${sessionA.accessToken}`);
+          await pendingAddA.promise;
+          return {
+            status: 201,
+            data: { success: true, data: { message: 'Đã thêm vào danh sách yêu thích.' } },
+            headers: {},
+            config,
+          };
+        }
+        throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+      });
+
+      let authCtx!: ReturnType<typeof useAuth>;
+      function Probe() {
+        authCtx = useAuth();
+        return null;
+      }
+
+      renderWithRealAuth(
+        <>
+          <Probe />
+          <SearchScreen />
+          <FavoritesSection />
+        </>
+      );
+
+      await waitFor(() => {
+        expect(container!.querySelector('[aria-label="Yêu thích Trầu bà lá xẻ"]')).toBeTruthy();
+        expect(container!.textContent).toContain('0 loài đã lưu');
+      });
+
+      // User A clicks favorite on sp-1 (optimistic on User A, POST pending)
+      clickElement(container!.querySelector('[aria-label="Yêu thích Trầu bà lá xẻ"]'));
+      await waitFor(() => expect(container!.querySelector('[aria-label="Bỏ yêu thích Trầu bà lá xẻ"]')?.textContent).toBe('…'));
+
+      // Switch to User B while User A's POST is pending
+      await act(async () => {
+        await authCtx.logout();
+        await authCtx.login({ account: userB.email, password: 'Password123@' });
+      });
+
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(userB.id);
+        expect(favFetchCountB).toBeGreaterThanOrEqual(1);
+        expect(container!.querySelector('[aria-label="Yêu thích Trầu bà lá xẻ"]')).toBeTruthy();
+        expect(container!.textContent).toContain('0 loài đã lưu');
+      });
+      const favCountBeforeLateResolve = favFetchCountB;
+
+      // Resolve old request of A
+      await act(async () => {
+        pendingAddA.resolve(undefined);
+      });
+      await flushAsync(40);
+
+      // User B cache and UI remain completely unchanged
+      expect(favFetchCountB).toBe(favCountBeforeLateResolve);
+      expect(
+        qc.getQueryData<PageResponse<SpeciesSummaryDto>>(
+          queryKeys.species.favorites(userB.id, { page: 0, size: 20 })
+        )?.totalElements
+      ).toBe(0);
+      expect(
+        qc.getQueryData<PageResponse<SpeciesSummaryDto>>(
+          queryKeys.species.list(userB.id, { page: 0, size: 20, sort: 'commonName,asc' })
+        )?.content[0].isFavorited
+      ).toBe(false);
+      expect(container!.querySelector('[aria-label="Yêu thích Trầu bà lá xẻ"]')).toBeTruthy();
+      expect(container!.querySelector('[aria-label="Bỏ yêu thích Trầu bà lá xẻ"]')).toBeNull();
+    });
+
+    it('Section 5 Test 2 (Remove resolved late & Failed error settled late): stale User A callbacks never corrupt User B favorites, species cache, or UI error state', async () => {
+      await tokenStorage.saveSession(sessionA);
+      const pendingRemoveA = createDeferred<unknown>();
+      const pendingFailA = createDeferred<unknown>();
+      let serverFavoritesB: SpeciesSummaryDto[] = [{ ...speciesTwo, isFavorited: true }];
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        const authHeader = config.headers?.Authorization as string | undefined;
+        const isB = authHeader === `Bearer ${sessionB.accessToken}`;
+
+        if (config.url === '/auth/login' && config.method === 'post') {
+          const payload = JSON.parse(String(config.data)) as { account?: string };
+          return {
+            status: 200,
+            data: { success: true, data: payload.account === userA.email ? sessionA : sessionB },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: isB ? profileB : profileA }, headers: {}, config };
+        }
+        if (config.url === '/species/favorites') {
+          const items = isB ? serverFavoritesB : [{ ...speciesTwo, isFavorited: true }];
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: { content: items, page: 0, size: 20, totalElements: items.length, totalPages: 1, last: true },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/species/sp-2/favorite' && config.method === 'delete') {
+          expect(authHeader).toBe(`Bearer ${sessionA.accessToken}`);
+          await pendingRemoveA.promise;
+          return {
+            status: 200,
+            data: { success: true, data: { message: 'Removed A' } },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/species/sp-1/favorite' && config.method === 'post') {
+          expect(authHeader).toBe(`Bearer ${sessionA.accessToken}`);
+          await pendingFailA.promise;
+          return Promise.reject({
+            isAxiosError: true,
+            response: {
+              status: 500,
+              data: { success: false, error: { code: 'SERVER_ERROR', message: 'Lỗi từ session A' } },
+            },
+            config,
+          });
+        }
+        throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+      });
+
+      let authCtx!: ReturnType<typeof useAuth>;
+      let favToggle!: ReturnType<typeof useFavoriteToggle>;
+      function Probe() {
+        authCtx = useAuth();
+        favToggle = useFavoriteToggle();
+        return null;
+      }
+
+      renderWithRealAuth(
+        <>
+          <Probe />
+          <FavoritesSection />
+        </>
+      );
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Húng quế ngọt');
+      });
+
+      // Part 1: User A clicks remove favorite on sp-2
+      clickElement(container!.querySelector('[aria-label="Bỏ yêu thích Húng quế ngọt"]'));
+      await waitFor(() => expect(favToggle.isAnyFavoritePending).toBe(true));
+
+      // Switch to User B (who ALSO has sp-2 favorited)
+      await act(async () => {
+        await authCtx.logout();
+        await authCtx.login({ account: userB.email, password: 'Password123@' });
+      });
+
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(userB.id);
+        expect(container!.textContent).toContain('Húng quế ngọt');
+      });
+
+      // Resolve User A's stale DELETE -> User B MUST still have sp-2!
+      await act(async () => {
+        pendingRemoveA.resolve(undefined);
+      });
+      await flushAsync(40);
+
+      expect(
+        qc.getQueryData<PageResponse<SpeciesSummaryDto>>(
+          queryKeys.species.favorites(userB.id, { page: 0, size: 20 })
+        )?.content.map((i) => i.id)
+      ).toEqual(['sp-2']);
+      expect(container!.textContent).toContain('Húng quế ngọt');
+
+      // Part 2: User B also adds something or holds state; switch back to User A and trigger a failing POST pending across switch to User B
+      await act(async () => {
+        await authCtx.logout();
+        await authCtx.login({ account: userA.email, password: 'Password123@' });
+      });
+      await waitFor(() => expect(authCtx.user?.id).toBe(userA.id));
+
+      let failedPromiseA!: Promise<unknown>;
+      act(() => {
+        failedPromiseA = favToggle.toggleFavorite('sp-1', false).catch((err) => err);
+      });
+      await waitFor(() => expect(favToggle.isSpeciesPending('sp-1')).toBe(true));
+
+      await act(async () => {
+        await authCtx.logout();
+        await authCtx.login({ account: userB.email, password: 'Password123@' });
+      });
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(userB.id);
+        expect(container!.textContent).toContain('Húng quế ngọt');
+      });
+
+      // Resolve deferred failure for User A's POST -> must NOT roll back B's favorites or show 'Lỗi từ session A' on B UI
+      await act(async () => {
+        pendingFailA.resolve(undefined);
+        await failedPromiseA;
+      });
+      await flushAsync(40);
+
+      expect(container!.textContent).not.toContain('Lỗi từ session A');
+      expect(container!.textContent).toContain('Húng quế ngọt');
+      expect(
+        qc.getQueryData<PageResponse<SpeciesSummaryDto>>(
+          queryKeys.species.favorites(userB.id, { page: 0, size: 20 })
+        )?.content.map((i) => i.id)
+      ).toEqual(['sp-2']);
     });
   });
 });

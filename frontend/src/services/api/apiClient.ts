@@ -1,13 +1,21 @@
 import axios, { AxiosInstance, InternalAxiosRequestConfig } from 'axios';
 import { API_BASE_URL, API_TIMEOUT } from './apiConfig';
 import { AppApiError, normalizeApiError, normalizeBackendFailure } from './apiError';
-import { getAccessToken } from './tokenStorage';
+import { getAccessToken, getSession, getSessionGeneration } from './tokenStorage';
+import type { AuthSession } from './apiTypes';
+
+export interface ApiUserScopeOptions {
+  expectedUserId?: string;
+  expectedSessionGeneration?: number;
+}
 
 declare module 'axios' {
   export interface AxiosRequestConfig {
     skipAuth?: boolean;
     isPublic?: boolean;
     isTrustedUrl?: boolean;
+    expectedUserId?: string;
+    expectedSessionGeneration?: number;
   }
 }
 
@@ -350,7 +358,99 @@ apiClient.interceptors.request.use(
       return config;
     }
 
-    // Protected endpoint: retrieve access token from secure storage
+    // Protected endpoint: verify optional session identity guard and retrieve access token
+    const rawExpectedUserId = Object.prototype.hasOwnProperty.call(reqMeta, 'expectedUserId')
+      ? reqMeta.expectedUserId
+      : undefined;
+    const rawExpectedGeneration = Object.prototype.hasOwnProperty.call(
+      reqMeta,
+      'expectedSessionGeneration'
+    )
+      ? reqMeta.expectedSessionGeneration
+      : undefined;
+
+    const hasExpectedUserId = rawExpectedUserId !== undefined;
+    const hasExpectedGeneration = rawExpectedGeneration !== undefined;
+
+    if (hasExpectedUserId) {
+      const expectedUserId =
+        typeof rawExpectedUserId === 'string' ? rawExpectedUserId.trim() : '';
+      if (!expectedUserId) {
+        return Promise.reject(
+          new AppApiError({
+            message: 'Thông tin danh tính phiên làm việc không hợp lệ.',
+            code: 'SESSION_USER_MISMATCH',
+          })
+        );
+      }
+
+      if (hasExpectedGeneration) {
+        if (
+          typeof rawExpectedGeneration !== 'number' ||
+          !Number.isFinite(rawExpectedGeneration) ||
+          getSessionGeneration() !== rawExpectedGeneration
+        ) {
+          return Promise.reject(
+            new AppApiError({
+              message: 'Phiên đăng nhập đã thay đổi, yêu cầu cũ đã bị hủy.',
+              code: 'SESSION_USER_MISMATCH',
+            })
+          );
+        }
+      }
+
+      let session: AuthSession | null = null;
+      try {
+        session = await getSession();
+      } catch (storageErr) {
+        // Storage read failure: halt request immediately, do NOT send request, do NOT fake 401
+        return Promise.reject(normalizeApiError(storageErr));
+      }
+
+      if (!session || !session.accessToken) {
+        return Promise.reject(
+          new AppApiError({
+            message: 'Yêu cầu phiên đăng nhập để thực hiện thao tác này.',
+            code: 'UNAUTHENTICATED',
+          })
+        );
+      }
+
+      if (
+        session.user?.id !== expectedUserId ||
+        (hasExpectedGeneration && getSessionGeneration() !== rawExpectedGeneration)
+      ) {
+        return Promise.reject(
+          new AppApiError({
+            message: 'Phiên đăng nhập đã chuyển sang tài khoản khác, thao tác cũ đã bị hủy.',
+            code: 'SESSION_USER_MISMATCH',
+          })
+        );
+      }
+
+      if (config.headers) {
+        config.headers.Authorization = `Bearer ${session.accessToken}`;
+      }
+
+      return config;
+    }
+
+    if (hasExpectedGeneration) {
+      if (
+        typeof rawExpectedGeneration !== 'number' ||
+        !Number.isFinite(rawExpectedGeneration) ||
+        getSessionGeneration() !== rawExpectedGeneration
+      ) {
+        return Promise.reject(
+          new AppApiError({
+            message: 'Phiên đăng nhập đã thay đổi, yêu cầu cũ đã bị hủy.',
+            code: 'SESSION_USER_MISMATCH',
+          })
+        );
+      }
+    }
+
+    // Unscoped protected endpoint: retrieve access token from secure storage
     let token: string | null = null;
     try {
       token = await getAccessToken();
@@ -365,6 +465,15 @@ apiClient.interceptors.request.use(
         new AppApiError({
           message: 'Yêu cầu phiên đăng nhập để thực hiện thao tác này.',
           code: 'UNAUTHENTICATED',
+        })
+      );
+    }
+
+    if (hasExpectedGeneration && getSessionGeneration() !== rawExpectedGeneration) {
+      return Promise.reject(
+        new AppApiError({
+          message: 'Phiên đăng nhập đã thay đổi, yêu cầu cũ đã bị hủy.',
+          code: 'SESSION_USER_MISMATCH',
         })
       );
     }
@@ -414,7 +523,44 @@ apiClient.interceptors.response.use(
         reqConfig?.isPublic === true || reqConfig?.skipAuth === true || inspection.isPublic;
 
       if (isTrusted && !isAuthSkipped && unauthorizedListener) {
-        unauthorizedListener();
+        const hasExpectedUserId =
+          reqConfig !== undefined &&
+          Object.prototype.hasOwnProperty.call(reqConfig, 'expectedUserId') &&
+          reqConfig.expectedUserId !== undefined;
+        const expectedUserId =
+          typeof reqConfig?.expectedUserId === 'string' && reqConfig.expectedUserId.trim()
+            ? reqConfig.expectedUserId.trim()
+            : null;
+        const hasExpectedGeneration =
+          reqConfig !== undefined &&
+          Object.prototype.hasOwnProperty.call(reqConfig, 'expectedSessionGeneration') &&
+          reqConfig.expectedSessionGeneration !== undefined;
+        const expectedGeneration =
+          typeof reqConfig?.expectedSessionGeneration === 'number' &&
+          Number.isFinite(reqConfig.expectedSessionGeneration)
+            ? reqConfig.expectedSessionGeneration
+            : null;
+
+        let matchesCurrentSession = true;
+        if (hasExpectedUserId && expectedUserId === null) {
+          matchesCurrentSession = false;
+        }
+        if (hasExpectedGeneration && (expectedGeneration === null || getSessionGeneration() !== expectedGeneration)) {
+          matchesCurrentSession = false;
+        }
+        if (matchesCurrentSession && expectedUserId !== null) {
+          const activeSession = await getSession().catch(() => null);
+          if (!activeSession || activeSession.user?.id !== expectedUserId) {
+            matchesCurrentSession = false;
+          }
+          if (expectedGeneration !== null && getSessionGeneration() !== expectedGeneration) {
+            matchesCurrentSession = false;
+          }
+        }
+
+        if (matchesCurrentSession) {
+          unauthorizedListener();
+        }
       }
     }
 

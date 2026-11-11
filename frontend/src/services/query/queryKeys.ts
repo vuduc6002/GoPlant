@@ -24,18 +24,20 @@ export const queryKeys = {
     profile: (id: string) => ['user', 'profile', id] as const,
   },
   species: {
-    all: ['species'] as const,
-    lists: () => ['species', 'list'] as const,
-    list: (params: SpeciesListQueryKeyParams) => ['species', 'list', params] as const,
-    details: () => ['species', 'detail'] as const,
-    detail: (id: string) => ['species', 'detail', id] as const,
-    favoritesAll: ['species', 'favorites'] as const,
-    favorites: (params: FavoriteSpeciesQueryKeyParams) => ['species', 'favorites', params] as const,
+    all: (userId: string) => ['species', userId] as const,
+    lists: (userId: string) => ['species', userId, 'list'] as const,
+    list: (userId: string, params: SpeciesListQueryKeyParams) =>
+      ['species', userId, 'list', params] as const,
+    details: (userId: string) => ['species', userId, 'detail'] as const,
+    detail: (userId: string, id: string) => ['species', userId, 'detail', id] as const,
+    favoritesAll: (userId: string) => ['species', userId, 'favorites'] as const,
+    favorites: (userId: string, params: FavoriteSpeciesQueryKeyParams) =>
+      ['species', userId, 'favorites', params] as const,
   },
   gardens: {
-    all: ['gardens'] as const,
-    list: ['gardens', 'list'] as const,
-    detail: (id: string) => ['gardens', 'detail', id] as const,
+    all: (userId: string) => ['gardens', userId] as const,
+    list: (userId: string) => ['gardens', userId, 'list'] as const,
+    detail: (userId: string, id: string) => ['gardens', userId, 'detail', id] as const,
   },
   // Placeholders for future phases
   plants: {

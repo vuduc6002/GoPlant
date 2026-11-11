@@ -1,4 +1,4 @@
-import { apiClient } from '@/services/api/apiClient';
+import { apiClient, type ApiUserScopeOptions } from '@/services/api/apiClient';
 import { AppApiError } from '@/services/api/apiError';
 import type {
   ApiResponse,
@@ -139,8 +139,21 @@ function normalizePageResponse(
   };
 }
 
+function buildScopeConfig(scope?: ApiUserScopeOptions): ApiUserScopeOptions {
+  if (!scope) {
+    return {};
+  }
+  return {
+    ...(scope.expectedUserId !== undefined ? { expectedUserId: scope.expectedUserId } : {}),
+    ...(scope.expectedSessionGeneration !== undefined
+      ? { expectedSessionGeneration: scope.expectedSessionGeneration }
+      : {}),
+  };
+}
+
 export async function getSpeciesList(
-  params?: SpeciesListParams
+  params?: SpeciesListParams,
+  scope?: ApiUserScopeOptions
 ): Promise<PageResponse<SpeciesSummaryDto>> {
   const normalized = normalizeSpeciesListParams(params);
   const queryParams: Record<string, string | number> = {
@@ -157,15 +170,20 @@ export async function getSpeciesList(
 
   const response = await apiClient.get<ApiResponse<PageResponse<SpeciesSummaryDto>>>('/species', {
     params: queryParams,
+    ...buildScopeConfig(scope),
   });
 
   return normalizePageResponse(response.data?.data, normalized.page, normalized.size);
 }
 
-export async function getSpeciesDetail(speciesId: string): Promise<SpeciesDetailDto> {
+export async function getSpeciesDetail(
+  speciesId: string,
+  scope?: ApiUserScopeOptions
+): Promise<SpeciesDetailDto> {
   const cleanId = assertValidSpeciesId(speciesId);
   const response = await apiClient.get<ApiResponse<SpeciesDetailDto>>(
-    `/species/${encodeURIComponent(cleanId)}`
+    `/species/${encodeURIComponent(cleanId)}`,
+    buildScopeConfig(scope)
   );
   if (!response.data?.data) {
     throw new AppApiError({
@@ -176,10 +194,15 @@ export async function getSpeciesDetail(speciesId: string): Promise<SpeciesDetail
   return normalizeSpeciesDetail(response.data.data);
 }
 
-export async function addFavoriteSpecies(speciesId: string): Promise<SimpleMessageResponseDto> {
+export async function addFavoriteSpecies(
+  speciesId: string,
+  scope?: ApiUserScopeOptions
+): Promise<SimpleMessageResponseDto> {
   const cleanId = assertValidSpeciesId(speciesId);
   const response = await apiClient.post<ApiResponse<SimpleMessageResponseDto>>(
-    `/species/${encodeURIComponent(cleanId)}/favorite`
+    `/species/${encodeURIComponent(cleanId)}/favorite`,
+    undefined,
+    buildScopeConfig(scope)
   );
   if (!response.data?.data) {
     return { message: response.data?.message || 'Đã thêm vào danh sách yêu thích.' };
@@ -187,10 +210,14 @@ export async function addFavoriteSpecies(speciesId: string): Promise<SimpleMessa
   return response.data.data;
 }
 
-export async function removeFavoriteSpecies(speciesId: string): Promise<SimpleMessageResponseDto> {
+export async function removeFavoriteSpecies(
+  speciesId: string,
+  scope?: ApiUserScopeOptions
+): Promise<SimpleMessageResponseDto> {
   const cleanId = assertValidSpeciesId(speciesId);
   const response = await apiClient.delete<ApiResponse<SimpleMessageResponseDto>>(
-    `/species/${encodeURIComponent(cleanId)}/favorite`
+    `/species/${encodeURIComponent(cleanId)}/favorite`,
+    buildScopeConfig(scope)
   );
   if (!response.data?.data) {
     return { message: response.data?.message || 'Đã bỏ khỏi danh sách yêu thích.' };
@@ -199,7 +226,8 @@ export async function removeFavoriteSpecies(speciesId: string): Promise<SimpleMe
 }
 
 export async function getFavoriteSpecies(
-  params?: FavoriteSpeciesParams
+  params?: FavoriteSpeciesParams,
+  scope?: ApiUserScopeOptions
 ): Promise<PageResponse<SpeciesSummaryDto>> {
   const normalized = normalizeFavoriteSpeciesParams(params);
   const response = await apiClient.get<ApiResponse<PageResponse<SpeciesSummaryDto>>>(
@@ -209,6 +237,7 @@ export async function getFavoriteSpecies(
         page: normalized.page,
         size: normalized.size,
       },
+      ...buildScopeConfig(scope),
     }
   );
   return normalizePageResponse(response.data?.data, normalized.page, normalized.size);
