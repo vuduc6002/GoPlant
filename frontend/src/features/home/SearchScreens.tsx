@@ -509,10 +509,9 @@ export function SearchScreen() {
 
   const ownedPageData = ownedQueryData;
   const ownedList = ownedPageData?.content ?? [];
+  const ownedTotalElements = ownedPageData?.totalElements ?? 0;
   const ownedTotalPages = ownedPageData?.totalPages ?? 0;
-  const displayOwnedTotalPages = isOwnedPlaceholder
-    ? Math.max(1, ownedTotalPages, ownedPage + 1)
-    : Math.max(1, ownedTotalPages);
+  const displayOwnedTotalPages = Math.max(1, ownedTotalPages, ownedPage + 1);
   const hasOwnedFilters = Boolean(debouncedKeyword || ownedGardenId || ownedHealthStatus);
   const gardens = gardensQuery.data ?? [];
 
@@ -813,39 +812,51 @@ export function SearchScreen() {
                   <Text style={ss.actionText}>Thử lại</Text>
                 </Pressable>
               </View>
+            ) : !ownedPageData ? (
+              <View style={ss.stateCard}>
+                <ActivityIndicator size="large" color={C.primary} />
+                <Text style={ss.bodyCenter}>Đang tải danh sách cây của bạn từ máy chủ...</Text>
+              </View>
             ) : ownedList.length === 0 ? (
-              <View style={ss.emptyCard}>
-                <View style={ss.emptyIcon}>
-                  <Text style={ss.emptyPlant}>♧</Text>
+              ownedTotalElements > 0 || isOwnedFetching || isOwnedPlaceholder ? (
+                <View style={ss.stateCard}>
+                  <ActivityIndicator size="large" color={C.primary} />
+                  <Text style={ss.bodyCenter}>Đang cập nhật danh sách cây trồng...</Text>
                 </View>
-                <Text style={ss.emptyTitle}>
-                  {hasOwnedFilters ? 'Không tìm thấy cây của bạn phù hợp' : 'Bạn chưa có cây trồng nào'}
-                </Text>
-                {debouncedKeyword ? <Text style={ss.queryText}>“{debouncedKeyword}”</Text> : null}
-                <Text style={ss.bodyCenter}>
-                  {hasOwnedFilters
-                    ? 'Thử xóa bộ lọc khu vườn / tình trạng hoặc nhập từ khóa khác.'
-                    : 'Chọn khu vườn và loài cây từ thư viện để thêm cây đầu tiên của bạn.'}
-                </Text>
-                <View style={ss.emptyActions}>
-                  {hasOwnedFilters ? (
+              ) : (
+                <View style={ss.emptyCard}>
+                  <View style={ss.emptyIcon}>
+                    <Text style={ss.emptyPlant}>♧</Text>
+                  </View>
+                  <Text style={ss.emptyTitle}>
+                    {hasOwnedFilters ? 'Không tìm thấy cây của bạn phù hợp' : 'Bạn chưa có cây trồng nào'}
+                  </Text>
+                  {debouncedKeyword ? <Text style={ss.queryText}>“{debouncedKeyword}”</Text> : null}
+                  <Text style={ss.bodyCenter}>
+                    {hasOwnedFilters
+                      ? 'Thử xóa bộ lọc khu vườn / tình trạng hoặc nhập từ khóa khác.'
+                      : 'Chọn khu vườn và loài cây từ thư viện để thêm cây đầu tiên của bạn.'}
+                  </Text>
+                  <View style={ss.emptyActions}>
+                    {hasOwnedFilters ? (
+                      <Pressable
+                        onPress={handleResetOwnedFilters}
+                        style={[ss.action, ss.actionLight]}
+                        accessibilityRole="button"
+                      >
+                        <Text style={ss.actionLightText}>Xóa bộ lọc</Text>
+                      </Pressable>
+                    ) : null}
                     <Pressable
-                      onPress={handleResetOwnedFilters}
-                      style={[ss.action, ss.actionLight]}
+                      onPress={() => router.push('/garden/add-plant' as never)}
+                      style={ss.action}
                       accessibilityRole="button"
                     >
-                      <Text style={ss.actionLightText}>Xóa bộ lọc</Text>
+                      <Text style={ss.actionText}>＋ Thêm cây mới</Text>
                     </Pressable>
-                  ) : null}
-                  <Pressable
-                    onPress={() => router.push('/garden/add-plant' as never)}
-                    style={ss.action}
-                    accessibilityRole="button"
-                  >
-                    <Text style={ss.actionText}>＋ Thêm cây mới</Text>
-                  </Pressable>
+                  </View>
                 </View>
-              </View>
+              )
             ) : (
               <>
                 <View style={ss.sectionRow}>

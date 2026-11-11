@@ -250,9 +250,7 @@ function PlantsManagementBody({
   const visiblePlants = plantsData?.content ?? [];
   const totalElements = plantsData?.totalElements ?? 0;
   const totalPages = plantsData?.totalPages ?? 0;
-  const displayTotalPages = isPlaceholderData
-    ? Math.max(1, totalPages, page + 1)
-    : Math.max(1, totalPages);
+  const displayTotalPages = Math.max(1, totalPages, page + 1);
 
   const handleRequestDeletePlant = (plant: UserPlantSummaryDto) => {
     const initiatedGeneration = getSessionGeneration();
@@ -435,7 +433,7 @@ function PlantsManagementBody({
 
       <Section
         title="Cây đang sở hữu"
-        hint={isLoading ? 'Đang tải...' : `${totalElements} cây`}
+        hint={isLoading || (!plantsData && !isError) ? 'Đang tải...' : `${totalElements} cây`}
       >
         {deleteError ? (
           <View style={s.errorBanner} accessibilityRole="alert">
@@ -459,22 +457,34 @@ function PlantsManagementBody({
             </Text>
             <Action label="Thử lại" onPress={onRetry} />
           </View>
+        ) : !plantsData ? (
+          <View style={s.emptyCard}>
+            <ActivityIndicator size="large" color={C.primary} />
+            <Text style={s.emptyDescription}>Đang tải danh sách cây trồng từ máy chủ...</Text>
+          </View>
         ) : visiblePlants.length === 0 ? (
-          <EmptyCard
-            icon="♧"
-            title={hasActiveFilters ? 'Không tìm thấy cây phù hợp' : 'Bạn chưa có cây trồng nào'}
-            description={
-              hasActiveFilters
-                ? 'Thử tên cây khác hoặc xóa bộ lọc khu vườn / tình trạng để xem lại.'
-                : 'Chọn một khu vườn và loài cây từ thư viện để bắt đầu quản lý cây của bạn.'
-            }
-            action={hasActiveFilters ? 'Xóa bộ lọc' : '＋  Thêm cây mới'}
-            onPress={
-              hasActiveFilters
-                ? onResetFilters
-                : () => router.push('/garden/add-plant' as never)
-            }
-          />
+          totalElements > 0 || isFetching || isPlaceholderData ? (
+            <View style={s.emptyCard}>
+              <ActivityIndicator size="large" color={C.primary} />
+              <Text style={s.emptyDescription}>Đang cập nhật danh sách cây trồng...</Text>
+            </View>
+          ) : (
+            <EmptyCard
+              icon="♧"
+              title={hasActiveFilters ? 'Không tìm thấy cây phù hợp' : 'Bạn chưa có cây trồng nào'}
+              description={
+                hasActiveFilters
+                  ? 'Thử tên cây khác hoặc xóa bộ lọc khu vườn / tình trạng để xem lại.'
+                  : 'Chọn một khu vườn và loài cây từ thư viện để bắt đầu quản lý cây của bạn.'
+              }
+              action={hasActiveFilters ? 'Xóa bộ lọc' : '＋  Thêm cây mới'}
+              onPress={
+                hasActiveFilters
+                  ? onResetFilters
+                  : () => router.push('/garden/add-plant' as never)
+              }
+            />
+          )
         ) : (
           <>
             {visiblePlants.map((plant) => {
@@ -837,9 +847,10 @@ function PageContent({ kind }: { kind: PageKind }) {
     plants: {
       title: 'Cây Trồng',
       subtitle: 'Quản lý cây trồng',
-      intro: plantsQuery.isLoading
-        ? `${favCount} loài yêu thích • Đang tải cây sở hữu... • ${gardensCount} khu vườn`
-        : `${favCount} loài yêu thích • ${plantsTotal} cây sở hữu • ${gardensCount} khu vườn`,
+      intro:
+        plantsQuery.isLoading || (!plantsQuery.data && !plantsQuery.isError)
+          ? `${favCount} loài yêu thích • Đang tải cây sở hữu... • ${gardensCount} khu vườn`
+          : `${favCount} loài yêu thích • ${plantsTotal} cây sở hữu • ${gardensCount} khu vườn`,
     },
     journal: { title: 'Nhật ký', subtitle: 'Nhật ký phát triển', intro: 'Chưa có ghi nhận nào' },
     schedule: { title: 'Lịch Chăm Sóc', subtitle: 'Lập lịch chăm sóc', intro: 'Chưa có lịch chăm sóc nào' },

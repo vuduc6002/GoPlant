@@ -2586,4 +2586,628 @@ describe('G5.4.1 User Plants REST API Integration (Mocked Axios HTTP Adapter)', 
       expect(container!.textContent).not.toContain('Trang 2 / 1');
     });
   });
+
+  describe('8. Pending Refetch Pagination & False Empty State Regression (G5.4.1.1.2)', () => {
+    function makePagedPlants(count: number): UserPlantSummaryDto[] {
+      return Array.from({ length: count }, (_, idx) => {
+        const num = idx + 1;
+        return {
+          ...plantSummaryOne,
+          id: `plt-pg-${num}`,
+          displayName: `Cây Phân Trang #${String(num).padStart(2, '0')}`,
+          createdAt: `2026-01-10T00:${String(Math.floor(num / 60)).padStart(2, '0')}:${String(num % 60).padStart(2, '0')}Z`,
+        };
+      });
+    }
+
+    function mountWithRealAuth(ui: React.ReactElement) {
+      act(() => {
+        root!.render(
+          <QueryClientProvider client={qc}>
+            <AuthProvider>
+              <PlantDataProvider>{ui}</PlantDataProvider>
+            </AuthProvider>
+          </QueryClientProvider>
+        );
+      });
+    }
+
+    it('Test A (PlantsScreen): prevents Trang 2 / 1 and false empty state across pending page-1 refetch and page-0 clamp refetch', async () => {
+      await tokenStorage.saveSession(sessionA);
+      let plantsDb = makePagedPlants(21);
+      const requestedPlantPages: number[] = [];
+      let page0Calls = 0;
+      let page1Calls = 0;
+      let page1RefetchPending = false;
+      let page0RefetchPending = false;
+
+      const pendingPage1Refetch = createDeferred<void>();
+      const pendingPage0Refetch = createDeferred<void>();
+      const alertSpy = vi.spyOn(Alert, 'alert').mockImplementation(() => {});
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: profileA }, headers: {}, config };
+        }
+        if (config.url === '/gardens') {
+          return {
+            status: 200,
+            data: { success: true, data: [{ ...gardenBalcony, plantCount: plantsDb.length }] },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/species/favorites') {
+          return {
+            status: 200,
+            data: { success: true, data: { content: [], page: 0, size: 20, totalElements: 0, totalPages: 0, last: true } },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/plants' && config.method === 'get') {
+          const p = (config.params ?? {}) as { page?: number; size?: number };
+          const pageIdx = p.page ?? 0;
+          const size = p.size ?? 20;
+          requestedPlantPages.push(pageIdx);
+
+          if (pageIdx === 1) {
+            page1Calls += 1;
+            if (page1Calls >= 2) {
+              page1RefetchPending = true;
+              await pendingPage1Refetch.promise;
+            }
+          } else if (pageIdx === 0) {
+            page0Calls += 1;
+            if (page0Calls >= 2) {
+              page0RefetchPending = true;
+              await pendingPage0Refetch.promise;
+            }
+          }
+
+          const totalElements = plantsDb.length;
+          const totalPages = totalElements === 0 ? 0 : Math.ceil(totalElements / size);
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: plantsDb.slice(pageIdx * size, (pageIdx + 1) * size),
+                page: pageIdx,
+                size,
+                totalElements,
+                totalPages,
+                last: totalPages === 0 || pageIdx + 1 >= totalPages,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/plants/plt-pg-21' && config.method === 'delete') {
+          plantsDb = plantsDb.filter((item) => item.id !== 'plt-pg-21');
+          return { status: 200, data: { success: true, data: { message: 'Deleted #21' } }, headers: {}, config };
+        }
+        throw new Error(`Unexpected API call: ${config.method} ${config.url}`);
+      });
+
+      const seenTexts: string[] = [];
+      const observer = new MutationObserver(() => {
+        seenTexts.push(container?.textContent ?? '');
+      });
+      observer.observe(container!, { childList: true, subtree: true, characterData: true });
+
+      mountWithRealAuth(<PlantsScreen />);
+
+      // 1. Page 0 loaded
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Cây Phân Trang #01');
+        expect(container!.textContent).toContain('Cây Phân Trang #20');
+        expect(container!.textContent).toContain('Trang 1 / 2');
+        expect(container!.textContent).toContain('21 cây sở hữu');
+      });
+
+      // 2. Navigate to page 1 (only #21)
+      clickElement(
+        Array.from(container!.querySelectorAll('[role="button"]')).find((el) => el.textContent === 'Trang sau')
+      );
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Cây Phân Trang #21');
+        expect(container!.textContent).toContain('Trang 2 / 2');
+      });
+
+      // 3. Delete #21 (DELETE resolves, page-1 GET refetch stays pending)
+      clickElement(container!.querySelector('[aria-label="Xóa Cây Phân Trang #21"]'));
+      const buttons = alertSpy.mock.calls[0]?.[2] as { text?: string; onPress?: () => void }[] | undefined;
+      act(() => {
+        buttons?.find((b) => b.text === 'Xóa cây')?.onPress?.();
+      });
+
+      // 4 & 5. While page-1 GET refetch is still pending:
+      await waitFor(() => expect(page1RefetchPending).toBe(true));
+      await flushAsync(40);
+
+      expect(container!.textContent).not.toContain('Trang 2 / 1');
+      expect(container!.textContent).not.toContain('Trang 3 / 2');
+      expect(container!.textContent).not.toContain('Bạn chưa có cây trồng nào');
+      expect(container!.textContent).toContain('Đang cập nhật danh sách cây trồng...');
+      expect(container!.textContent).toContain('20 cây sở hữu');
+      expect(container!.textContent).toContain('20 cây');
+      expect(requestedPlantPages).toEqual([0, 1, 1]);
+
+      // 6 & 7. Resolve page-1 GET refetch -> page clamps to 0 and fires page-0 GET refetch (held pending)
+      await act(async () => {
+        pendingPage1Refetch.resolve(undefined);
+        await flushAsync(20);
+      });
+      await waitFor(() => expect(page0RefetchPending).toBe(true));
+
+      // 8. While page-0 refetch is pending: never shows false empty state or invalid pagination
+      await flushAsync(40);
+      expect(container!.textContent).not.toContain('Bạn chưa có cây trồng nào');
+      expect(container!.textContent).not.toContain('Trang 2 / 1');
+      expect(requestedPlantPages).toEqual([0, 1, 1, 0]);
+
+      // 9 & 10. Resolve page-0 GET -> shows all 20 remaining plants #01..#20 and count 20
+      await act(async () => {
+        pendingPage0Refetch.resolve(undefined);
+        await flushAsync(30);
+      });
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('20 cây sở hữu');
+        expect(container!.textContent).toContain('20 cây');
+        for (let i = 1; i <= 20; i += 1) {
+          expect(container!.textContent).toContain(`Cây Phân Trang #${String(i).padStart(2, '0')}`);
+        }
+      });
+
+      observer.disconnect();
+      expect(container!.textContent).not.toContain('Cây Phân Trang #21');
+      expect(container!.textContent).not.toContain('Trang 2 /');
+      expect(container!.textContent).not.toContain('Trang sau');
+      expect(seenTexts.some((t) => t.includes('Trang 2 / 1'))).toBe(false);
+      expect(seenTexts.some((t) => t.includes('Trang 3 / 2'))).toBe(false);
+      expect(seenTexts.some((t) => t.includes('Bạn chưa có cây trồng nào'))).toBe(false);
+    });
+
+    it('Test B (SearchScreen scope=owned): prevents Trang 2 / 1 and false empty state across pending page-1 refetch and page-0 clamp refetch', async () => {
+      await tokenStorage.saveSession(sessionA);
+      let plantsDb = makePagedPlants(21);
+      const requestedOwnedPages: number[] = [];
+      let page0Calls = 0;
+      let page1Calls = 0;
+      let page1RefetchPending = false;
+      let page0RefetchPending = false;
+
+      const pendingPage1Refetch = createDeferred<void>();
+      const pendingPage0Refetch = createDeferred<void>();
+      routeParamsState.current = { scope: 'owned' };
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: profileA }, headers: {}, config };
+        }
+        if (config.url === '/gardens') {
+          return { status: 200, data: { success: true, data: [gardenBalcony] }, headers: {}, config };
+        }
+        if (config.url === '/plants' && config.method === 'get') {
+          const p = (config.params ?? {}) as { page?: number; size?: number };
+          const pageIdx = p.page ?? 0;
+          const size = p.size ?? 20;
+          requestedOwnedPages.push(pageIdx);
+
+          if (pageIdx === 1) {
+            page1Calls += 1;
+            if (page1Calls >= 2) {
+              page1RefetchPending = true;
+              await pendingPage1Refetch.promise;
+            }
+          } else if (pageIdx === 0) {
+            page0Calls += 1;
+            if (page0Calls >= 2) {
+              page0RefetchPending = true;
+              await pendingPage0Refetch.promise;
+            }
+          }
+
+          const totalElements = plantsDb.length;
+          const totalPages = totalElements === 0 ? 0 : Math.ceil(totalElements / size);
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: plantsDb.slice(pageIdx * size, (pageIdx + 1) * size),
+                page: pageIdx,
+                size,
+                totalElements,
+                totalPages,
+                last: totalPages === 0 || pageIdx + 1 >= totalPages,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/plants/plt-pg-21' && config.method === 'delete') {
+          plantsDb = plantsDb.filter((item) => item.id !== 'plt-pg-21');
+          return { status: 200, data: { success: true, data: { message: 'Deleted #21' } }, headers: {}, config };
+        }
+        throw new Error(`Unexpected API call: ${config.method} ${config.url}`);
+      });
+
+      let deleteMut!: ReturnType<typeof useDeletePlantMutation>;
+      function DeleteProbe() {
+        deleteMut = useDeletePlantMutation();
+        return null;
+      }
+
+      const seenTexts: string[] = [];
+      const observer = new MutationObserver(() => {
+        seenTexts.push(container?.textContent ?? '');
+      });
+      observer.observe(container!, { childList: true, subtree: true, characterData: true });
+
+      mountWithRealAuth(
+        <>
+          <DeleteProbe />
+          <SearchScreen />
+        </>
+      );
+
+      // 1. Load 21 plants on page 0 and navigate to page 1
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Cây của tôi (21)');
+        expect(container!.textContent).toContain('Trang 1 / 2');
+      });
+
+      clickElement(
+        Array.from(container!.querySelectorAll('[role="button"]')).find((el) => el.textContent === 'Trang sau')
+      );
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Cây Phân Trang #21');
+        expect(container!.textContent).toContain('Trang 2 / 2');
+      });
+
+      // 2 & 3. Delete #21 via useDeletePlantMutation; keep GET page-1 refetch pending
+      await act(async () => {
+        await deleteMut.mutateAsync('plt-pg-21');
+      });
+
+      await waitFor(() => expect(page1RefetchPending).toBe(true));
+      await flushAsync(40);
+
+      // 4. Verify no Trang 2 / 1, no false Empty State, syncing state & updated count 20 shown
+      expect(container!.textContent).not.toContain('Trang 2 / 1');
+      expect(container!.textContent).not.toContain('Bạn chưa có cây trồng nào');
+      expect(container!.textContent).toContain('Đang cập nhật danh sách cây trồng...');
+      expect(container!.textContent).toContain('Cây của tôi (20)');
+      expect(requestedOwnedPages).toEqual([0, 1, 1]);
+
+      // 5 & 6. Resolve page-1 GET -> ownedPage clamps to 0 and starts page-0 GET refetch (held pending)
+      await act(async () => {
+        pendingPage1Refetch.resolve(undefined);
+        await flushAsync(20);
+      });
+      await waitFor(() => expect(page0RefetchPending).toBe(true));
+
+      await flushAsync(40);
+      expect(container!.textContent).not.toContain('Bạn chưa có cây trồng nào');
+      expect(container!.textContent).not.toContain('Trang 2 / 1');
+      expect(requestedOwnedPages).toEqual([0, 1, 1, 0]);
+
+      // 7. Resolve page-0 GET -> displays all 20 plants #01..#20 cleanly
+      await act(async () => {
+        pendingPage0Refetch.resolve(undefined);
+        await flushAsync(30);
+      });
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Cây của tôi (20)');
+        expect(container!.textContent).toContain('20 kết quả');
+        for (let i = 1; i <= 20; i += 1) {
+          expect(container!.textContent).toContain(`Cây Phân Trang #${String(i).padStart(2, '0')}`);
+        }
+      });
+
+      observer.disconnect();
+      expect(container!.textContent).not.toContain('Cây Phân Trang #21');
+      expect(container!.textContent).not.toContain('Trang 2 /');
+      expect(container!.textContent).not.toContain('Trang sau');
+      expect(seenTexts.some((t) => t.includes('Trang 2 / 1'))).toBe(false);
+      expect(seenTexts.some((t) => t.includes('Trang 3 / 2'))).toBe(false);
+      expect(seenTexts.some((t) => t.includes('Bạn chưa có cây trồng nào'))).toBe(false);
+    });
+
+    it('Test C: protects cold page-0 placeholder state (isPlaceholderData=true, content=[], totalElements=20) after clamp during pending page-0 refetch', async () => {
+      await tokenStorage.saveSession(sessionA);
+      let plantsDb = makePagedPlants(21);
+      let page0Calls = 0;
+      let page0RefetchPending = false;
+      const pendingPage0Refetch = createDeferred<void>();
+      const alertSpy = vi.spyOn(Alert, 'alert').mockImplementation(() => {});
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: profileA }, headers: {}, config };
+        }
+        if (config.url === '/gardens') {
+          return {
+            status: 200,
+            data: { success: true, data: [{ ...gardenBalcony, plantCount: plantsDb.length }] },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/species/favorites') {
+          return {
+            status: 200,
+            data: { success: true, data: { content: [], page: 0, size: 20, totalElements: 0, totalPages: 0, last: true } },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/plants' && config.method === 'get') {
+          const p = (config.params ?? {}) as { page?: number; size?: number };
+          const pageIdx = p.page ?? 0;
+          const size = p.size ?? 20;
+          if (pageIdx === 0) {
+            page0Calls += 1;
+            if (page0Calls >= 2) {
+              page0RefetchPending = true;
+              await pendingPage0Refetch.promise;
+            }
+          }
+          const totalElements = plantsDb.length;
+          const totalPages = totalElements === 0 ? 0 : Math.ceil(totalElements / size);
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: plantsDb.slice(pageIdx * size, (pageIdx + 1) * size),
+                page: pageIdx,
+                size,
+                totalElements,
+                totalPages,
+                last: totalPages === 0 || pageIdx + 1 >= totalPages,
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/plants/plt-pg-21' && config.method === 'delete') {
+          plantsDb = plantsDb.filter((item) => item.id !== 'plt-pg-21');
+          return { status: 200, data: { success: true, data: { message: 'Deleted #21' } }, headers: {}, config };
+        }
+        throw new Error(`Unexpected API call: ${config.method} ${config.url}`);
+      });
+
+      const seenTexts: string[] = [];
+      const observer = new MutationObserver(() => {
+        seenTexts.push(container?.textContent ?? '');
+      });
+      observer.observe(container!, { childList: true, subtree: true, characterData: true });
+
+      mountWithRealAuth(<PlantsScreen />);
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Cây Phân Trang #01');
+        expect(container!.textContent).toContain('Trang 1 / 2');
+      });
+
+      clickElement(
+        Array.from(container!.querySelectorAll('[role="button"]')).find((el) => el.textContent === 'Trang sau')
+      );
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Cây Phân Trang #21');
+        expect(container!.textContent).toContain('Trang 2 / 2');
+      });
+
+      // Evict inactive page-0 cache (simulating React Query GC) so after clamp page 0 relies on placeholderData from page 1
+      act(() => {
+        qc.removeQueries({
+          predicate: (q) =>
+            Array.isArray(q.queryKey) &&
+            q.queryKey[0] === 'plants' &&
+            q.queryKey[2] === 'list' &&
+            (q.queryKey[3] as { page?: number } | undefined)?.page === 0,
+        });
+      });
+
+      clickElement(container!.querySelector('[aria-label="Xóa Cây Phân Trang #21"]'));
+      const buttons = alertSpy.mock.calls[0]?.[2] as { text?: string; onPress?: () => void }[] | undefined;
+      act(() => {
+        buttons?.find((b) => b.text === 'Xóa cây')?.onPress?.();
+      });
+
+      // Wait until page clamps to 0 and cold page-0 GET is held pending while placeholderData is { content: [], totalElements: 20 }
+      await waitFor(() => expect(page0RefetchPending).toBe(true));
+      await flushAsync(40);
+
+      expect(container!.textContent).toContain('Đang cập nhật danh sách cây trồng...');
+      expect(container!.textContent).toContain('20 cây sở hữu');
+      expect(container!.textContent).not.toContain('Bạn chưa có cây trồng nào');
+      expect(container!.textContent).not.toContain('Trang 2 / 1');
+
+      await act(async () => {
+        pendingPage0Refetch.resolve(undefined);
+        await flushAsync(30);
+      });
+
+      await waitFor(() => {
+        expect(container!.textContent).toContain('Cây Phân Trang #01');
+        expect(container!.textContent).toContain('Cây Phân Trang #20');
+      });
+
+      observer.disconnect();
+      expect(seenTexts.some((t) => t.includes('Trang 2 / 1'))).toBe(false);
+      expect(seenTexts.some((t) => t.includes('Bạn chưa có cây trồng nào'))).toBe(false);
+    });
+
+    it('Test D: guards non-placeholder refetch pagination denominator (Trang 2 / 2, never Trang 2 / 1) on both PlantsScreen and SearchScreen when visible items remain while totalPages drops to 1', async () => {
+      await tokenStorage.saveSession(sessionA);
+      const alertSpy = vi.spyOn(Alert, 'alert').mockImplementation(() => {});
+
+      const runNonEmptyRefetchCheck = async (mode: 'plants' | 'search') => {
+        qc.clear();
+        let plantsDb = makePagedPlants(22);
+        let page1Calls = 0;
+        let page1RefetchPending = false;
+        const pendingPage1Refetch = createDeferred<void>();
+        routeParamsState.current = mode === 'search' ? { scope: 'owned' } : {};
+
+        apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+          if (config.url === '/users/me') {
+            return { status: 200, data: { success: true, data: profileA }, headers: {}, config };
+          }
+          if (config.url === '/gardens') {
+            return { status: 200, data: { success: true, data: [gardenBalcony] }, headers: {}, config };
+          }
+          if (config.url === '/species/favorites') {
+            return {
+              status: 200,
+              data: { success: true, data: { content: [], page: 0, size: 20, totalElements: 0, totalPages: 0, last: true } },
+              headers: {},
+              config,
+            };
+          }
+          if (config.url === '/plants' && config.method === 'get') {
+            const p = (config.params ?? {}) as { page?: number; size?: number };
+            const pageIdx = p.page ?? 0;
+            const size = p.size ?? 20;
+            if (pageIdx === 1) {
+              page1Calls += 1;
+              if (page1Calls === 1) {
+                // Server reports totalElements=21 with 2 items on page 1 (drift); deleting #22 sets cached totalElements=20, totalPages=1 while #21 still renders during refetch
+                return {
+                  status: 200,
+                  data: {
+                    success: true,
+                    data: {
+                      content: plantsDb.slice(20, 22),
+                      page: 1,
+                      size,
+                      totalElements: 21,
+                      totalPages: 2,
+                      last: true,
+                    },
+                  },
+                  headers: {},
+                  config,
+                };
+              }
+              page1RefetchPending = true;
+              await pendingPage1Refetch.promise;
+            }
+            const totalElements = plantsDb.length;
+            const totalPages = totalElements === 0 ? 0 : Math.ceil(totalElements / size);
+            return {
+              status: 200,
+              data: {
+                success: true,
+                data: {
+                  content: plantsDb.slice(pageIdx * size, (pageIdx + 1) * size),
+                  page: pageIdx,
+                  size,
+                  totalElements,
+                  totalPages,
+                  last: totalPages === 0 || pageIdx + 1 >= totalPages,
+                },
+              },
+              headers: {},
+              config,
+            };
+          }
+          if (config.url === '/plants/plt-pg-22' && config.method === 'delete') {
+            // Concurrent server delete reduced db to 20 items (#01..#20)
+            plantsDb = plantsDb.slice(0, 20);
+            return { status: 200, data: { success: true, data: { message: 'Deleted #22' } }, headers: {}, config };
+          }
+          throw new Error(`Unexpected API call: ${config.method} ${config.url}`);
+        });
+
+        let deleteMut!: ReturnType<typeof useDeletePlantMutation>;
+        function DeleteProbe() {
+          deleteMut = useDeletePlantMutation();
+          return null;
+        }
+
+        const seenTexts: string[] = [];
+        const observer = new MutationObserver(() => {
+          seenTexts.push(container?.textContent ?? '');
+        });
+        observer.observe(container!, { childList: true, subtree: true, characterData: true });
+
+        if (root) {
+          act(() => root!.unmount());
+          root = createRoot(container!);
+        }
+
+        mountWithRealAuth(
+          mode === 'plants' ? (
+            <PlantsScreen />
+          ) : (
+            <>
+              <DeleteProbe />
+              <SearchScreen />
+            </>
+          )
+        );
+
+        await waitFor(() => {
+          expect(container!.textContent).toContain('Cây Phân Trang #01');
+          expect(container!.textContent).toContain('Trang 1 / 2');
+        });
+
+        clickElement(
+          Array.from(container!.querySelectorAll('[role="button"]')).find((el) => el.textContent === 'Trang sau')
+        );
+        await waitFor(() => {
+          expect(container!.textContent).toContain('Cây Phân Trang #21');
+          expect(container!.textContent).toContain('Cây Phân Trang #22');
+          expect(container!.textContent).toContain('Trang 2 / 2');
+        });
+
+        if (mode === 'plants') {
+          clickElement(container!.querySelector('[aria-label="Xóa Cây Phân Trang #22"]'));
+          const buttons = alertSpy.mock.calls.at(-1)?.[2] as { text?: string; onPress?: () => void }[] | undefined;
+          act(() => {
+            buttons?.find((b) => b.text === 'Xóa cây')?.onPress?.();
+          });
+        } else {
+          await act(async () => {
+            await deleteMut.mutateAsync('plt-pg-22');
+          });
+        }
+
+        // During non-placeholder page-1 refetch (`isFetching=true, isPlaceholderData=false`), #21 stays visible while cached totalPages=1
+        await waitFor(() => expect(page1RefetchPending).toBe(true));
+        await flushAsync(40);
+
+        expect(container!.textContent).toContain('Cây Phân Trang #21');
+        expect(container!.textContent).toContain('Trang 2 / 2');
+        expect(container!.textContent).not.toContain('Trang 2 / 1');
+
+        await act(async () => {
+          pendingPage1Refetch.resolve(undefined);
+          await flushAsync(40);
+        });
+
+        await waitFor(() => {
+          expect(container!.textContent).toContain('Cây Phân Trang #01');
+          expect(container!.textContent).toContain('Cây Phân Trang #20');
+        });
+
+        observer.disconnect();
+        expect(seenTexts.some((t) => t.includes('Trang 2 / 1'))).toBe(false);
+        expect(seenTexts.some((t) => t.includes('Bạn chưa có cây trồng nào'))).toBe(false);
+      };
+
+      await runNonEmptyRefetchCheck('plants');
+      await runNonEmptyRefetchCheck('search');
+    });
+  });
 });
