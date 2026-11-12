@@ -473,6 +473,7 @@ export function useCreateJournalMutation() {
           queryKey: queryKeys.journals.plantBase(ownerUserId, targetPlantId),
         });
       }
+      qc.invalidateQueries({ queryKey: queryKeys.monitoring.all(ownerUserId) });
     },
   });
 
@@ -589,6 +590,7 @@ export function useUpdateJournalMutation() {
           predicate: (query) => isOwnerPlantJournalListQuery(query, ownerUserId),
         });
       }
+      qc.invalidateQueries({ queryKey: queryKeys.monitoring.all(ownerUserId) });
     },
   });
 
@@ -719,6 +721,7 @@ export function useDeleteJournalMutation() {
           predicate: (query) => isOwnerPlantJournalListQuery(query, ownerUserId),
         });
       }
+      qc.invalidateQueries({ queryKey: queryKeys.monitoring.all(ownerUserId) });
     },
   });
 

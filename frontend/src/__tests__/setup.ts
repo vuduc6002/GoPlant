@@ -1,3 +1,4 @@
+import React from 'react';
 import { vi } from 'vitest';
 
 // Enable React act() environment
@@ -10,4 +11,64 @@ vi.mock('expo-secure-store', () => ({
   setItemAsync: vi.fn().mockResolvedValue(undefined),
   deleteItemAsync: vi.fn().mockResolvedValue(undefined),
   AFTER_FIRST_UNLOCK: 'AFTER_FIRST_UNLOCK',
+}));
+
+vi.mock('react-native-svg', () => ({
+  __esModule: true,
+  default: ({
+    children,
+    accessibilityLabel,
+    viewBox,
+  }: {
+    children?: React.ReactNode;
+    accessibilityLabel?: string;
+    viewBox?: string;
+  }) =>
+    React.createElement(
+      'svg',
+      {
+        'aria-label': accessibilityLabel,
+        viewBox,
+        'data-testid': 'mock-svg',
+      },
+      children
+    ),
+  Svg: ({
+    children,
+    accessibilityLabel,
+    viewBox,
+  }: {
+    children?: React.ReactNode;
+    accessibilityLabel?: string;
+    viewBox?: string;
+  }) =>
+    React.createElement(
+      'svg',
+      {
+        'aria-label': accessibilityLabel,
+        viewBox,
+        'data-testid': 'mock-svg',
+      },
+      children
+    ),
+  Rect: ({
+    x,
+    y,
+    width,
+    height,
+    fill,
+  }: {
+    x?: number;
+    y?: number;
+    width?: number;
+    height?: number;
+    fill?: string;
+  }) =>
+    React.createElement('rect', {
+      x,
+      y,
+      width,
+      height,
+      fill,
+    }),
 }));

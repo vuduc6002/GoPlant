@@ -607,6 +607,7 @@ export function useCreateScheduleMutation() {
         queryKey: queryKeys.plants.schedulesBase(ownerUserId, created.userPlantId),
       });
       qc.invalidateQueries({ queryKey: queryKeys.schedules.today(ownerUserId) });
+      qc.invalidateQueries({ queryKey: queryKeys.monitoring.all(ownerUserId) });
     },
   });
 
@@ -743,6 +744,7 @@ export function useUpdateScheduleMutation() {
         });
       }
       qc.invalidateQueries({ queryKey: queryKeys.schedules.today(ownerUserId) });
+      qc.invalidateQueries({ queryKey: queryKeys.monitoring.all(ownerUserId) });
     },
   });
 
@@ -866,6 +868,7 @@ export function useDeleteScheduleMutation() {
           predicate: (query) => isOwnerPlantScheduleQuery(query, ownerUserId),
         });
       }
+      qc.invalidateQueries({ queryKey: queryKeys.monitoring.all(ownerUserId) });
     },
   });
 
@@ -996,6 +999,7 @@ export function useCompleteScheduleMutation() {
           queryKey: queryKeys.careLogs.plants(ownerUserId),
         });
       }
+      qc.invalidateQueries({ queryKey: queryKeys.monitoring.all(ownerUserId) });
     },
   });
 
@@ -1126,6 +1130,7 @@ export function useSkipScheduleMutation() {
           queryKey: queryKeys.careLogs.plants(ownerUserId),
         });
       }
+      qc.invalidateQueries({ queryKey: queryKeys.monitoring.all(ownerUserId) });
     },
   });
 

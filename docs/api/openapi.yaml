@@ -1,10 +1,11 @@
 openapi: 3.0.3
 info:
   title: GoPlant REST API Contract
-  version: 1.0.0
+  version: 1.1.0
   description: >
     Tài liệu đặc tả RESTful API cho hệ thống Quản lý và Chăm sóc cây trồng GoPlant.
-    Phục vụ giao tiếp chuẩn hóa giữa Frontend React Native + Expo và Backend Spring Boot.
+    Phục vụ giao tiếp chuẩn hóa giữa Frontend React Native + Expo và Backend Spring Boot,
+    đã bổ sung hai endpoint Monitoring G5.5.1.
 servers:
   - url: https://api.goplant.vn/api/v1
     description: Production Server (Dự kiến)
@@ -28,6 +29,8 @@ tags:
     description: Nhật ký thực hiện công việc chăm sóc cây
   - name: Growth Journals
     description: Nhật ký theo dõi quá trình sinh trưởng và hình ảnh
+  - name: Monitoring
+    description: Tổng quan và chi tiết theo dõi vườn/cây G5.5.1 (read-only, không cảm biến giả)
   - name: Admin Species
     description: Quản trị danh mục giống cây (ROLE_ADMIN)
   - name: Admin Users
@@ -1435,6 +1438,64 @@ paths:
         '404':
           $ref: '#/components/responses/404NotFound'
 
+  /monitoring/overview:
+    get:
+      tags:
+        - Monitoring
+      summary: Lấy dữ liệu tổng quan theo dõi vườn và cây trồng của người dùng hiện tại
+      description: >
+        Tổng hợp từ dữ liệu thật của owner hiện tại trong 5 queries cố định.
+        Lịch chăm sóc dùng khoảng nửa-mở theo múi giờ Asia/Ho_Chi_Minh.
+        Bộ đếm CareLog phân loại trung thực theo liên kết lịch hiện tại (unlinked vs linked),
+        không suy đoán nguồn gốc manual sau khi xóa lịch và không tính Care Adherence %.
+        healthDistribution đếm trực tiếp UserPlant.healthStatus (lưu ý mặc định HEALTHY ở V1).
+      operationId: getMonitoringOverview
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Tổng quan theo dõi (trả 200 kể cả khi chưa có vườn/cây)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MonitoringOverviewWrapper'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+
+  /monitoring/plants/{plantId}:
+    get:
+      tags:
+        - Monitoring
+      summary: Lấy chi tiết theo dõi của một cây trồng thuộc quyền sở hữu của người dùng hiện tại
+      description: >
+        Kiểm tra tồn tại (404) và quyền sở hữu (403 Forbidden nếu khác owner).
+        Trả 200 trong tối đa 5 queries cố định (tối đa 1 query khi từ chối 403/404).
+      operationId: getPlantMonitoringDetail
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: plantId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Chi tiết theo dõi cây trồng
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlantMonitoringDetailWrapper'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
 components:
   securitySchemes:
     BearerAuth:
@@ -2723,3 +2784,271 @@ components:
           example: true
         data:
           $ref: '#/components/schemas/CameraItem'
+
+    HealthDistribution:
+      type: object
+      description: Phân bố UserPlant.healthStatus lưu trong hồ sơ cây (V1 mặc định HEALTHY khi tạo mới).
+      properties:
+        healthyCount:
+          type: integer
+        needsAttentionCount:
+          type: integer
+        criticalCount:
+          type: integer
+        unknownCount:
+          type: integer
+
+    SchedulesSummary:
+      type: object
+      description: Tổng hợp lịch ACTIVE theo khoảng nửa-mở giờ Asia/Ho_Chi_Minh.
+      properties:
+        activeCount:
+          type: integer
+        dueTodayCount:
+          type: integer
+        overdueCount:
+          type: integer
+
+    CareLogsWindowSummary:
+      type: object
+      description: Bộ đếm trung tính phân nhóm theo schedule_id IS NULL (unlinked) và IS NOT NULL (linked).
+      properties:
+        unlinkedCompletedLogs:
+          type: integer
+        unlinkedSkippedLogs:
+          type: integer
+        linkedScheduledCompletedLogs:
+          type: integer
+        linkedScheduledSkippedLogs:
+          type: integer
+
+    AttentionPlant:
+      type: object
+      properties:
+        plantId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+        gardenId:
+          type: string
+          format: uuid
+        gardenName:
+          type: string
+        speciesName:
+          type: string
+        healthStatus:
+          type: string
+          enum: [HEALTHY, NEEDS_ATTENTION, CRITICAL, UNKNOWN]
+
+    MonitoringGardenSummary:
+      type: object
+      properties:
+        gardenId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        plantCount:
+          type: integer
+        attentionCount:
+          type: integer
+
+    MonitoringOverview:
+      type: object
+      properties:
+        gardensCount:
+          type: integer
+        plantsCount:
+          type: integer
+        healthDistribution:
+          $ref: '#/components/schemas/HealthDistribution'
+        schedulesSummary:
+          $ref: '#/components/schemas/SchedulesSummary'
+        careLogsSummary7d:
+          $ref: '#/components/schemas/CareLogsWindowSummary'
+        careLogsSummary30d:
+          $ref: '#/components/schemas/CareLogsWindowSummary'
+        attentionPlants:
+          type: array
+          items:
+            $ref: '#/components/schemas/AttentionPlant'
+        gardensSummary:
+          type: array
+          items:
+            $ref: '#/components/schemas/MonitoringGardenSummary'
+        sensorConnected:
+          type: boolean
+          example: false
+        generatedAt:
+          type: string
+          format: date-time
+
+    MonitoringOverviewWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/MonitoringOverview'
+        message:
+          type: string
+          example: "OK"
+
+    MonitoringPlantGarden:
+      type: object
+      nullable: true
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+
+    MonitoringPlantSpecies:
+      type: object
+      nullable: true
+      properties:
+        id:
+          type: string
+          format: uuid
+        commonName:
+          type: string
+        scientificName:
+          type: string
+        category:
+          type: string
+
+    MonitoringActivityItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        sourceType:
+          type: string
+          enum: [CARE_LOG_UNLINKED, CARE_LOG_LINKED, GROWTH_JOURNAL]
+          description: CARE_LOG_UNLINKED gồm cả log thủ công lẫn log bị tách lịch khi xóa lịch (ON DELETE SET NULL).
+        title:
+          type: string
+        taskType:
+          type: string
+          nullable: true
+        status:
+          type: string
+          nullable: true
+        entryType:
+          type: string
+          enum: [GROWTH, WATERING, FERTILIZING, PEST, OTHER]
+          nullable: true
+        healthStatus:
+          type: string
+          enum: [HEALTHY, NEEDS_ATTENTION, CRITICAL]
+          nullable: true
+        notePreview:
+          type: string
+          nullable: true
+        occurredAt:
+          type: string
+          format: date-time
+
+    MonitoringJournalObservation:
+      type: object
+      properties:
+        journalId:
+          type: string
+          format: uuid
+        recordedAt:
+          type: string
+          format: date-time
+        entryType:
+          type: string
+          enum: [GROWTH, WATERING, FERTILIZING, PEST, OTHER]
+        healthStatus:
+          type: string
+          enum: [HEALTHY, NEEDS_ATTENTION, CRITICAL]
+        notePreview:
+          type: string
+          nullable: true
+
+    SpeciesCareGuide:
+      type: object
+      description: Chuỗi văn bản tham khảo thô từ PlantSpecies, không phải ngưỡng đo cảm biến.
+      properties:
+        lightRequirement:
+          type: string
+          nullable: true
+        waterRequirement:
+          type: string
+          nullable: true
+        wateringFrequency:
+          type: string
+          nullable: true
+        temperatureRange:
+          type: string
+          nullable: true
+        humidityRange:
+          type: string
+          nullable: true
+        soilPh:
+          type: string
+          nullable: true
+        usageAndCaution:
+          type: string
+          nullable: true
+
+    PlantMonitoringDetail:
+      type: object
+      properties:
+        plantId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+        garden:
+          $ref: '#/components/schemas/MonitoringPlantGarden'
+        species:
+          $ref: '#/components/schemas/MonitoringPlantSpecies'
+        currentHealthStatus:
+          type: string
+          enum: [HEALTHY, NEEDS_ATTENTION, CRITICAL, UNKNOWN]
+        plantedAt:
+          type: string
+          format: date
+          nullable: true
+        ageDays:
+          type: integer
+          nullable: true
+        schedulesSummary:
+          $ref: '#/components/schemas/SchedulesSummary'
+        careLogsSummary30d:
+          $ref: '#/components/schemas/CareLogsWindowSummary'
+        recentActivityTimeline:
+          type: array
+          items:
+            $ref: '#/components/schemas/MonitoringActivityItem'
+        recentJournalObservations:
+          type: array
+          items:
+            $ref: '#/components/schemas/MonitoringJournalObservation'
+        speciesCareGuide:
+          $ref: '#/components/schemas/SpeciesCareGuide'
+        sensorConnected:
+          type: boolean
+          example: false
+        generatedAt:
+          type: string
+          format: date-time
+
+    PlantMonitoringDetailWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/PlantMonitoringDetail'
+        message:
+          type: string
+          example: "OK"

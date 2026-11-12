@@ -11,6 +11,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -30,6 +31,15 @@ public class GlobalExceptionHandler {
         String field = fieldError != null ? fieldError.getField() : "unknown";
         String message = fieldError != null ? fieldError.getDefaultMessage() : "Dữ liệu đầu vào không hợp lệ";
         log.warn("Validation error on field '{}': {}", field, message);
+        ApiResponse<Void> res = ApiResponse.failure("VALIDATION_ERROR", message, field);
+        return new ResponseEntity<>(res, HttpStatus.BAD_REQUEST);
+    }
+
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiResponse<Void>> handleTypeMismatchException(MethodArgumentTypeMismatchException ex) {
+        String field = ex.getName();
+        String message = "Tham số '" + field + "' không đúng định dạng.";
+        log.warn("Type mismatch error on parameter '{}': {}", field, ex.getMessage());
         ApiResponse<Void> res = ApiResponse.failure("VALIDATION_ERROR", message, field);
         return new ResponseEntity<>(res, HttpStatus.BAD_REQUEST);
     }

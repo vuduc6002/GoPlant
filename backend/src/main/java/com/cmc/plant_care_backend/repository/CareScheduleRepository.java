@@ -2,6 +2,7 @@ package com.cmc.plant_care_backend.repository;
 
 import com.cmc.plant_care_backend.model.CareSchedule;
 import com.cmc.plant_care_backend.model.enums.ScheduleStatus;
+import com.cmc.plant_care_backend.repository.projection.ScheduleSummaryProjection;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -37,5 +38,39 @@ public interface CareScheduleRepository extends JpaRepository<CareSchedule, UUID
         UUID ownerId,
         ScheduleStatus status,
         OffsetDateTime dateTime
+    );
+
+    @Query("""
+        SELECT new com.cmc.plant_care_backend.repository.projection.ScheduleSummaryProjection(
+            COUNT(s.id),
+            COALESCE(SUM(CASE WHEN s.nextScheduledAt >= :now AND s.nextScheduledAt < :startOfTomorrowVn THEN 1L ELSE 0L END), 0L),
+            COALESCE(SUM(CASE WHEN s.nextScheduledAt < :now THEN 1L ELSE 0L END), 0L)
+        )
+        FROM CareSchedule s
+        WHERE s.owner.id = :ownerId
+          AND s.status = com.cmc.plant_care_backend.model.enums.ScheduleStatus.ACTIVE
+        """)
+    ScheduleSummaryProjection summarizeActiveSchedulesByOwnerId(
+        @Param("ownerId") UUID ownerId,
+        @Param("now") OffsetDateTime now,
+        @Param("startOfTomorrowVn") OffsetDateTime startOfTomorrowVn
+    );
+
+    @Query("""
+        SELECT new com.cmc.plant_care_backend.repository.projection.ScheduleSummaryProjection(
+            COUNT(s.id),
+            COALESCE(SUM(CASE WHEN s.nextScheduledAt >= :now AND s.nextScheduledAt < :startOfTomorrowVn THEN 1L ELSE 0L END), 0L),
+            COALESCE(SUM(CASE WHEN s.nextScheduledAt < :now THEN 1L ELSE 0L END), 0L)
+        )
+        FROM CareSchedule s
+        WHERE s.userPlant.id = :plantId
+          AND s.owner.id = :ownerId
+          AND s.status = com.cmc.plant_care_backend.model.enums.ScheduleStatus.ACTIVE
+        """)
+    ScheduleSummaryProjection summarizeActiveSchedulesByPlantIdAndOwnerId(
+        @Param("plantId") UUID plantId,
+        @Param("ownerId") UUID ownerId,
+        @Param("now") OffsetDateTime now,
+        @Param("startOfTomorrowVn") OffsetDateTime startOfTomorrowVn
     );
 }

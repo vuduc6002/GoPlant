@@ -107,4 +107,11 @@ export const queryKeys = {
     detailLookup: (userId: string, plantId: string, journalId: string) =>
       ['journals', userId, 'plants', plantId, 'detail-lookup', journalId] as const,
   },
+  monitoring: {
+    all: (userId: string) => ['monitoring', userId] as const,
+    overview: (userId: string) => ['monitoring', userId, 'overview'] as const,
+    plants: (userId: string) => ['monitoring', userId, 'plants'] as const,
+    plantDetail: (userId: string, plantId: string) =>
+      ['monitoring', userId, 'plants', plantId] as const,
+  },
 } as const;

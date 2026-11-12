@@ -1,10 +1,10 @@
 # Hợp Đồng REST API — GoPlant
 
-> **Phiên bản:** 1.0.0  
-> **Giai đoạn:** 4 — Triển khai Backend RESTful API hoàn chỉnh  
-> **Nhánh:** `feature/integrate-frontend-report`  
-> **Ngày cập nhật:** 2026-11-09  
-> **Base URL:** `https://<host>/api/v1`  
+> **Phiên bản:** 1.1.0
+> **Giai đoạn:** 5 (G5.5.1) — Monitoring Overview & Plant Monitoring MVP
+> **Nhánh:** `feature/integrate-frontend-report`
+> **Ngày cập nhật:** 2026-11-12
+> **Base URL:** `https://<host>/api/v1`
 > **Xác thực:** Bearer JWT trong header `Authorization: Bearer <token>`
 
 ---
@@ -987,9 +987,198 @@ Kích hoạt hoặc khoá tài khoản người dùng.
 
 ---
 
-## 12. Nhóm Cameras — `/api/v1` *(Backlog)*
+## 12. Nhóm Monitoring — `/api/v1/monitoring` *(G5.5.1 MVP)*
 
-> Các endpoint này là **Backlog** — chưa triển khai ở Giai đoạn 3.
+> Hai endpoint read-only phục vụ tab **Theo dõi & Ghi nhận** (`/monitoring`) và màn hình **Chi tiết theo dõi cây** (`/monitoring/detail?plantId=...`), chạy trên 11 bảng V1 hiện có (**0 migration SQL mới**).
+
+### Quy tắc Nguồn gốc Dữ liệu & Múi giờ (Data Provenance & Timezone Semantics)
+
+1. **Múi giờ Việt Nam (`Asia/Ho_Chi_Minh`) & `Clock`:**
+   - Mọi thống kê lịch chăm sóc `ACTIVE` dùng `java.time.Clock` (tiêm qua Spring Bean) và khoảng nửa-mở không chồng lấn:
+     - `overdueCount`: `status = 'ACTIVE' AND next_scheduled_at < now`
+     - `dueTodayCount`: `status = 'ACTIVE' AND next_scheduled_at >= now AND next_scheduled_at < startOfTomorrowVn` (`todayVn.plusDays(1)` tại `00:00:00` giờ `Asia/Ho_Chi_Minh`, quy đổi UTC)
+   - `ageDays`: `ChronoUnit.DAYS.between(plantedAt, todayVn)` kẹp tối thiểu `0`, hoặc `null` nếu `plantedAt == null`.
+   - Mọi timestamp trong JSON trả chuẩn ISO 8601 UTC (`...Z`).
+2. **Phân nhóm trung thực `care_logs` (Không suy đoán tỷ lệ tuân thủ):**
+   - Trong schema V1 không có cột `origin_type`; khi xóa lịch chăm sóc, `schedule_id` được đặt về `NULL` (`detachSchedule()` / `ON DELETE SET NULL`).
+   - Vì vậy G5.5.1 dùng đúng 4 bộ đếm trung tính (`unlinkedCompletedLogs`, `unlinkedSkippedLogs`, `linkedScheduledCompletedLogs`, `linkedScheduledSkippedLogs`) và `sourceType` (`CARE_LOG_UNLINKED`, `CARE_LOG_LINKED`, `GROWTH_JOURNAL`) — **không** có `manualCompletedLogs`, `CARE_LOG_MANUAL`, `CARE_LOG_SCHEDULED` hay `Care Adherence %`.
+3. **Ngữ nghĩa Trạng thái Sức khỏe & Cảm biến:**
+   - `UserPlant.healthStatus` (`healthDistribution` / `currentHealthStatus`) và `GrowthJournal.healthStatus` (`recentJournalObservations`) được giữ độc lập, không tự đồng bộ chéo. Lưu ý ở schema V1, cả hai đều khởi tạo mặc định là `HEALTHY` khi tạo mới nếu người dùng không đổi.
+   - `sensorConnected` luôn trả `false` trong G5.5.1; Frontend hiển thị rõ `"Chưa kết nối cảm biến IoT"` và không sinh số liệu môi trường giả.
+   - `speciesCareGuide` trả về các trường text thô nullable trên `plant_species` để tham khảo, không parse số hay sinh cảnh báo ngưỡng.
+
+---
+
+### GET `/api/v1/monitoring/overview`
+
+Tổng hợp số liệu theo dõi toàn vườn cho người dùng đang đăng nhập (`Authenticated`). Người dùng mới chưa có vườn/cây vẫn trả `200 OK` với mọi bộ đếm bằng `0` và mảng rỗng.
+
+**Quyền truy cập:** `Authenticated` (chỉ tổng hợp dữ liệu có `owner_id = currentUserId` từ JWT).
+
+**Response 200:**
+```json
+{
+  "success": true,
+  "data": {
+    "gardensCount": 2,
+    "plantsCount": 5,
+    "healthDistribution": {
+      "healthyCount": 2,
+      "needsAttentionCount": 1,
+      "criticalCount": 1,
+      "unknownCount": 1
+    },
+    "schedulesSummary": {
+      "activeCount": 4,
+      "dueTodayCount": 2,
+      "overdueCount": 1
+    },
+    "careLogsSummary7d": {
+      "unlinkedCompletedLogs": 3,
+      "unlinkedSkippedLogs": 1,
+      "linkedScheduledCompletedLogs": 4,
+      "linkedScheduledSkippedLogs": 0
+    },
+    "careLogsSummary30d": {
+      "unlinkedCompletedLogs": 7,
+      "unlinkedSkippedLogs": 2,
+      "linkedScheduledCompletedLogs": 9,
+      "linkedScheduledSkippedLogs": 1
+    },
+    "attentionPlants": [
+      {
+        "plantId": "uuid",
+        "displayName": "Cà chua ban công",
+        "gardenId": "uuid",
+        "gardenName": "Ban công hướng Đông",
+        "speciesName": "Cà chua bi",
+        "healthStatus": "CRITICAL"
+      }
+    ],
+    "gardensSummary": [
+      {
+        "gardenId": "uuid",
+        "name": "Ban công hướng Đông",
+        "plantCount": 3,
+        "attentionCount": 1
+      }
+    ],
+    "sensorConnected": false,
+    "generatedAt": "2026-11-12T04:15:00Z"
+  },
+  "message": "OK"
+}
+```
+
+**Ghi chú truy vấn:** `MonitoringService.getOverview` chạy cố định **5 queries** (không N+1); `attentionPlants` sắp ưu tiên `CRITICAL` trước `NEEDS_ATTENTION`, giới hạn tối đa **10** cây.
+
+**Mã trạng thái HTTP:** `200 OK`, `401 UNAUTHORIZED`, `500 INTERNAL_ERROR`.
+
+---
+
+### GET `/api/v1/monitoring/plants/{plantId}`
+
+Chi tiết theo dõi của 1 cây trồng thuộc quyền sở hữu của người dùng hiện tại (`Authenticated (owner)`).
+
+**Path Parameters:**
+- `plantId` (UUID, bắt buộc): Định danh cây trồng. Nếu sai định dạng UUID trả về `400 VALIDATION_ERROR` với `error.field = "plantId"`.
+
+**Quy tắc Ownership:**
+- Không tìm thấy cây: `404 RESOURCE_NOT_FOUND`.
+- Cây tồn tại nhưng thuộc người dùng khác: `403 FORBIDDEN`.
+
+**Response 200:**
+```json
+{
+  "success": true,
+  "data": {
+    "plantId": "uuid",
+    "displayName": "Cà chua ban công",
+    "garden": {
+      "id": "uuid",
+      "name": "Ban công hướng Đông"
+    },
+    "species": {
+      "id": "uuid",
+      "commonName": "Cà chua bi",
+      "scientificName": "Solanum lycopersicum",
+      "category": "Cây ăn quả"
+    },
+    "currentHealthStatus": "CRITICAL",
+    "plantedAt": "2026-10-01",
+    "ageDays": 42,
+    "schedulesSummary": {
+      "activeCount": 2,
+      "dueTodayCount": 1,
+      "overdueCount": 1
+    },
+    "careLogsSummary30d": {
+      "unlinkedCompletedLogs": 4,
+      "unlinkedSkippedLogs": 1,
+      "linkedScheduledCompletedLogs": 6,
+      "linkedScheduledSkippedLogs": 2
+    },
+    "recentActivityTimeline": [
+      {
+        "id": "uuid",
+        "sourceType": "GROWTH_JOURNAL",
+        "title": "Nhật ký sâu bệnh",
+        "taskType": null,
+        "status": null,
+        "entryType": "PEST",
+        "healthStatus": "NEEDS_ATTENTION",
+        "notePreview": "Phát hiện lá vàng nhẹ ở tầng dưới.",
+        "occurredAt": "2026-11-12T03:30:00Z"
+      },
+      {
+        "id": "uuid",
+        "sourceType": "CARE_LOG_LINKED",
+        "title": "Tưới nước • Hoàn thành",
+        "taskType": "WATERING",
+        "status": "COMPLETED",
+        "entryType": null,
+        "healthStatus": null,
+        "notePreview": "Tưới đều buổi sáng theo lịch.",
+        "occurredAt": "2026-11-12T01:00:00Z"
+      }
+    ],
+    "recentJournalObservations": [
+      {
+        "journalId": "uuid",
+        "recordedAt": "2026-11-12T03:30:00Z",
+        "entryType": "PEST",
+        "healthStatus": "NEEDS_ATTENTION",
+        "notePreview": "Phát hiện lá vàng nhẹ ở tầng dưới."
+      }
+    ],
+    "speciesCareGuide": {
+      "lightRequirement": "Ánh nắng trực tiếp 6 giờ/ngày",
+      "waterRequirement": "Tưới giữ ẩm đều quanh gốc",
+      "wateringFrequency": null,
+      "temperatureRange": "20-30 độ C",
+      "humidityRange": null,
+      "soilPh": null,
+      "usageAndCaution": "Tránh úng rễ kéo dài."
+    },
+    "sensorConnected": false,
+    "generatedAt": "2026-11-12T04:20:00Z"
+  },
+  "message": "OK"
+}
+```
+
+**Ghi chú giới hạn & truy vấn:**
+- `recentActivityTimeline`: gộp từ `care_logs` (`CARE_LOG_UNLINKED` / `CARE_LOG_LINKED`) và `growth_journals` (`GROWTH_JOURNAL`), sắp mới nhất trước, tối đa **15** mục; `notePreview` cắt gọn tối đa **160** ký tự.
+- `recentJournalObservations`: tối đa **10** ghi nhận `growth_journals` gần nhất.
+- Ngân sách truy vấn: cố định **5 queries** khi owner hợp lệ và tối đa **1 query** khi từ chối `403`/`404`.
+
+**Mã trạng thái HTTP:** `200 OK`, `400 VALIDATION_ERROR` (`field: "plantId"`), `401 UNAUTHORIZED`, `403 FORBIDDEN`, `404 RESOURCE_NOT_FOUND`, `500 INTERNAL_ERROR`.
+
+---
+
+## 13. Nhóm Cameras — `/api/v1` *(Backlog)*
+
+> Các endpoint này là **Backlog** — chưa triển khai ở Giai đoạn 5 (G5.5.1).
 
 | Method | Endpoint | Mô tả |
 |---|---|---|
@@ -1000,26 +1189,27 @@ Kích hoạt hoặc khoá tài khoản người dùng.
 
 ---
 
-## 13. Tổng hợp 44 endpoints chuẩn hóa
+## 14. Tổng hợp 46 endpoints chuẩn hóa (40 Core MVP + 2 Monitoring G5.5.1 + 4 Cameras Backlog)
 
-### 13.1. Bảng phân bổ theo nhóm chức năng và trạng thái triển khai
+### 14.1. Bảng phân bổ theo nhóm chức năng và trạng thái triển khai
 
-| Nhóm chức năng | Số API Giai đoạn 4 (Đã hoàn thành) | Số API Giai đoạn 5 (Kế hoạch) | Số API Backlog | Tổng số API |
+| Nhóm chức năng | Core MVP (G4/G5.4) | G5.5.1 Monitoring (Đã xong) | Số API Backlog | Tổng số API |
 |---|:---:|:---:|:---:|:---:|
 | Authentication (`/api/v1/auth`) | **2** | 0 | 0 | 2 |
 | Users Profile (`/api/v1/users`) | **3** | 0 | 0 | 3 |
 | Species & Favorites (`/api/v1/species`) | **5** | 0 | 0 | 5 |
 | Gardens (`/api/v1/gardens`) | **5** | 0 | 0 | 5 |
-| Plants (`/api/v1/plants`) | 0 | **8** | 0 | 8 |
-| Schedules (`/api/v1/schedules`) | 0 | **6** | 0 | 6 |
-| Care Logs (`/api/v1/care-logs`) | 0 | **1** | 0 | 1 |
-| Growth Journals (`/api/v1/journals`) | 0 | **3** | 0 | 3 |
+| Plants (`/api/v1/plants`) | **8** | 0 | 0 | 8 |
+| Schedules (`/api/v1/schedules`) | **6** | 0 | 0 | 6 |
+| Care Logs (`/api/v1/care-logs`) | **1** | 0 | 0 | 1 |
+| Growth Journals (`/api/v1/journals`) | **3** | 0 | 0 | 3 |
+| Monitoring (`/api/v1/monitoring`) | 0 | **2** | 0 | 2 |
 | Admin Species (`/api/v1/admin/species`) | **4** | 0 | 0 | 4 |
-| Admin Users (`/api/v1/admin/users`) | 0 | **3** | 0 | 3 |
+| Admin Users (`/api/v1/admin/users`) | **3** | 0 | 0 | 3 |
 | Cameras (`/api/v1/cameras`) | 0 | 0 | **4** | 4 |
-| **Tổng cộng** | **19 (Đã xong)** | **21 (Giai đoạn 5)** | **4 (Backlog)** | **44** |
+| **Tổng cộng** | **40** | **2 (G5.5.1 Đã xong)** | **4 (Backlog)** | **46** |
 
-### 13.2. Danh sách chi tiết 44 endpoints (Đối chiếu trạng thái Giai đoạn 4 và Giai đoạn 5)
+### 14.2. Danh sách chi tiết endpoints (Bổ sung G5.5.1 Monitoring MVP)
 
 #### Bảng quy ước định dạng quyền truy cập:
 - **`Public`**: Endpoint công khai, không yêu cầu xác thực JWT.
@@ -1029,53 +1219,55 @@ Kích hoạt hoặc khoá tài khoản người dùng.
 
 | # | Method | Endpoint | Quyền truy cập | Phân loại | Trạng thái triển khai |
 |---|---|---|---|---|---|
-| 1 | POST | `/api/v1/auth/register` | Public | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 2 | POST | `/api/v1/auth/login` | Public | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 3 | GET | `/api/v1/users/me` | Authenticated | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 4 | PUT | `/api/v1/users/me` | Authenticated | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 5 | PUT | `/api/v1/users/me/password` | Authenticated | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 6 | GET | `/api/v1/species` | Authenticated | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 7 | GET | `/api/v1/species/{speciesId}` | Authenticated | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 8 | POST | `/api/v1/species/{speciesId}/favorite` | Authenticated | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 9 | DELETE | `/api/v1/species/{speciesId}/favorite` | Authenticated | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 10 | GET | `/api/v1/species/favorites` | Authenticated | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 11 | GET | `/api/v1/gardens` | Authenticated | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 12 | POST | `/api/v1/gardens` | Authenticated | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 13 | GET | `/api/v1/gardens/{gardenId}` | Authenticated (owner) | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 14 | PUT | `/api/v1/gardens/{gardenId}` | Authenticated (owner) | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 15 | DELETE | `/api/v1/gardens/{gardenId}` | Authenticated (owner) | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 16 | POST | `/api/v1/gardens/{gardenId}/plants` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 17 | GET | `/api/v1/plants` | Authenticated | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 18 | GET | `/api/v1/plants/{plantId}` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 19 | PUT | `/api/v1/plants/{plantId}` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 20 | DELETE | `/api/v1/plants/{plantId}` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 21 | GET | `/api/v1/plants/{plantId}/schedules` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 22 | GET | `/api/v1/plants/{plantId}/care-logs` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 23 | GET | `/api/v1/plants/{plantId}/journals` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 24 | POST | `/api/v1/schedules` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 25 | GET | `/api/v1/schedules/today` | Authenticated | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 26 | PUT | `/api/v1/schedules/{scheduleId}` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 27 | DELETE | `/api/v1/schedules/{scheduleId}` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 28 | POST | `/api/v1/schedules/{scheduleId}/complete` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 29 | POST | `/api/v1/schedules/{scheduleId}/skip` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 30 | POST | `/api/v1/care-logs` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 31 | POST | `/api/v1/journals` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 32 | PUT | `/api/v1/journals/{journalId}` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 33 | DELETE | `/api/v1/journals/{journalId}` | Authenticated (owner) | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 34 | GET | `/api/v1/admin/species` | ROLE_ADMIN | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 35 | POST | `/api/v1/admin/species` | ROLE_ADMIN | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 36 | PUT | `/api/v1/admin/species/{speciesId}` | ROLE_ADMIN | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 37 | DELETE | `/api/v1/admin/species/{speciesId}` | ROLE_ADMIN | MVP | ✅ Hoàn thành Backend Giai đoạn 4 |
-| 38 | GET | `/api/v1/admin/users` | ROLE_ADMIN | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 39 | GET | `/api/v1/admin/users/{userId}` | ROLE_ADMIN | MVP | ⏳ Kế hoạch Giai đoạn 5 |
-| 40 | PATCH | `/api/v1/admin/users/{userId}/status` | ROLE_ADMIN | MVP | ⏳ Kế hoạch Giai đoạn 5 |
+| 1 | POST | `/api/v1/auth/register` | Public | MVP | ✅ Đã triển khai |
+| 2 | POST | `/api/v1/auth/login` | Public | MVP | ✅ Đã triển khai |
+| 3 | GET | `/api/v1/users/me` | Authenticated | MVP | ✅ Đã triển khai |
+| 4 | PUT | `/api/v1/users/me` | Authenticated | MVP | ✅ Đã triển khai |
+| 5 | PUT | `/api/v1/users/me/password` | Authenticated | MVP | ✅ Đã triển khai |
+| 6 | GET | `/api/v1/species` | Authenticated | MVP | ✅ Đã triển khai |
+| 7 | GET | `/api/v1/species/{speciesId}` | Authenticated | MVP | ✅ Đã triển khai |
+| 8 | POST | `/api/v1/species/{speciesId}/favorite` | Authenticated | MVP | ✅ Đã triển khai |
+| 9 | DELETE | `/api/v1/species/{speciesId}/favorite` | Authenticated | MVP | ✅ Đã triển khai |
+| 10 | GET | `/api/v1/species/favorites` | Authenticated | MVP | ✅ Đã triển khai |
+| 11 | GET | `/api/v1/gardens` | Authenticated | MVP | ✅ Đã triển khai |
+| 12 | POST | `/api/v1/gardens` | Authenticated | MVP | ✅ Đã triển khai |
+| 13 | GET | `/api/v1/gardens/{gardenId}` | Authenticated (owner) | MVP | ✅ Đã triển khai |
+| 14 | PUT | `/api/v1/gardens/{gardenId}` | Authenticated (owner) | MVP | ✅ Đã triển khai |
+| 15 | DELETE | `/api/v1/gardens/{gardenId}` | Authenticated (owner) | MVP | ✅ Đã triển khai |
+| 16 | POST | `/api/v1/gardens/{gardenId}/plants` | Authenticated (owner) | MVP | ✅ Đã triển khai |
+| 17 | GET | `/api/v1/plants` | Authenticated | MVP | ✅ Đã triển khai |
+| 18 | GET | `/api/v1/plants/{plantId}` | Authenticated (owner) | MVP | ✅ Đã triển khai |
+| 19 | PUT | `/api/v1/plants/{plantId}` | Authenticated (owner) | MVP | ✅ Đã triển khai |
+| 20 | DELETE | `/api/v1/plants/{plantId}` | Authenticated (owner) | MVP | ✅ Đã triển khai |
+| 21 | GET | `/api/v1/plants/{plantId}/schedules` | Authenticated (owner) | MVP | ✅ Đã triển khai |
+| 22 | GET | `/api/v1/plants/{plantId}/care-logs` | Authenticated (owner) | MVP | ✅ Đã triển khai |
+| 23 | GET | `/api/v1/plants/{plantId}/journals` | Authenticated (owner) | MVP | ✅ Đã triển khai |
+| 24 | POST | `/api/v1/schedules` | Authenticated (owner) | MVP | ✅ Đã triển khai |
+| 25 | GET | `/api/v1/schedules/today` | Authenticated | MVP | ✅ Đã triển khai |
+| 26 | PUT | `/api/v1/schedules/{scheduleId}` | Authenticated (owner) | MVP | ✅ Đã triển khai |
+| 27 | DELETE | `/api/v1/schedules/{scheduleId}` | Authenticated (owner) | MVP | ✅ Đã triển khai |
+| 28 | POST | `/api/v1/schedules/{scheduleId}/complete` | Authenticated (owner) | MVP | ✅ Đã triển khai |
+| 29 | POST | `/api/v1/schedules/{scheduleId}/skip` | Authenticated (owner) | MVP | ✅ Đã triển khai |
+| 30 | POST | `/api/v1/care-logs` | Authenticated (owner) | MVP | ✅ Đã triển khai |
+| 31 | POST | `/api/v1/journals` | Authenticated (owner) | MVP | ✅ Đã triển khai |
+| 32 | PUT | `/api/v1/journals/{journalId}` | Authenticated (owner) | MVP | ✅ Đã triển khai |
+| 33 | DELETE | `/api/v1/journals/{journalId}` | Authenticated (owner) | MVP | ✅ Đã triển khai |
+| 34 | GET | `/api/v1/admin/species` | ROLE_ADMIN | MVP | ✅ Đã triển khai |
+| 35 | POST | `/api/v1/admin/species` | ROLE_ADMIN | MVP | ✅ Đã triển khai |
+| 36 | PUT | `/api/v1/admin/species/{speciesId}` | ROLE_ADMIN | MVP | ✅ Đã triển khai |
+| 37 | DELETE | `/api/v1/admin/species/{speciesId}` | ROLE_ADMIN | MVP | ✅ Đã triển khai |
+| 38 | GET | `/api/v1/admin/users` | ROLE_ADMIN | MVP | ✅ Đã triển khai |
+| 39 | GET | `/api/v1/admin/users/{userId}` | ROLE_ADMIN | MVP | ✅ Đã triển khai |
+| 40 | PATCH | `/api/v1/admin/users/{userId}/status` | ROLE_ADMIN | MVP | ✅ Đã triển khai |
 | 41 | GET | `/api/v1/gardens/{gardenId}/cameras` | Authenticated (owner) | Backlog | 📋 Kế hoạch Backlog |
 | 42 | POST | `/api/v1/gardens/{gardenId}/cameras` | Authenticated (owner) | Backlog | 📋 Kế hoạch Backlog |
 | 43 | PUT | `/api/v1/cameras/{cameraId}` | Authenticated (owner) | Backlog | 📋 Kế hoạch Backlog |
 | 44 | DELETE | `/api/v1/cameras/{cameraId}` | Authenticated (owner) | Backlog | 📋 Kế hoạch Backlog |
+| 45 | GET | `/api/v1/monitoring/overview` | Authenticated | G5.5.1 | ✅ Hoàn thành (Backend + Frontend G5.5.1) |
+| 46 | GET | `/api/v1/monitoring/plants/{plantId}` | Authenticated (owner) | G5.5.1 | ✅ Hoàn thành (Backend + Frontend G5.5.1) |
 
-> **Phạm vi mở rộng (ngoài 44 endpoints chuẩn):** Các tính năng Quên mật khẩu qua email (`POST /auth/forgot-password`), Cấp mới token (`POST /auth/refresh`), Đăng nhập Google/Zalo OAuth và Mã QR (`GET /plants/{id}/qr`) được xác định là Backlog mở rộng, không thuộc danh sách 44 endpoints của giai đoạn này.
+> **Phạm vi mở rộng (ngoài 46 endpoints trên):** Các tính năng Upload/Storage (`G5.5.2b`), Camera CRUD (`G5.5.2a`), Mã QR (`G5.5.3`), Growth Analytics nâng cao (`G5.5.4`), AI Diagnosis (`G5.5.5`), Push Notifications (`G5.5.6`), Quên mật khẩu (`POST /auth/forgot-password`), Refresh token (`POST /auth/refresh`) và Google/Zalo OAuth nằm ngoài phạm vi G5.5.1 MVP.
 
 ---
 
-*Tài liệu này là hợp đồng API chính thức của dự án GoPlant. 19 API ưu tiên đã được triển khai hoàn chỉnh ở Giai đoạn 4; 21 API còn lại sẽ được triển khai ở Giai đoạn 5.*
+*Tài liệu này là hợp đồng API chính thức của dự án GoPlant, đã cập nhật đồng bộ với G5.5.1 — Monitoring Overview & Plant Monitoring MVP.*

@@ -434,6 +434,7 @@ export function useCreatePlantMutation() {
 
       qc.invalidateQueries({ queryKey: queryKeys.plants.lists(ownerUserId) });
       qc.invalidateQueries({ queryKey: queryKeys.gardens.all(ownerUserId) });
+      qc.invalidateQueries({ queryKey: queryKeys.monitoring.all(ownerUserId) });
     },
   });
 
@@ -589,6 +590,7 @@ export function useUpdatePlantMutation() {
       qc.invalidateQueries({ queryKey: queryKeys.careLogs.plantBase(ownerUserId, updated.id) });
       qc.invalidateQueries({ queryKey: queryKeys.journals.plantBase(ownerUserId, updated.id) });
       qc.invalidateQueries({ queryKey: queryKeys.schedules.today(ownerUserId) });
+      qc.invalidateQueries({ queryKey: queryKeys.monitoring.all(ownerUserId) });
     },
   });
 
@@ -724,6 +726,14 @@ export function useDeletePlantMutation() {
         queryKey: queryKeys.plants.detail(ownerUserId, cleanId),
         exact: true,
       });
+      await qc.cancelQueries({
+        queryKey: queryKeys.monitoring.plantDetail(ownerUserId, cleanId),
+        exact: true,
+      });
+      qc.removeQueries({
+        queryKey: queryKeys.monitoring.plantDetail(ownerUserId, cleanId),
+        exact: true,
+      });
 
       qc.setQueryData<TodayScheduleItemDto[]>(queryKeys.schedules.today(ownerUserId), (old) =>
         Array.isArray(old) ? old.filter((item) => item.plantId !== cleanId) : old
@@ -777,6 +787,7 @@ export function useDeletePlantMutation() {
       qc.invalidateQueries({ queryKey: queryKeys.plants.lists(ownerUserId) });
       qc.invalidateQueries({ queryKey: queryKeys.gardens.all(ownerUserId) });
       qc.invalidateQueries({ queryKey: queryKeys.schedules.today(ownerUserId) });
+      qc.invalidateQueries({ queryKey: queryKeys.monitoring.all(ownerUserId) });
     },
   });
 

@@ -20,6 +20,8 @@ import { useGardensList } from '@/features/gardens/gardenHooks';
 import { getHealthStatusMeta, type GardenSummaryDto, type HealthStatus } from '@/features/gardens/gardenTypes';
 import { JournalOverviewContent } from '@/features/journal/JournalScreens';
 import { usePlantJournals } from '@/features/journal/journalHooks';
+import { MonitoringOverviewContent } from '@/features/monitoring/MonitoringOverviewContent';
+import { useMonitoringOverview } from '@/features/monitoring/monitoringHooks';
 import { useDeletePlantMutation, useUserPlantsList } from '@/features/plants/plantHooks';
 import {
   HEALTH_STATUS_OPTIONS,
@@ -595,61 +597,8 @@ function PageBody({ kind, scheduleNowMs }: { kind: PageKind; scheduleNowMs: numb
   if (kind === 'gardens') {
     return <GardensTabContent />;
   }
-  if (kind === 'plants' || kind === 'journal') {
+  if (kind === 'plants' || kind === 'journal' || kind === 'monitoring') {
     return null;
-  }
-  if (kind === 'monitoring') {
-    return (
-      <>
-        <View style={s.metrics}>
-          {[
-            ['0', 'Cây đang theo dõi'],
-            ['—', 'Tỉ lệ khỏe mạnh'],
-            ['0', 'Cần xử lý'],
-            ['—', 'Chỉ số sinh thái'],
-          ].map(([value, label]) => (
-            <View key={label} style={s.metric}>
-              <Text style={s.metricValue}>{value}</Text>
-              <Text style={s.body}>{label}</Text>
-            </View>
-          ))}
-        </View>
-        <View style={s.eco}>
-          <Text style={s.ecoScore}>—</Text>
-          <View style={s.cardCopy}>
-            <Text style={s.cardTitle}>Chưa có dữ liệu đánh giá</Text>
-            <Text style={s.body}>Thêm vườn và cây để bắt đầu theo dõi.</Text>
-          </View>
-        </View>
-        <Section title="Khu vườn">
-          <EmptyCard
-            icon="⌂"
-            title="Chưa có khu vườn để theo dõi"
-            description="Tạo khu vườn đầu tiên để ghi nhận tình trạng không gian trồng."
-            action="Tạo khu vườn"
-            onPress={() => router.push('/garden/create' as never)}
-          />
-        </Section>
-        <Section title="Cây trồng theo dõi">
-          <EmptyCard
-            icon="♧"
-            title="Chưa có cây được theo dõi"
-            description="Thêm cây để ghi nhận sức khỏe và tiến triển chăm sóc."
-            action="Thêm cây"
-            onPress={() => router.push('/garden/add-plant' as never)}
-          />
-        </Section>
-        <Section title="Lịch sử ghi nhận">
-          <EmptyCard
-            icon="▤"
-            title="Chưa có ghi nhận"
-            description="Nhật ký và kết quả theo dõi sẽ xuất hiện tại đây."
-            action="Thêm ghi nhận"
-            onPress={() => router.push('/journal/new' as never)}
-          />
-        </Section>
-      </>
-    );
   }
   return <ScheduleOverviewContent nowMs={scheduleNowMs} />;
 }
@@ -706,6 +655,9 @@ function PageContent({ kind }: { kind: PageKind }) {
   const isPlantsTab = kind === 'plants';
   const isJournalTab = kind === 'journal';
   const isScheduleTab = kind === 'schedule';
+  const isMonitoringTab = kind === 'monitoring';
+  const monitoringQuery = useMonitoringOverview({ enabled: isMonitoringTab });
+  const monitoringData = monitoringQuery.data;
   const gardensQuery = useGardensList({ enabled: kind === 'gardens' || isPlantsTab });
   const favoritesQuery = useFavoriteSpecies({ page: 0, size: 20 }, { enabled: isPlantsTab });
   const journalPlantsQuery = useUserPlantsList(
@@ -945,7 +897,18 @@ function PageContent({ kind }: { kind: PageKind }) {
     monitoring: {
       title: 'Theo dõi & Ghi nhận',
       subtitle: 'Tổng quan sức khỏe vườn',
-      intro: 'Chưa có cây hoặc khu vườn để theo dõi',
+      intro:
+        monitoringQuery.isLoading || (!monitoringData && !monitoringQuery.isError)
+          ? 'Đang tải dữ liệu tổng quan theo dõi...'
+          : monitoringQuery.isError && !monitoringData
+            ? 'Không thể tải tổng quan theo dõi'
+            : monitoringData &&
+                monitoringData.gardensCount === 0 &&
+                monitoringData.plantsCount === 0
+              ? 'Chưa có cây hoặc khu vườn để theo dõi'
+              : monitoringData
+                ? `${monitoringData.gardensCount} khu vườn • ${monitoringData.plantsCount} cây trồng • ${monitoringData.schedulesSummary.dueTodayCount} việc hôm nay`
+                : 'Tổng quan dữ liệu theo dõi thực tế',
     },
   };
 
@@ -1046,6 +1009,20 @@ function PageContent({ kind }: { kind: PageKind }) {
               journalPlantsQuery.refetch(),
               effectiveJournalPlantId ? plantJournalsQuery.refetch() : Promise.resolve(),
             ]);
+          }}
+        />
+      );
+    }
+    if (kind === 'monitoring') {
+      return (
+        <MonitoringOverviewContent
+          data={monitoringData}
+          isLoading={monitoringQuery.isLoading}
+          isFetching={monitoringQuery.isFetching}
+          isError={monitoringQuery.isError}
+          errorMessage={monitoringQuery.error?.message}
+          onRetry={() => {
+            void monitoringQuery.refetch();
           }}
         />
       );
@@ -1223,19 +1200,6 @@ const s = StyleSheet.create({
   paginationRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 4 },
   pageButton: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 9, backgroundColor: C.softSurface },
   pageButtonText: { color: C.forest, fontFamily: F.semiBold, fontSize: 11 },
-  metrics: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
-  metric: { width: '48%', minHeight: 54, padding: 9, borderRadius: 12, backgroundColor: C.surface },
-  metricValue: { color: C.forest, fontFamily: F.bold, fontSize: 15 },
-  eco: {
-    marginVertical: 8,
-    padding: 10,
-    borderRadius: 12,
-    backgroundColor: C.softSurface,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  ecoScore: { color: C.forest, fontFamily: F.bold, fontSize: 23 },
   scheduleBanner: {
     padding: 12,
     borderRadius: 13,

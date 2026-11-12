@@ -296,6 +296,7 @@ export function useCreateCareLogMutation() {
           queryKey: queryKeys.careLogs.plantBase(ownerUserId, targetPlantId),
         });
       }
+      qc.invalidateQueries({ queryKey: queryKeys.monitoring.all(ownerUserId) });
     },
   });
 
