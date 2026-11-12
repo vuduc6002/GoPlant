@@ -1,7 +1,7 @@
 # Hợp Đồng REST API — GoPlant
 
-> **Phiên bản:** 1.1.0
-> **Giai đoạn:** 5 (G5.5.1) — Monitoring Overview & Plant Monitoring MVP
+> **Phiên bản:** 1.2.0
+> **Giai đoạn:** 5 (G5.5.2a) — Camera Metadata CRUD (Phase C1)
 > **Nhánh:** `feature/integrate-frontend-report`
 > **Ngày cập nhật:** 2026-11-12
 > **Base URL:** `https://<host>/api/v1`
@@ -1176,24 +1176,109 @@ Chi tiết theo dõi của 1 cây trồng thuộc quyền sở hữu của ngư�
 
 ---
 
-## 13. Nhóm Cameras — `/api/v1` *(Backlog)*
+## 13. Nhóm Cameras — `/api/v1` (G5.5.2a — Phase C1 Metadata CRUD)
 
-> Các endpoint này là **Backlog** — chưa triển khai ở Giai đoạn 5 (G5.5.1).
+> **Ranh giới Phase C1 (`G5.5.2a`):** Chỉ quản lý **metadata** thiết bị camera (`name`, `locationDesc`, `status` ghi nhận thủ công, `connectionNote`). Chưa hỗ trợ xem video trực tiếp RTSP/HLS/WebRTC, chụp snapshot hay kiểm tra kết nối vật lý tới camera. **Không có endpoint thứ 5.**
+>
+> **Quyền sở hữu & bảo mật:**
+> - Toàn bộ 4 endpoint đều yêu cầu JWT (`401 UNAUTHORIZED` nếu thiếu/hết hạn).
+> - Kiểm tra tồn tại trước (`404 RESOURCE_NOT_FOUND`), sau đó kiểm tra quyền sở hữu (`owner_id == currentUserId`). Nếu không phải chủ sở hữu — **kể cả `ROLE_ADMIN`** — trả về **`403 FORBIDDEN`**.
+> - Không cho phép client chỉ định `ownerId` hay đổi `gardenId` từ request body; response tuyệt đối không trả `ownerId`.
+> - Trường `connectionNote` kiểm duyệt nghiêm ngặt ở cả Backend và Frontend: từ chối (`400 VALIDATION_ERROR`, `field: "connectionNote"`) các chuỗi chứa userinfo URI (`rtsp://user:pass@...`, `rtsps://...`, `http(s)://user:pass@...`, `user:@...`) hoặc cặp credential (`password=`, `password:`, `passwd`, `pwd`, `token`, `secret`, `apiKey`, `username`, `Bearer ...`). Không phản hồi lại hay ghi log secret bị từ chối.
 
-| Method | Endpoint | Mô tả |
-|---|---|---|
-| GET | `/api/v1/gardens/{gardenId}/cameras` | Danh sách camera trong vườn |
-| POST | `/api/v1/gardens/{gardenId}/cameras` | Thêm camera |
-| PUT | `/api/v1/cameras/{cameraId}` | Cập nhật camera |
-| DELETE | `/api/v1/cameras/{cameraId}` | Xóa camera |
+### 13.1. `GET /api/v1/gardens/{gardenId}/cameras`
+
+Lấy danh sách metadata camera thuộc một khu vườn của người dùng hiện tại, sắp xếp ổn định theo `createdAt ASC, id ASC`. Trả `200 OK` với mảng rỗng `[]` nếu khu vườn chưa có camera.
+
+**Response `200 OK`:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "b1a9b8e2-4f4c-4c32-8a7e-9d1c2e3f4a5b",
+      "gardenId": "9f6e2d1a-1234-4abc-9def-0123456789ab",
+      "name": "Camera Ban Công Đông",
+      "locationDesc": "Góc tường hướng Tây Nam nhìn toàn cảnh ban công",
+      "status": "OFFLINE",
+      "connectionNote": "Đã kiểm tra nguồn điện và cáp mạng",
+      "createdAt": "2026-11-12T09:15:00Z",
+      "updatedAt": "2026-11-12T09:15:00Z"
+    }
+  ],
+  "message": "OK"
+}
+```
+
+**Mã trạng thái HTTP:** `200 OK`, `400 VALIDATION_ERROR` (`field: "gardenId"`), `401 UNAUTHORIZED`, `403 FORBIDDEN`, `404 RESOURCE_NOT_FOUND`.
+
+### 13.2. `POST /api/v1/gardens/{gardenId}/cameras`
+
+Thêm metadata camera mới vào khu vườn thuộc quyền sở hữu của người dùng hiện tại. Trạng thái khởi tạo **luôn là `OFFLINE`** (bỏ qua nếu client gửi trường ngoài schema như `status`, `ownerId`, `gardenId`).
+
+**Request Body:**
+```json
+{
+  "name": "Camera Ban Công Đông",
+  "locationDesc": "Góc tường hướng Tây Nam",
+  "connectionNote": "Đã kiểm tra nguồn điện và cáp mạng"
+}
+```
+- `name` (bắt buộc): chuỗi khác rỗng sau khi trim, `1..200` ký tự.
+- `locationDesc` (tùy chọn, nullable): chuỗi mô tả vị trí lắp đặt (chuỗi rỗng chuẩn hóa về `null`).
+- `connectionNote` (tùy chọn, nullable): ghi chú kết nối thuần văn bản, bị từ chối nếu chứa credential/userinfo.
+
+**Response `201 Created`:** trả `CameraItem` với `status = "OFFLINE"`.
+
+**Mã trạng thái HTTP:** `201 Created`, `400 VALIDATION_ERROR`, `401 UNAUTHORIZED`, `403 FORBIDDEN`, `404 RESOURCE_NOT_FOUND`.
+
+### 13.3. `PUT /api/v1/cameras/{cameraId}`
+
+Cập nhật từng phần metadata hoặc trạng thái ghi nhận thủ công của camera.
+- Nếu không gửi trường hoặc gửi `null`: **giữ nguyên** giá trị cũ.
+- Nếu gửi chuỗi rỗng `""` hoặc toàn khoảng trắng cho `locationDesc` / `connectionNote`: **xóa về `null`**.
+- Nếu gửi `name`: bắt buộc khác rỗng sau trim và tối đa `200` ký tự (trả `400 VALIDATION_ERROR`, `field: "name"` nếu rỗng/quá dài).
+- Nếu gửi `status`: chỉ chấp nhận `ONLINE`, `OFFLINE`, `ERROR` (giá trị sai định dạng enum trả `400 VALIDATION_ERROR`).
+- `ownerId` và `gardenId` là bất biến.
+
+**Request Body mẫu:**
+```json
+{
+  "name": "Camera Ban Công Đông (Cập nhật)",
+  "status": "ONLINE",
+  "locationDesc": "",
+  "connectionNote": "Gắn gần ổ cắm hướng Đông"
+}
+```
+
+**Response `200 OK`:** trả `CameraItem` đã cập nhật.
+
+**Mã trạng thái HTTP:** `200 OK`, `400 VALIDATION_ERROR`, `401 UNAUTHORIZED`, `403 FORBIDDEN`, `404 RESOURCE_NOT_FOUND`.
+
+### 13.4. `DELETE /api/v1/cameras/{cameraId}`
+
+Xóa vĩnh viễn bản ghi camera. Chỉ xóa bản ghi trong `cameras`; **không** xóa khu vườn, cây trồng, lịch chăm sóc hay nhật ký.
+
+**Response `200 OK`:**
+```json
+{
+  "success": true,
+  "data": {
+    "message": "Camera đã được xóa."
+  },
+  "message": "OK"
+}
+```
+
+**Mã trạng thái HTTP:** `200 OK`, `400 VALIDATION_ERROR` (`field: "cameraId"`), `401 UNAUTHORIZED`, `403 FORBIDDEN`, `404 RESOURCE_NOT_FOUND`.
 
 ---
 
-## 14. Tổng hợp 46 endpoints chuẩn hóa (40 Core MVP + 2 Monitoring G5.5.1 + 4 Cameras Backlog)
+## 14. Tổng hợp 46 endpoints chuẩn hóa (40 Core MVP + 2 Monitoring G5.5.1 + 4 Cameras G5.5.2a)
 
 ### 14.1. Bảng phân bổ theo nhóm chức năng và trạng thái triển khai
 
-| Nhóm chức năng | Core MVP (G4/G5.4) | G5.5.1 Monitoring (Đã xong) | Số API Backlog | Tổng số API |
+| Nhóm chức năng | Core MVP (G4/G5.4) | G5.5.1 Monitoring (Đã xong) | G5.5.2a Cameras (Đã xong) | Tổng số API |
 |---|:---:|:---:|:---:|:---:|
 | Authentication (`/api/v1/auth`) | **2** | 0 | 0 | 2 |
 | Users Profile (`/api/v1/users`) | **3** | 0 | 0 | 3 |
@@ -1207,9 +1292,9 @@ Chi tiết theo dõi của 1 cây trồng thuộc quyền sở hữu của ngư�
 | Admin Species (`/api/v1/admin/species`) | **4** | 0 | 0 | 4 |
 | Admin Users (`/api/v1/admin/users`) | **3** | 0 | 0 | 3 |
 | Cameras (`/api/v1/cameras`) | 0 | 0 | **4** | 4 |
-| **Tổng cộng** | **40** | **2 (G5.5.1 Đã xong)** | **4 (Backlog)** | **46** |
+| **Tổng cộng** | **40** | **2 (G5.5.1 Đã xong)** | **4 (G5.5.2a Đã xong)** | **46** |
 
-### 14.2. Danh sách chi tiết endpoints (Bổ sung G5.5.1 Monitoring MVP)
+### 14.2. Danh sách chi tiết endpoints (Đã hoàn thành 46/46 tính tới G5.5.2a)
 
 #### Bảng quy ước định dạng quyền truy cập:
 - **`Public`**: Endpoint công khai, không yêu cầu xác thực JWT.
@@ -1259,15 +1344,15 @@ Chi tiết theo dõi của 1 cây trồng thuộc quyền sở hữu của ngư�
 | 38 | GET | `/api/v1/admin/users` | ROLE_ADMIN | MVP | ✅ Đã triển khai |
 | 39 | GET | `/api/v1/admin/users/{userId}` | ROLE_ADMIN | MVP | ✅ Đã triển khai |
 | 40 | PATCH | `/api/v1/admin/users/{userId}/status` | ROLE_ADMIN | MVP | ✅ Đã triển khai |
-| 41 | GET | `/api/v1/gardens/{gardenId}/cameras` | Authenticated (owner) | Backlog | 📋 Kế hoạch Backlog |
-| 42 | POST | `/api/v1/gardens/{gardenId}/cameras` | Authenticated (owner) | Backlog | 📋 Kế hoạch Backlog |
-| 43 | PUT | `/api/v1/cameras/{cameraId}` | Authenticated (owner) | Backlog | 📋 Kế hoạch Backlog |
-| 44 | DELETE | `/api/v1/cameras/{cameraId}` | Authenticated (owner) | Backlog | 📋 Kế hoạch Backlog |
+| 41 | GET | `/api/v1/gardens/{gardenId}/cameras` | Authenticated (owner) | G5.5.2a | ✅ Hoàn thành (Backend + Frontend G5.5.2a) |
+| 42 | POST | `/api/v1/gardens/{gardenId}/cameras` | Authenticated (owner) | G5.5.2a | ✅ Hoàn thành (Backend + Frontend G5.5.2a) |
+| 43 | PUT | `/api/v1/cameras/{cameraId}` | Authenticated (owner) | G5.5.2a | ✅ Hoàn thành (Backend + Frontend G5.5.2a) |
+| 44 | DELETE | `/api/v1/cameras/{cameraId}` | Authenticated (owner) | G5.5.2a | ✅ Hoàn thành (Backend + Frontend G5.5.2a) |
 | 45 | GET | `/api/v1/monitoring/overview` | Authenticated | G5.5.1 | ✅ Hoàn thành (Backend + Frontend G5.5.1) |
 | 46 | GET | `/api/v1/monitoring/plants/{plantId}` | Authenticated (owner) | G5.5.1 | ✅ Hoàn thành (Backend + Frontend G5.5.1) |
 
-> **Phạm vi mở rộng (ngoài 46 endpoints trên):** Các tính năng Upload/Storage (`G5.5.2b`), Camera CRUD (`G5.5.2a`), Mã QR (`G5.5.3`), Growth Analytics nâng cao (`G5.5.4`), AI Diagnosis (`G5.5.5`), Push Notifications (`G5.5.6`), Quên mật khẩu (`POST /auth/forgot-password`), Refresh token (`POST /auth/refresh`) và Google/Zalo OAuth nằm ngoài phạm vi G5.5.1 MVP.
+> **Phạm vi mở rộng (ngoài 46 endpoints trên):** Các tính năng Camera Live Stream (`Phase C2`), Upload/Storage (`G5.5.2b`), Mã QR (`G5.5.3`), Growth Analytics nâng cao (`G5.5.4`), AI Diagnosis (`G5.5.5`), Push Notifications (`G5.5.6`), Quên mật khẩu (`POST /auth/forgot-password`), Refresh token (`POST /auth/refresh`) và Google/Zalo OAuth nằm ngoài phạm vi G5.5.2a.
 
 ---
 
-*Tài liệu này là hợp đồng API chính thức của dự án GoPlant, đã cập nhật đồng bộ với G5.5.1 — Monitoring Overview & Plant Monitoring MVP.*
+*Tài liệu này là hợp đồng API chính thức của dự án GoPlant, đã cập nhật đồng bộ tới G5.5.2a — Camera Metadata CRUD (Phase C1).*

@@ -66,7 +66,7 @@ Bảng ma trận đối soát hiện trạng triển khai giữa Frontend, Backe
 | **Admin Quản trị hệ thống** | Quản trị loài cây & tài khoản người dùng | UI quản trị Backlog | **Hoàn thành API:** `/api/v1/admin/species*`, `/api/v1/admin/users*` |
 | **Chỉ số sinh trưởng** | Biểu đồ môi trường, độ ẩm đất, nhiệt độ | Đã có UI (`MonitoringDetailScreen.tsx`) | Chưa có API |
 | **Mã định danh (QR)** | Sinh mã `plantCode` mở nhanh hồ sơ cây | Đang trong kế hoạch mở rộng (Backlog) | Schema & API `user_plants.plantCode` đã hỗ trợ |
-| **Camera giám sát** | Xem ảnh chụp thực tế vị trí trồng cây | Nút bấm placeholder UI (Backlog) | Schema bảng `cameras` + 4 endpoint Backlog trong OpenAPI |
+| **Camera giám sát** | Quản lý metadata camera theo khu vườn (chưa hỗ trợ live video) | **Đã tích hợp Phase C1 (G5.5.2a):** `CameraManagementSection` trong `GardenDetailScreen`, thẻ điều hướng ở `MonitoringScreen` (chưa có live stream Phase C2) | **Hoàn thành API Phase C1 (G5.5.2a):** `GET/POST /api/v1/gardens/{gardenId}/cameras`, `PUT/DELETE /api/v1/cameras/{cameraId}` trên bảng `cameras` |
 
 ---
 

@@ -15,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GoPlantColors as C, GoPlantTypography as F } from '@/constants/theme';
 import { useAuth } from '@/features/auth/AuthProvider';
+import { CameraManagementSection } from '@/features/cameras/CameraManagementSection';
 import {
   PLANT_DISPLAY_NAME_MAX_LENGTH,
   PLANT_LOCATION_MAX_LENGTH,
@@ -512,6 +513,12 @@ export function GardenDetailScreen() {
             })
           )}
         </View>
+
+        <CameraManagementSection
+          gardenId={garden.id}
+          enabled={!isDeleted && !deleteMutation.isPending}
+          disabled={deleteMutation.isPending}
+        />
 
         <View style={g.noticeCard}>
           <Text style={g.noticeTitle}>Ghi chú tích hợp (G5.3)</Text>

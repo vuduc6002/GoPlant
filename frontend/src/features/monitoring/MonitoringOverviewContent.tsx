@@ -3,6 +3,10 @@ import { router } from 'expo-router';
 import Svg, { Rect } from 'react-native-svg';
 
 import { GoPlantColors as C, GoPlantTypography as F } from '@/constants/theme';
+import {
+  CAMERA_MONITORING_CTA_SUBTITLE,
+  CAMERA_MONITORING_CTA_TITLE,
+} from '@/features/cameras/cameraTypes';
 import { formatIsoDateTimeVn } from '@/features/carelog/careLogApi';
 import { getHealthStatusMeta } from '@/features/gardens/gardenTypes';
 import {
@@ -432,6 +436,19 @@ export function MonitoringOverviewContent({
           </View>
         </>
       )}
+
+      <View style={m.card}>
+        <Text style={m.sectionTitle}>{CAMERA_MONITORING_CTA_TITLE}</Text>
+        <Text style={m.body}>{CAMERA_MONITORING_CTA_SUBTITLE}</Text>
+        <Pressable
+          onPress={() => router.push('/gardens' as never)}
+          accessibilityRole="button"
+          accessibilityLabel="Mở danh sách khu vườn để quản lý camera"
+          style={m.secondaryBtn}
+        >
+          <Text style={m.secondaryBtnText}>Mở danh sách khu vườn →</Text>
+        </Pressable>
+      </View>
     </View>
   );
 }

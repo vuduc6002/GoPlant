@@ -523,6 +523,14 @@ export function useDeleteGardenMutation() {
         queryKey: queryKeys.gardens.detail(ownerUserId, cleanId),
         exact: true,
       });
+      await qc.cancelQueries({
+        queryKey: queryKeys.cameras.gardenList(ownerUserId, cleanId),
+        exact: true,
+      });
+      qc.removeQueries({
+        queryKey: queryKeys.cameras.gardenList(ownerUserId, cleanId),
+        exact: true,
+      });
       for (const plantId of deletedPlantIds) {
         await qc.cancelQueries({
           queryKey: queryKeys.plants.schedulesBase(ownerUserId, plantId),

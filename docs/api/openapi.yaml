@@ -1,11 +1,11 @@
 openapi: 3.0.3
 info:
   title: GoPlant REST API Contract
-  version: 1.1.0
+  version: 1.2.0
   description: >
     Tài liệu đặc tả RESTful API cho hệ thống Quản lý và Chăm sóc cây trồng GoPlant.
     Phục vụ giao tiếp chuẩn hóa giữa Frontend React Native + Expo và Backend Spring Boot,
-    đã bổ sung hai endpoint Monitoring G5.5.1.
+    đã bổ sung hai endpoint Monitoring G5.5.1 và 4 endpoint Camera Metadata CRUD (G5.5.2a Phase C1).
 servers:
   - url: https://api.goplant.vn/api/v1
     description: Production Server (Dự kiến)
@@ -36,7 +36,7 @@ tags:
   - name: Admin Users
     description: Quản trị tài khoản người dùng (ROLE_ADMIN)
   - name: Cameras
-    description: Thông tin thiết bị giám sát camera (Backlog)
+    description: Quản lý metadata thiết bị camera giám sát theo khu vườn (G5.5.2a Phase C1; chưa hỗ trợ xem luồng video trực tiếp)
 
 paths:
   /auth/register:
@@ -1316,7 +1316,10 @@ paths:
     get:
       tags:
         - Cameras
-      summary: Lấy danh sách camera giám sát trong khu vườn (Backlog)
+      summary: Lấy danh sách metadata camera giám sát trong khu vườn (G5.5.2a)
+      description: >
+        Chỉ chủ sở hữu khu vườn mới có quyền truy cập (kể cả ROLE_ADMIN cũng bị từ chối 403 nếu không phải owner).
+        Danh sách sắp xếp theo createdAt tăng dần, id tăng dần. Trả về mảng rỗng [] nếu vườn chưa có camera.
       operationId: getGardenCameras
       security:
         - BearerAuth: []
@@ -1329,11 +1332,13 @@ paths:
             format: uuid
       responses:
         '200':
-          description: Danh sách camera
+          description: Danh sách metadata camera trong khu vườn
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/CameraListWrapper'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '403':
@@ -1343,7 +1348,11 @@ paths:
     post:
       tags:
         - Cameras
-      summary: Thêm thông tin camera vào khu vườn (Backlog)
+      summary: Thêm metadata camera mới vào khu vườn (G5.5.2a)
+      description: >
+        Chỉ chủ sở hữu khu vườn mới có quyền thêm camera (403 nếu khác owner).
+        Camera mới tạo luôn bắt đầu với trạng thái OFFLINE; owner lấy từ JWT và gardenId lấy từ path.
+        connectionNote không được chứa mật khẩu, token hoặc userinfo URI (user:pass@host).
       operationId: addCameraToGarden
       security:
         - BearerAuth: []
@@ -1373,12 +1382,18 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '403':
           $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
 
   /cameras/{cameraId}:
     put:
       tags:
         - Cameras
-      summary: Cập nhật thông tin camera (Backlog)
+      summary: Cập nhật metadata và trạng thái ghi nhận thủ công của camera (G5.5.2a)
+      description: >
+        Chỉ chủ sở hữu camera mới có quyền cập nhật (403 nếu khác owner, kể cả ROLE_ADMIN).
+        Hỗ trợ cập nhật từng phần: trường không gửi hoặc null giữ nguyên giá trị cũ; gửi chuỗi rỗng "" cho locationDesc hoặc connectionNote sẽ xóa về null.
+        name nếu gửi lên không được rỗng và tối đa 200 ký tự. connectionNote từ chối chuỗi chứa thông tin đăng nhập/token. ownerId và gardenId bất biến.
       operationId: updateCamera
       security:
         - BearerAuth: []
@@ -1397,7 +1412,7 @@ paths:
               $ref: '#/components/schemas/UpdateCameraRequest'
       responses:
         '200':
-          description: Cập nhật thành công
+          description: Cập nhật camera thành công
           content:
             application/json:
               schema:
@@ -1413,7 +1428,10 @@ paths:
     delete:
       tags:
         - Cameras
-      summary: Xóa camera (Backlog)
+      summary: Xóa camera (G5.5.2a)
+      description: >
+        Chỉ chủ sở hữu camera mới có quyền xóa (403 nếu khác owner).
+        Chỉ xóa bản ghi camera, không ảnh hưởng tới khu vườn, cây trồng, lịch hoặc nhật ký.
       operationId: deleteCamera
       security:
         - BearerAuth: []
@@ -1426,11 +1444,13 @@ paths:
             format: uuid
       responses:
         '200':
-          description: Xóa thành công
+          description: Xóa camera thành công
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SimpleMessageWrapper'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '403':
@@ -2723,29 +2743,46 @@ components:
       properties:
         name:
           type: string
+          minLength: 1
+          maxLength: 200
           example: Camera Ban Công Đông
         locationDesc:
           type: string
+          nullable: true
           example: Góc tường hướng Tây Nam nhìn toàn cảnh ban công
         connectionNote:
           type: string
           nullable: true
+          description: Ghi chú kết nối thuần văn bản; không được chứa mật khẩu, token hoặc userinfo URI (user:pass@host)
+          example: Đã kiểm tra nguồn điện và cáp mạng
 
     UpdateCameraRequest:
       type: object
       properties:
         name:
           type: string
+          minLength: 1
+          maxLength: 200
         locationDesc:
           type: string
+          nullable: true
         status:
           type: string
           enum: [ONLINE, OFFLINE, ERROR]
         connectionNote:
           type: string
+          nullable: true
+          description: Ghi chú kết nối không chứa credential; gửi "" để xóa về null
 
     CameraItem:
       type: object
+      required:
+        - id
+        - gardenId
+        - name
+        - status
+        - createdAt
+        - updatedAt
       properties:
         id:
           type: string
@@ -2761,7 +2798,13 @@ components:
         status:
           type: string
           enum: [ONLINE, OFFLINE, ERROR]
+        connectionNote:
+          type: string
+          nullable: true
         createdAt:
+          type: string
+          format: date-time
+        updatedAt:
           type: string
           format: date-time
 

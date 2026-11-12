@@ -67,6 +67,11 @@ export const queryKeys = {
     list: (userId: string) => ['gardens', userId, 'list'] as const,
     detail: (userId: string, id: string) => ['gardens', userId, 'detail', id] as const,
   },
+  cameras: {
+    all: (userId: string) => ['cameras', userId] as const,
+    gardenList: (userId: string, gardenId: string) =>
+      ['cameras', userId, 'garden', gardenId] as const,
+  },
   plants: {
     all: (userId: string) => ['plants', userId] as const,
     lists: (userId: string) => ['plants', userId, 'list'] as const,

@@ -5,6 +5,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.validation.FieldError;
@@ -12,6 +13,9 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import tools.jackson.databind.DatabindException;
+
+import java.util.List;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -40,6 +44,27 @@ public class GlobalExceptionHandler {
         String field = ex.getName();
         String message = "Tham số '" + field + "' không đúng định dạng.";
         log.warn("Type mismatch error on parameter '{}': {}", field, ex.getMessage());
+        ApiResponse<Void> res = ApiResponse.failure("VALIDATION_ERROR", message, field);
+        return new ResponseEntity<>(res, HttpStatus.BAD_REQUEST);
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiResponse<Void>> handleHttpMessageNotReadable(HttpMessageNotReadableException ex) {
+        String field = null;
+        Throwable cause = ex.getCause();
+        if (cause instanceof DatabindException databindException) {
+            List<?> path = databindException.getPath();
+            if (path != null && !path.isEmpty()) {
+                Object last = path.get(path.size() - 1);
+                if (last instanceof DatabindException.Reference ref && ref.getPropertyName() != null) {
+                    field = ref.getPropertyName();
+                }
+            }
+        }
+        log.warn("Unreadable or malformed request payload [{}] on field '{}'", ex.getClass().getSimpleName(), field);
+        String message = field != null
+            ? "Giá trị trường '" + field + "' không hợp lệ."
+            : "Dữ liệu đầu vào không hợp lệ hoặc sai định dạng JSON.";
         ApiResponse<Void> res = ApiResponse.failure("VALIDATION_ERROR", message, field);
         return new ResponseEntity<>(res, HttpStatus.BAD_REQUEST);
     }
