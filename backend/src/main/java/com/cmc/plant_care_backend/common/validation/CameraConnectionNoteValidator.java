@@ -16,9 +16,10 @@ public class CameraConnectionNoteValidator {
         "(?i)[a-z][a-z0-9+.-]*://[^\\s/@?#]*@"
     );
 
-    // Matches bare user:pass@host patterns while avoiding false positives on email:address
+    // Matches bare user:pass@host patterns (including compact labels like email:secret@host and punctuation boundaries like :(admin:secret@host))
+    // while still allowing normal emails like "support@example.com" or "Email: support@example.com"
     private static final Pattern BARE_USERINFO_PATTERN = Pattern.compile(
-        "(?i)(?:^|\\s)(?!e?mail:)[^\\s:@/]+:[^\\s@/]*@[^\\s/:]+"
+        "(?i)(?:^|[\\s(\\[{\"'<,;:=])[^\\s:@/(\\[{\"'<,;]+:[^\\s@/]*@[^\\s/:()\\[\\]{}\"'<>,;]+"
     );
 
     // Matches explicit credential key-value assignments (case-insensitive)

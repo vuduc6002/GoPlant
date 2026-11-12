@@ -7,8 +7,11 @@ import com.cmc.plant_care_backend.security.JwtService;
 import com.cmc.plant_care_backend.security.UserPrincipal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -23,6 +26,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @SpringBootTest
+@ExtendWith(OutputCaptureExtension.class)
 class CameraIntegrationAndSecurityTest {
 
     @Autowired
@@ -331,7 +335,7 @@ class CameraIntegrationAndSecurityTest {
     }
 
     @Test
-    void cameraValidationMatrix_ShouldRejectBadInputsAndCredentialsWithoutSecretEcho() throws Exception {
+    void cameraValidationMatrix_ShouldRejectBadInputsAndCredentialsWithoutSecretEcho(CapturedOutput capturedOutput) throws Exception {
         String createdJson = mockMvc.perform(post("/api/v1/gardens/" + gardenA.getId() + "/cameras")
                 .header("Authorization", "Bearer " + tokenA)
                 .contentType(MediaType.APPLICATION_JSON)
@@ -385,12 +389,31 @@ class CameraIntegrationAndSecurityTest {
             .andReturn().getResponse().getContentAsString();
         assertFalse(invalidEnumRes.contains("INVALID_SECRET_VALUE"));
 
-        // 5. POST & PUT credential note rejection without echoing secret
+        // 5. POST & PUT credential note rejection without echoing secret in response or logs
         String[] badNotes = {
             "rtsp://admin:MySecretRtsp99@192.168.1.10:554/stream1",
             "http://camuser:MyHttpPass88@cam.local/feed",
+            "admin:BarePassSecret11@192.168.1.10",
+            "camadmin:BarePass88Secret@192.168.1.9:554",
+            "email:CompactEmailSecret22@cam.local",
+            "mail:CompactMailSecret33@cam.local",
+            "Camera login: admin:InlineLoginSecret44@cam.local",
+            "Label:(admin:ParenSecret55@cam.local)",
             "password=LeakSecretValue123",
             "apiKey: ApiKeySecretValue456"
+        };
+
+        String[] secretMarkers = {
+            "MySecretRtsp99",
+            "MyHttpPass88",
+            "BarePassSecret11",
+            "BarePass88Secret",
+            "CompactEmailSecret22",
+            "CompactMailSecret33",
+            "InlineLoginSecret44",
+            "ParenSecret55",
+            "LeakSecretValue123",
+            "ApiKeySecretValue456"
         };
 
         for (String badNote : badNotes) {
@@ -403,11 +426,6 @@ class CameraIntegrationAndSecurityTest {
                 .andExpect(jsonPath("$.error.field").value("connectionNote"))
                 .andReturn().getResponse().getContentAsString();
 
-            assertFalse(postReject.contains("MySecretRtsp99"));
-            assertFalse(postReject.contains("MyHttpPass88"));
-            assertFalse(postReject.contains("LeakSecretValue123"));
-            assertFalse(postReject.contains("ApiKeySecretValue456"));
-
             String putReject = mockMvc.perform(put("/api/v1/cameras/" + cameraId)
                     .header("Authorization", "Bearer " + tokenA)
                     .contentType(MediaType.APPLICATION_JSON)
@@ -417,8 +435,15 @@ class CameraIntegrationAndSecurityTest {
                 .andExpect(jsonPath("$.error.field").value("connectionNote"))
                 .andReturn().getResponse().getContentAsString();
 
-            assertFalse(putReject.contains("MySecretRtsp99"));
-            assertFalse(putReject.contains("LeakSecretValue123"));
+            for (String secret : secretMarkers) {
+                assertFalse(postReject.contains(secret), "POST error response must not echo secret: " + secret);
+                assertFalse(putReject.contains(secret), "PUT error response must not echo secret: " + secret);
+            }
+        }
+
+        String loggedOutput = capturedOutput.getAll();
+        for (String secret : secretMarkers) {
+            assertFalse(loggedOutput.contains(secret), "Application log must not contain raw secret: " + secret);
         }
     }
 

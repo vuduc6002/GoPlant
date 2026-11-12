@@ -20,6 +20,8 @@ class CameraConnectionNoteValidatorTest {
         assertDoesNotThrow(() -> validator.validate(null));
         assertDoesNotThrow(() -> validator.validate(""));
         assertDoesNotThrow(() -> validator.validate("   "));
+        assertDoesNotThrow(() -> validator.validate("support@example.com"));
+        assertDoesNotThrow(() -> validator.validate("Email: support@example.com"));
         assertDoesNotThrow(() -> validator.validate("Đã kiểm tra nguồn điện và cáp mạng"));
         assertDoesNotThrow(() -> validator.validate("Cần kiểm tra lại adapter góc ban công"));
         assertDoesNotThrow(() -> validator.validate("Gắn gần ổ cắm hướng Đông"));
@@ -79,6 +81,32 @@ class CameraConnectionNoteValidatorTest {
             assertFalse(ex.getMessage().contains("abcSecretValue"));
             assertFalse(ex.getMessage().contains("tok_live_987654"));
             assertFalse(ex.getMessage().contains("key_live_12345"));
+        }
+    }
+
+    @Test
+    void validate_ShouldRejectBareAndCompactEmailCredentialsWithoutEchoingSecret() {
+        String[] rejected = {
+            "admin:secret@192.168.1.10",
+            "camadmin:barepass88@192.168.1.9:554",
+            "email:secret@cam.local",
+            "mail:secret@cam.local",
+            "Camera login: admin:secret@cam.local",
+            "Label:(admin:secret@cam.local)"
+        };
+
+        for (String payload : rejected) {
+            ValidationException ex = assertThrows(
+                ValidationException.class,
+                () -> validator.validate(payload),
+                "Expected rejection for bare credential payload: " + payload
+            );
+            assertEquals("connectionNote", ex.getField());
+            assertEquals("VALIDATION_ERROR", ex.getErrorCode());
+            assertFalse(ex.getMessage().contains("secret"));
+            assertFalse(ex.getMessage().contains("barepass88"));
+            assertFalse(ex.getMessage().contains("cam.local"));
+            assertFalse(ex.getMessage().contains("192.168.1.10"));
         }
     }
 }

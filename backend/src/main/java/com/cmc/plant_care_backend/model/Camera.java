@@ -32,7 +32,7 @@ public class Camera {
     private String locationDesc;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "status", nullable = false, length = 50)
+    @Column(name = "status", nullable = false, length = 20)
     private CameraStatus status = CameraStatus.OFFLINE;
 
     @Column(name = "connection_note", columnDefinition = "TEXT")

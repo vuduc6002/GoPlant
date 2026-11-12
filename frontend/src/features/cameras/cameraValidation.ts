@@ -9,7 +9,8 @@ const CREDENTIAL_ERROR_MESSAGE =
   'Ghi chú kết nối không được chứa mật khẩu, token hoặc thông tin đăng nhập.';
 
 const URI_USERINFO_PATTERN = /[a-z][a-z0-9+.-]*:\/\/[^\s/@?#]*@/i;
-const BARE_USERINFO_PATTERN = /(?:^|\s)(?!e?mail:)[^\s:@/]+:[^\s@/]*@[^\s/:]+/i;
+const BARE_USERINFO_PATTERN =
+  /(?:^|[\s([{"'<,;:=])[^\s:@/([{"'<,;]+:[^\s@/]*@[^\s/:()[\]{}"'<>,;]+/i;
 const CREDENTIAL_KV_PATTERN =
   /(?:^|[^\p{L}\p{N}])(?:password|passwd|pwd|token|secret|api[_-]?key|username)\s*[:=]/iu;
 const BEARER_TOKEN_PATTERN = /\bbearer\s+[a-z0-9._-]{8,}/i;

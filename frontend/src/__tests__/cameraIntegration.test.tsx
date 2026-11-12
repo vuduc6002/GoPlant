@@ -397,7 +397,13 @@ describe('G5.5.2a Camera Metadata CRUD Integration', () => {
         'rtsp://admin:supersecret99@192.168.1.10:554/stream1',
         'rtsps://camuser:topsecret99@10.0.0.5/live',
         'http://camadmin:pass999@192.168.0.2/video',
+        'https://camadmin:pass999@cam.example.com/feed',
+        'admin:secret@192.168.1.10',
         'camadmin:barepass88@192.168.1.9:554',
+        'email:secret@cam.local',
+        'mail:secret@cam.local',
+        'Camera login: admin:secret@cam.local',
+        'Label:(admin:secret@cam.local)',
         'password=my-secret-pw',
         'Password: my-secret-pw',
         'passwd=secret_val',
@@ -424,6 +430,9 @@ describe('G5.5.2a Camera Metadata CRUD Integration', () => {
           'Ghi chú kết nối không được chứa mật khẩu, token hoặc thông tin đăng nhập.'
         );
         expect(caught?.message).not.toContain('supersecret99');
+        expect(caught?.message).not.toContain('secret');
+        expect(caught?.message).not.toContain('barepass88');
+        expect(caught?.message).not.toContain('cam.local');
         expect(caught?.message).not.toContain('my-secret-pw');
         expect(caught?.message).not.toContain('eyJhbGciOiJIUzI1NiJ9');
       }
@@ -431,11 +440,14 @@ describe('G5.5.2a Camera Metadata CRUD Integration', () => {
       const safeNotes = [
         '',
         '   ',
+        'support@example.com',
+        'Email: support@example.com',
         'Đã kiểm tra nguồn điện và cáp mạng',
         'Token camera chưa cần thiết',
         'Không chứa password hay token ở đây',
         'Đầu nối nguồn gần công tắc mật khẩu cửa',
         'Góc quan sát hướng Đông, không ngược sáng',
+        'rtsp://192.168.1.10:554/stream1',
       ];
       for (const safe of safeNotes) {
         expect(() => validateCameraConnectionNote(safe)).not.toThrow();
@@ -860,23 +872,28 @@ describe('G5.5.2a Camera Metadata CRUD Integration', () => {
 
       // Test local credential validation blocks unsafe note BEFORE calling API
       changeInputValue(container!.querySelector('[aria-label="Tên camera"]'), '  Camera Sân Thượng  ');
-      changeInputValue(
-        container!.querySelector('[aria-label="Ghi chú kết nối camera"]'),
-        'rtsp://admin:SuperSecret999@192.168.1.55:554/stream'
-      );
-      clickElement(findButtonByLabel(container!, 'Lưu camera mới'));
+      for (const badUiNote of [
+        'rtsp://admin:SuperSecret999@192.168.1.55:554/stream',
+        'email:CompactUiSecret77@cam.local',
+        'Label:(admin:ParenUiSecret88@cam.local)',
+      ]) {
+        changeInputValue(container!.querySelector('[aria-label="Ghi chú kết nối camera"]'), badUiNote);
+        clickElement(findButtonByLabel(container!, 'Lưu camera mới'));
 
-      expect(postCalls).toBe(0);
-      expect(container!.textContent).toContain(
-        'Ghi chú kết nối không được chứa mật khẩu, token hoặc thông tin đăng nhập.'
-      );
-      const leakedErrorText = Array.from(container!.querySelectorAll('div, span, p')).some(
-        (el) =>
-          !el.querySelector('textarea, input') &&
-          el.textContent?.includes('không được chứa mật khẩu') &&
-          el.textContent?.includes('SuperSecret999')
-      );
-      expect(leakedErrorText).toBe(false);
+        expect(postCalls).toBe(0);
+        expect(container!.textContent).toContain(
+          'Ghi chú kết nối không được chứa mật khẩu, token hoặc thông tin đăng nhập.'
+        );
+        const leakedErrorText = Array.from(container!.querySelectorAll('div, span, p')).some(
+          (el) =>
+            !el.querySelector('textarea, input') &&
+            el.textContent?.includes('không được chứa mật khẩu') &&
+            (el.textContent?.includes('SuperSecret999') ||
+              el.textContent?.includes('CompactUiSecret77') ||
+              el.textContent?.includes('ParenUiSecret88'))
+        );
+        expect(leakedErrorText).toBe(false);
+      }
 
       // Enter valid metadata and submit POST
       changeInputValue(

@@ -6,6 +6,7 @@ import com.cmc.plant_care_backend.model.enums.EntryType;
 import com.cmc.plant_care_backend.model.enums.JournalHealthStatus;
 import com.cmc.plant_care_backend.model.enums.SpaceType;
 import com.cmc.plant_care_backend.repository.*;
+import jakarta.persistence.Column;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import org.junit.jupiter.api.DisplayName;
@@ -433,6 +434,21 @@ class DatabaseSchemaIntegrationTest {
                 // 9.8. Cameras (1 index)
                 assertIndexDefinition(actualIndexes, "idx_cameras_garden_id", "cameras", false, "btree",
                     List.of(new ExpectedKey("garden_id", false)), null);
+
+                // 10. Verify Camera table column lengths match V1 & Camera entity @Column definitions
+                try (Statement stmt = conn.createStatement();
+                     ResultSet rs = stmt.executeQuery(
+                         "SELECT column_name, character_maximum_length, is_nullable " +
+                         "FROM information_schema.columns " +
+                         "WHERE table_schema = 'public' AND table_name = 'cameras' AND column_name IN ('name', 'status')")) {
+                    Map<String, Integer> camLengths = new HashMap<>();
+                    while (rs.next()) {
+                        camLengths.put(rs.getString("column_name").toLowerCase(), rs.getInt("character_maximum_length"));
+                        assertEquals("NO", rs.getString("is_nullable"));
+                    }
+                    assertEquals(200, camLengths.get("name"), "cameras.name must be VARCHAR(200)");
+                    assertEquals(20, camLengths.get("status"), "cameras.status must be VARCHAR(20)");
+                }
             } else {
                 // When running with default local H2 profile
                 Set<String> actualTables = new HashSet<>();
@@ -443,12 +459,25 @@ class DatabaseSchemaIntegrationTest {
                 }
                 Set<String> coreJpaTables = Set.of(
                     "roles", "users", "user_roles", "plant_species", "user_favorite_species",
-                    "gardens", "user_plants", "care_schedules", "care_logs", "growth_journals"
+                    "gardens", "user_plants", "care_schedules", "care_logs", "growth_journals", "cameras"
                 );
                 for (String expected : coreJpaTables) {
                     assertTrue(actualTables.contains(expected), "Missing expected table in H2: " + expected);
                 }
             }
+
+            // Always verify Camera JPA @Column lengths stay synchronized with V1__initial_schema.sql
+            Column cameraStatusCol = Camera.class.getDeclaredField("status").getAnnotation(Column.class);
+            assertNotNull(cameraStatusCol);
+            assertEquals("status", cameraStatusCol.name());
+            assertFalse(cameraStatusCol.nullable());
+            assertEquals(20, cameraStatusCol.length(), "Camera.status @Column length must match V1 VARCHAR(20)");
+
+            Column cameraNameCol = Camera.class.getDeclaredField("name").getAnnotation(Column.class);
+            assertNotNull(cameraNameCol);
+            assertEquals("name", cameraNameCol.name());
+            assertFalse(cameraNameCol.nullable());
+            assertEquals(200, cameraNameCol.length(), "Camera.name @Column length must match V1 VARCHAR(200)");
         }
     }
 
