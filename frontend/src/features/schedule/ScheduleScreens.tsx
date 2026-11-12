@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -24,8 +24,8 @@ import { queryKeys } from '@/services/query/queryKeys';
 import {
   DEFAULT_REMINDER_TIME,
   formatNextScheduledAtVn,
+  getScheduleRuntimeState,
   getTodayVnDateString,
-  isScheduleDueNow,
   TASK_LABEL_MAX_LENGTH,
   validateCreateStartDate,
   validateEndDateValue,
@@ -36,6 +36,7 @@ import {
   validateTaskLabel,
   validateTaskType,
 } from './scheduleApi';
+import { useScheduleClock } from './useScheduleClock';
 import {
   useCompleteScheduleMutation,
   useCreateScheduleMutation,
@@ -122,12 +123,26 @@ function StatusTag({
 }
 
 export function ScheduleOverviewContent() {
-  const { user } = useAuth();
+  const { user, status } = useAuth();
+  const isAuthenticated = status === 'authenticated';
   const currentUserId = typeof user?.id === 'string' ? user.id.trim() : '';
   const currentUserIdRef = useRef(currentUserId);
   const prevUserIdRef = useRef(currentUserId);
 
   const todayQuery = useTodaySchedules();
+  const todayRefetch = todayQuery.refetch;
+  const todayRefetchRef = useRef(todayRefetch);
+  useEffect(() => {
+    todayRefetchRef.current = todayRefetch;
+  }, [todayRefetch]);
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
   const completeMutation = useCompleteScheduleMutation();
   const skipMutation = useSkipScheduleMutation();
 
@@ -149,13 +164,35 @@ export function ScheduleOverviewContent() {
   }, [currentUserId]);
 
   const items = useMemo(() => todayQuery.data ?? [], [todayQuery.data]);
-  const overdueItems = useMemo(
-    () => items.filter((item) => item.isOverdue),
+  const activeTransitionTimestamps = useMemo(
+    () =>
+      items
+        .filter((item) => item.status === 'ACTIVE')
+        .map((item) => item.nextScheduledAt),
     [items]
   );
+
+  const handleClockRefresh = useCallback(() => {
+    if (!isMountedRef.current || !isAuthenticated || !currentUserIdRef.current) {
+      return;
+    }
+    void todayRefetchRef.current();
+  }, [isAuthenticated]);
+
+  const { nowMs } = useScheduleClock({
+    enabled: isAuthenticated && Boolean(currentUserId),
+    transitionIsoTimestamps: activeTransitionTimestamps,
+    trackVnMidnight: true,
+    onActiveRefresh: handleClockRefresh,
+  });
+
+  const overdueItems = useMemo(
+    () => items.filter((item) => getScheduleRuntimeState(item, nowMs).isOverdue),
+    [items, nowMs]
+  );
   const nonOverdueItems = useMemo(
-    () => items.filter((item) => !item.isOverdue),
-    [items]
+    () => items.filter((item) => !getScheduleRuntimeState(item, nowMs).isOverdue),
+    [items, nowMs]
   );
 
   const visibleItems = useMemo(() => {
@@ -181,7 +218,7 @@ export function ScheduleOverviewContent() {
       getSessionGeneration() !== initiatedGeneration ||
       (Boolean(initiatedByUserId) && currentUserIdRef.current !== initiatedByUserId);
 
-    if (!isScheduleDueNow(item)) {
+    if (!getScheduleRuntimeState(item, nowMs).isDue) {
       setActionError('Lượt chăm sóc này chưa đến giờ thực hiện.');
       return;
     }
@@ -384,8 +421,10 @@ export function ScheduleOverviewContent() {
       ) : (
         visibleItems.map((item) => {
           const taskMeta = getTaskTypeMeta(item.taskType);
-          const timeInfo = formatNextScheduledAtVn(item.nextScheduledAt);
-          const dueNow = isScheduleDueNow(item);
+          const timeInfo = formatNextScheduledAtVn(item.nextScheduledAt, new Date(nowMs));
+          const runtimeState = getScheduleRuntimeState(item, nowMs);
+          const dueNow = runtimeState.isDue;
+          const overdueNow = runtimeState.isOverdue;
           const isPendingThis =
             isAnyCareActionPending && activeScheduleActionId === item.scheduleId;
           const actionsDisabled = isAnyCareActionPending || !dueNow;
@@ -404,7 +443,7 @@ export function ScheduleOverviewContent() {
                     ) : null}
                   </View>
                 </View>
-                {item.isOverdue ? (
+                {overdueNow ? (
                   <StatusTag label="Quá hạn" tone="peach" />
                 ) : dueNow ? (
                   <StatusTag label="Đến hạn" tone="mint" />
@@ -1014,7 +1053,8 @@ export function ScheduleDetailScreen() {
   const cleanPlantIdParam = typeof plantId === 'string' ? plantId.trim() : '';
 
   const qc = useQueryClient();
-  const { user } = useAuth();
+  const { user, status } = useAuth();
+  const isAuthenticated = status === 'authenticated';
   const currentUserId = typeof user?.id === 'string' ? user.id.trim() : '';
   const currentSessionOwnerKey = currentUserId
     ? `${currentUserId}:${getSessionGeneration()}`
@@ -1182,6 +1222,26 @@ export function ScheduleDetailScreen() {
   ]);
 
   const activeSchedule = deletingSnapshot ?? scheduleFromQuery ?? localSnapshot;
+  const isDetailClockEnabled =
+    isAuthenticated &&
+    Boolean(currentUserId) &&
+    Boolean(activeSchedule) &&
+    activeSchedule?.status === 'ACTIVE' &&
+    !isDeleted &&
+    !deleteMutation.isPending;
+  const activeNextScheduledAt =
+    isDetailClockEnabled && activeSchedule?.nextScheduledAt
+      ? activeSchedule.nextScheduledAt
+      : undefined;
+  const detailTransitionTimestamps = useMemo(
+    () => (activeNextScheduledAt ? [activeNextScheduledAt] : []),
+    [activeNextScheduledAt]
+  );
+  const { nowMs: scheduleNowMs } = useScheduleClock({
+    enabled: isDetailClockEnabled,
+    transitionIsoTimestamps: detailTransitionTimestamps,
+    trackVnMidnight: false,
+  });
 
   useEffect(() => {
     if (!activeSchedule || !currentSessionOwnerKey) {
@@ -1312,8 +1372,13 @@ export function ScheduleDetailScreen() {
 
   const taskMeta = getTaskTypeMeta(activeSchedule.taskType);
   const statusMeta = getScheduleStatusMeta(activeSchedule.status);
-  const nextTimeInfo = formatNextScheduledAtVn(activeSchedule.nextScheduledAt);
-  const dueNow = isScheduleDueNow(activeSchedule);
+  const nextTimeInfo = formatNextScheduledAtVn(
+    activeSchedule.nextScheduledAt,
+    new Date(scheduleNowMs)
+  );
+  const runtimeState = getScheduleRuntimeState(activeSchedule, scheduleNowMs);
+  const dueNow = runtimeState.isDue;
+  const overdueNow = runtimeState.isOverdue;
 
   const buildSessionGuard = () => {
     const initiatedGeneration = getSessionGeneration();
@@ -1508,7 +1573,7 @@ export function ScheduleDetailScreen() {
 
   const handleCareExecution = async (mode: 'complete' | 'skip') => {
     const hasSwitchedSession = buildSessionGuard();
-    if (!isScheduleDueNow(activeSchedule)) {
+    if (!getScheduleRuntimeState(activeSchedule, scheduleNowMs).isDue) {
       setSubmitError('Lượt chăm sóc hiện tại chưa đến hạn thực hiện.');
       return;
     }
@@ -1657,8 +1722,14 @@ export function ScheduleDetailScreen() {
             ) : null}
             <View style={sc.pills}>
               <StatusTag label={statusMeta.label} tone={statusMeta.tone} />
-              {activeSchedule.isOverdue && activeSchedule.status === 'ACTIVE' ? (
-                <StatusTag label="Quá hạn" tone="peach" />
+              {activeSchedule.status === 'ACTIVE' ? (
+                overdueNow ? (
+                  <StatusTag label="Quá hạn" tone="peach" />
+                ) : dueNow ? (
+                  <StatusTag label="Đến hạn" tone="mint" />
+                ) : (
+                  <StatusTag label="Chưa đến giờ" tone="plain" />
+                )
               ) : null}
             </View>
           </View>
@@ -1702,9 +1773,11 @@ export function ScheduleDetailScreen() {
           <Text style={sc.body}>
             {activeSchedule.status !== 'ACTIVE'
               ? 'Lịch không ở trạng thái Đang hoạt động nên không thể Hoàn thành hoặc Bỏ qua.'
-              : dueNow
-                ? 'Lượt chăm sóc này đã đến hạn. Bạn có thể đánh dấu hoàn thành hoặc bỏ qua chu kỳ hiện tại.'
-                : `Chưa đến hạn thực hiện (${nextTimeInfo.dateTimeLabel}).`}
+              : overdueNow
+                ? 'Lượt chăm sóc này đã quá hạn. Bạn có thể đánh dấu hoàn thành hoặc bỏ qua chu kỳ hiện tại.'
+                : dueNow
+                  ? 'Lượt chăm sóc này đã đến hạn. Bạn có thể đánh dấu hoàn thành hoặc bỏ qua chu kỳ hiện tại.'
+                  : `Chưa đến hạn thực hiện (${nextTimeInfo.dateTimeLabel}).`}
           </Text>
           <View style={sc.row}>
             <Pressable

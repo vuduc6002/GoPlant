@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -20,8 +20,10 @@ import type { UserPlantDetailDto } from '@/features/plants/plantTypes';
 import {
   DEFAULT_REMINDER_TIME,
   formatNextScheduledAtVn,
+  getScheduleRuntimeState,
 } from '@/features/schedule/scheduleApi';
 import { usePlantSchedules } from '@/features/schedule/scheduleHooks';
+import { useScheduleClock } from '@/features/schedule/useScheduleClock';
 import {
   getFrequencyLabel,
   getScheduleStatusMeta,
@@ -57,7 +59,8 @@ export default function PlantDetailScreen() {
   const cleanPlantId = typeof plantId === 'string' ? plantId.trim() : '';
   const cleanSpeciesId = typeof speciesId === 'string' ? speciesId.trim() : '';
 
-  const { user } = useAuth();
+  const { user, status } = useAuth();
+  const isAuthenticated = status === 'authenticated';
   const currentUserId = typeof user?.id === 'string' ? user.id.trim() : '';
   const currentSessionOwnerKey = currentUserId
     ? `${currentUserId}:${getSessionGeneration()}`
@@ -168,6 +171,31 @@ export default function PlantDetailScreen() {
     isSchedulesPlaceholder,
     isSchedulesError,
   ]);
+
+  const hasActiveScheduleForClock =
+    isPlantMode &&
+    isAuthenticated &&
+    Boolean(currentUserId) &&
+    !isDeleted &&
+    !deletePlantMutation.isPending &&
+    hasPlantData &&
+    (schedulesData?.content ?? []).some((sched) => sched.status === 'ACTIVE');
+
+  const activeScheduleTimestamps = useMemo(
+    () =>
+      hasActiveScheduleForClock
+        ? (schedulesData?.content ?? [])
+            .filter((sched) => sched.status === 'ACTIVE')
+            .map((sched) => sched.nextScheduledAt)
+        : [],
+    [hasActiveScheduleForClock, schedulesData]
+  );
+
+  const { nowMs: scheduleNowMs } = useScheduleClock({
+    enabled: hasActiveScheduleForClock,
+    transitionIsoTimestamps: activeScheduleTimestamps,
+    trackVnMidnight: false,
+  });
 
   if (isPlantMode) {
     const plant = plantQuery.data ?? deletingSnapshot;
@@ -547,7 +575,11 @@ export default function PlantDetailScreen() {
                 {visibleSchedules.map((sched) => {
                   const taskMeta = getTaskTypeMeta(sched.taskType);
                   const schedStatus = getScheduleStatusMeta(sched.status);
-                  const nextTimeInfo = formatNextScheduledAtVn(sched.nextScheduledAt);
+                  const nextTimeInfo = formatNextScheduledAtVn(
+                    sched.nextScheduledAt,
+                    new Date(scheduleNowMs)
+                  );
+                  const schedRuntime = getScheduleRuntimeState(sched, scheduleNowMs);
                   const schedToneStyle =
                     schedStatus.tone === 'peach'
                       ? d.tagWarning
@@ -580,7 +612,7 @@ export default function PlantDetailScreen() {
                           <Text style={[d.tag, schedToneStyle, schedTextToneStyle]}>
                             {schedStatus.label}
                           </Text>
-                          {sched.isOverdue && sched.status === 'ACTIVE' ? (
+                          {schedRuntime.isOverdue && sched.status === 'ACTIVE' ? (
                             <Text style={[d.tag, d.tagWarning, d.tagWarningText]}>Quá hạn</Text>
                           ) : null}
                         </View>

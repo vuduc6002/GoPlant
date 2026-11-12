@@ -110,6 +110,12 @@ export function getTodayVnDateString(now: Date = new Date()): string {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
+export function getNextVnMidnightMs(nowMs: number = Date.now()): number {
+  const safeNowMs = Number.isFinite(nowMs) ? nowMs : Date.now();
+  const parts = getVnDateParts(new Date(safeNowMs));
+  return Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day) + 1, -7, 0, 0, 0);
+}
+
 export function getVnDateKeyFromIso(isoUtc?: string | null): string | null {
   if (typeof isoUtc !== 'string' || !isoUtc.trim()) {
     return null;
@@ -169,6 +175,41 @@ export function formatNextScheduledAtVn(
   };
 }
 
+export interface ScheduleRuntimeState {
+  isDue: boolean;
+  isOverdue: boolean;
+}
+
+export function getScheduleRuntimeState(
+  schedule: {
+    status?: ScheduleStatus | string;
+    nextScheduledAt?: string | null;
+    isOverdue?: boolean;
+  },
+  nowMs: number = Date.now()
+): ScheduleRuntimeState {
+  if (schedule.status !== 'ACTIVE') {
+    return { isDue: false, isOverdue: false };
+  }
+  if (typeof schedule.nextScheduledAt !== 'string' || !schedule.nextScheduledAt.trim()) {
+    return { isDue: false, isOverdue: false };
+  }
+  const parsedMs = Date.parse(schedule.nextScheduledAt);
+  if (!Number.isFinite(parsedMs)) {
+    return { isDue: false, isOverdue: false };
+  }
+
+  const effectiveNowMs = Number.isFinite(nowMs) ? nowMs : Date.now();
+  const serverOverdue = schedule.isOverdue === true;
+  const timeDue = parsedMs <= effectiveNowMs;
+  const timeOverdue = parsedMs < effectiveNowMs;
+
+  return {
+    isDue: timeDue || serverOverdue,
+    isOverdue: timeOverdue || serverOverdue,
+  };
+}
+
 export function isScheduleDueNow(
   schedule: {
     status?: ScheduleStatus | string;
@@ -177,20 +218,7 @@ export function isScheduleDueNow(
   },
   nowMs: number = Date.now()
 ): boolean {
-  if (schedule.status !== 'ACTIVE') {
-    return false;
-  }
-  if (schedule.isOverdue === true) {
-    return true;
-  }
-  if (typeof schedule.nextScheduledAt !== 'string' || !schedule.nextScheduledAt.trim()) {
-    return false;
-  }
-  const parsedMs = Date.parse(schedule.nextScheduledAt);
-  if (!Number.isFinite(parsedMs)) {
-    return false;
-  }
-  return parsedMs <= nowMs;
+  return getScheduleRuntimeState(schedule, nowMs).isDue;
 }
 
 export function normalizeSchedulePageParam(page?: number): number {

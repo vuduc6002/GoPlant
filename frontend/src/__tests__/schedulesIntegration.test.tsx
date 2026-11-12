@@ -1,6 +1,6 @@
-import React, { act } from 'react';
+import React, { act, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Alert } from 'react-native';
+import { Alert, AppState } from 'react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -22,6 +22,7 @@ import {
 import {
   CreateScheduleScreen,
   ScheduleDetailScreen,
+  ScheduleOverviewContent,
 } from '@/features/schedule/ScheduleScreens';
 import {
   buildCreateSchedulePayload,
@@ -30,7 +31,9 @@ import {
   createSchedule,
   deleteSchedule,
   formatNextScheduledAtVn,
+  getNextVnMidnightMs,
   getPlantSchedules,
+  getScheduleRuntimeState,
   getTodaySchedules,
   getTodayVnDateString,
   getVnDateKeyFromIso,
@@ -38,6 +41,11 @@ import {
   skipSchedule,
   updateSchedule,
 } from '@/features/schedule/scheduleApi';
+import {
+  DEFAULT_SCHEDULE_CLOCK_INTERVAL_MS,
+  ScreenFocusProvider,
+  useScheduleClock,
+} from '@/features/schedule/useScheduleClock';
 import {
   useCompleteScheduleMutation,
   useCreateScheduleMutation,
@@ -366,6 +374,7 @@ describe('G5.4.2 Care Schedules REST API Integration (Mocked Axios HTTP Adapter)
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     apiClient.defaults.adapter = originalAdapter;
     if (root) {
       await act(async () => {
@@ -2675,6 +2684,798 @@ describe('G5.4.2 Care Schedules REST API Integration (Mocked Axios HTTP Adapter)
 
       expect(container!.textContent).toContain('Lịch An Toàn Của B');
       expect(mockRouter.replace).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('10. G5.4.2.1 Live Schedule Clock, Due/Overdue Reactivity, AppState & VN Midnight Rollover', () => {
+    async function flushFakeTimersAndMicrotasks(ms = 20) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+    }
+
+    async function waitForFake(assertion: () => void, stepMs = 15, maxSteps = 120): Promise<void> {
+      let lastError: unknown;
+      for (let i = 0; i < maxSteps; i++) {
+        try {
+          assertion();
+          return;
+        } catch (err) {
+          lastError = err;
+          await flushFakeTimersAndMicrotasks(stepMs);
+        }
+      }
+      assertion();
+      if (lastError) {
+        throw lastError;
+      }
+    }
+
+    it('Test 1 (Schedule Overview): unlocks Complete/Skip buttons and transitions badge from Chưa đến giờ to Đến hạn automatically without manual refresh', async () => {
+      vi.useFakeTimers();
+      // 08:59:50 VN on 2026-11-12
+      vi.setSystemTime(new Date('2026-11-12T01:59:50.000Z'));
+
+      vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(sessionA);
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+
+      const nearDueIso = '2026-11-12T02:00:00.000Z'; // 09:00:00 VN
+      const nearDueItem: TodayScheduleItemDto = {
+        scheduleId: 'sch-live-due',
+        plantId: 'plt-1',
+        plantName: 'Monstera Cửa Sổ',
+        gardenName: 'Ban công hướng Đông',
+        taskType: 'WATERING',
+        taskLabel: 'Tưới đúng 09:00 sáng',
+        nextScheduledAt: nearDueIso,
+        isOverdue: false,
+        status: 'ACTIVE',
+      };
+
+      let todayCalls = 0;
+      let completeCalls = 0;
+      apiClient.defaults.adapter = vi.fn().mockImplementation((config) => {
+        if (config.url === '/users/me') {
+          return Promise.resolve({ status: 200, data: { success: true, data: profileA }, headers: {}, config });
+        }
+        if (config.url === '/schedules/today' && config.method === 'get') {
+          todayCalls += 1;
+          return Promise.resolve({
+            status: 200,
+            data: { success: true, data: [nearDueItem] },
+            headers: {},
+            config,
+          });
+        }
+        if (config.url === '/schedules/sch-live-due/complete' && config.method === 'post') {
+          completeCalls += 1;
+          return Promise.resolve({
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                careLogId: 'log-live-1',
+                scheduleStatus: 'ACTIVE',
+                nextScheduledAt: futureIso,
+              },
+            },
+            headers: {},
+            config,
+          });
+        }
+        throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+      });
+
+      mountWithProviders(<ScheduleScreen />);
+
+      await waitForFake(() => {
+        expect(container!.textContent).toContain('Tưới đúng 09:00 sáng');
+        expect(container!.textContent).toContain('Chưa đến giờ');
+      });
+
+      const completeBtn = () =>
+        container!.querySelector('[aria-label="Hoàn thành Tưới nước cho Monstera Cửa Sổ"]');
+      const skipBtn = () =>
+        container!.querySelector('[aria-label="Bỏ qua Tưới nước cho Monstera Cửa Sổ"]');
+
+      expect(completeBtn()?.getAttribute('aria-disabled')).toBe('true');
+      expect(skipBtn()?.getAttribute('aria-disabled')).toBe('true');
+      expect(container!.textContent).toContain('1 việc hôm nay • 0 việc quá hạn');
+      expect(todayCalls).toBe(1);
+
+      // Advance fake clock to exact nextScheduledAt boundary without pressing Refresh or touching inputs
+      const deltaToDueMs = Math.max(0, Date.parse(nearDueIso) - Date.now());
+      await flushFakeTimersAndMicrotasks(deltaToDueMs);
+
+      await waitForFake(() => {
+        expect(container!.textContent).toContain('Đến hạn');
+        expect(container!.textContent).not.toContain('Chưa đến giờ');
+      });
+
+      expect(completeBtn()?.getAttribute('aria-disabled')).not.toBe('true');
+      expect(skipBtn()?.getAttribute('aria-disabled')).not.toBe('true');
+      expect(todayCalls).toBe(1);
+
+      // Execute Complete immediately once unlocked by live clock
+      clickElement(completeBtn());
+      await waitForFake(() => {
+        expect(completeCalls).toBe(1);
+        expect(container!.textContent).toContain('Đã ghi nhận hoàn thành');
+      });
+    });
+
+    it('Test 2 (Schedule Detail): unlocks Complete/Skip at nextScheduledAt automatically and enforces runtime state rules for PAUSED/COMPLETED/CANCELLED/invalid timestamps', async () => {
+      // Independent getScheduleRuntimeState contract verification
+      const exactMs = Date.parse('2026-11-12T02:00:00.000Z');
+      expect(
+        getScheduleRuntimeState(
+          { status: 'ACTIVE', nextScheduledAt: '2026-11-12T02:00:00.000Z', isOverdue: false },
+          exactMs - 1
+        )
+      ).toEqual({ isDue: false, isOverdue: false });
+      expect(
+        getScheduleRuntimeState(
+          { status: 'ACTIVE', nextScheduledAt: '2026-11-12T02:00:00.000Z', isOverdue: false },
+          exactMs
+        )
+      ).toEqual({ isDue: true, isOverdue: false });
+      expect(
+        getScheduleRuntimeState(
+          { status: 'ACTIVE', nextScheduledAt: '2026-11-12T02:00:00.000Z', isOverdue: false },
+          exactMs + 1
+        )
+      ).toEqual({ isDue: true, isOverdue: true });
+      // Server isOverdue=true preserved on ACTIVE valid timestamp even if client clock slightly behind
+      expect(
+        getScheduleRuntimeState(
+          { status: 'ACTIVE', nextScheduledAt: '2026-11-12T02:00:00.000Z', isOverdue: true },
+          exactMs - 5_000
+        )
+      ).toEqual({ isDue: true, isOverdue: true });
+      // Invalid / null / non-ACTIVE schedules never allow action
+      expect(
+        getScheduleRuntimeState({ status: 'ACTIVE', nextScheduledAt: 'not-a-date', isOverdue: true }, exactMs + 1_000)
+      ).toEqual({ isDue: false, isOverdue: false });
+      expect(
+        getScheduleRuntimeState({ status: 'ACTIVE', nextScheduledAt: null, isOverdue: false }, exactMs)
+      ).toEqual({ isDue: false, isOverdue: false });
+      for (const nonActive of ['PAUSED', 'COMPLETED', 'CANCELLED'] as const) {
+        expect(
+          getScheduleRuntimeState(
+            { status: nonActive, nextScheduledAt: '2026-11-12T02:00:00.000Z', isOverdue: true },
+            exactMs + 60_000
+          )
+        ).toEqual({ isDue: false, isOverdue: false });
+      }
+
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-11-12T01:59:50.000Z'));
+      vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(sessionA);
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+      routeParamsState.current = { plantId: 'plt-1', scheduleId: 'sch-detail-live' };
+
+      const nearSchedule: CareScheduleDto = {
+        ...scheduleDetailOne,
+        id: 'sch-detail-live',
+        taskLabel: 'Kiểm tra nút tự mở ở Detail',
+        nextScheduledAt: '2026-11-12T02:00:00.000Z',
+        isOverdue: false,
+        status: 'ACTIVE',
+      };
+
+      const calledUrls: string[] = [];
+      let pausedOnServer = false;
+      apiClient.defaults.adapter = vi.fn().mockImplementation((config) => {
+        calledUrls.push(`${String(config.method).toUpperCase()} ${config.url}`);
+        if (config.url === '/users/me') {
+          return Promise.resolve({ status: 200, data: { success: true, data: profileA }, headers: {}, config });
+        }
+        if (config.url === '/plants/plt-1/schedules' && config.method === 'get') {
+          return Promise.resolve({
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: [{ ...nearSchedule, status: pausedOnServer ? 'PAUSED' : 'ACTIVE' }],
+                page: 0,
+                size: 100,
+                totalElements: 1,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          });
+        }
+        if (config.url === '/schedules/sch-detail-live' && config.method === 'put') {
+          pausedOnServer = true;
+          return Promise.resolve({
+            status: 200,
+            data: { success: true, data: { ...nearSchedule, status: 'PAUSED' } },
+            headers: {},
+            config,
+          });
+        }
+        throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+      });
+
+      mountWithProviders(<ScheduleDetailScreen />);
+
+      await waitForFake(() => {
+        expect(container!.textContent).toContain('Kiểm tra nút tự mở ở Detail');
+        expect(container!.textContent).toContain('Chưa đến giờ');
+      });
+
+      const completeDetailBtn = () =>
+        container!.querySelector('[aria-label="Hoàn thành lượt chăm sóc"]');
+      const skipDetailBtn = () =>
+        container!.querySelector('[aria-label="Bỏ qua lượt chăm sóc"]');
+
+      expect(completeDetailBtn()?.getAttribute('aria-disabled')).toBe('true');
+      expect(skipDetailBtn()?.getAttribute('aria-disabled')).toBe('true');
+
+      // Advance clock cleanly to exact deadline
+      const deltaToDueMs = Math.max(0, exactMs - Date.now());
+      await flushFakeTimersAndMicrotasks(deltaToDueMs);
+
+      await waitForFake(() => {
+        expect(container!.textContent).toContain('Đến hạn');
+        expect(completeDetailBtn()?.getAttribute('aria-disabled')).not.toBe('true');
+        expect(skipDetailBtn()?.getAttribute('aria-disabled')).not.toBe('true');
+      });
+
+      // Never calls non-existent GET /schedules/{id}
+      expect(calledUrls).not.toContain('GET /schedules/sch-detail-live');
+      expect(calledUrls).not.toContain('GET /schedules');
+
+      // Pausing locks execution even though clock is at/past nextScheduledAt
+      clickElement(
+        Array.from(container!.querySelectorAll('[role="button"]')).find((el) => el.textContent === 'Tạm ngưng')
+      );
+      await waitForFake(() => {
+        expect(container!.textContent).toContain('Tạm ngưng');
+        expect(completeDetailBtn()?.getAttribute('aria-disabled')).toBe('true');
+        expect(skipDetailBtn()?.getAttribute('aria-disabled')).toBe('true');
+      });
+    });
+
+    it('Test 3 (Automatic Overdue & PlantDetail): updates Quá hạn badge, header counters & filters across Overview, Detail & PlantDetailScreen without query refetch', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-11-12T01:59:50.000Z'));
+      vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(sessionA);
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+
+      const nearDueIso = '2026-11-12T02:00:00.000Z';
+      const todayItem: TodayScheduleItemDto = {
+        scheduleId: 'sch-auto-overdue',
+        plantId: 'plt-1',
+        plantName: 'Monstera Cửa Sổ',
+        gardenName: 'Ban công hướng Đông',
+        taskType: 'WATERING',
+        taskLabel: 'Tưới chuyển quá hạn tự động',
+        nextScheduledAt: nearDueIso,
+        isOverdue: false,
+        status: 'ACTIVE',
+      };
+      const plantActiveSched: CareScheduleDto = {
+        ...scheduleDetailOne,
+        id: 'sch-auto-overdue',
+        taskLabel: 'Tưới chuyển quá hạn tự động',
+        nextScheduledAt: nearDueIso,
+        isOverdue: false,
+        status: 'ACTIVE',
+      };
+      const plantPausedSched: CareScheduleDto = {
+        ...scheduleDetailPaused,
+        id: 'sch-paused-past',
+        taskLabel: 'Tỉa cành đang tạm ngưng',
+        nextScheduledAt: nearDueIso,
+        isOverdue: false,
+        status: 'PAUSED',
+      };
+
+      let todayCalls = 0;
+      let plantSchedulesCalls = 0;
+      apiClient.defaults.adapter = vi.fn().mockImplementation((config) => {
+        if (config.url === '/users/me') {
+          return Promise.resolve({ status: 200, data: { success: true, data: profileA }, headers: {}, config });
+        }
+        if (config.url === '/schedules/today' && config.method === 'get') {
+          todayCalls += 1;
+          return Promise.resolve({ status: 200, data: { success: true, data: [todayItem] }, headers: {}, config });
+        }
+        if (config.url === '/plants/plt-1') {
+          return Promise.resolve({ status: 200, data: { success: true, data: plantDetailOne }, headers: {}, config });
+        }
+        if (config.url === '/plants/plt-1/schedules' && config.method === 'get') {
+          plantSchedulesCalls += 1;
+          return Promise.resolve({
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: [plantActiveSched, plantPausedSched],
+                page: 0,
+                size: 100,
+                totalElements: 2,
+                totalPages: 1,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          });
+        }
+        throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+      });
+
+      // 1) Verify Overview automatic Overdue transition & filter updates without refetch
+      mountWithProviders(<ScheduleScreen />);
+      await waitForFake(() => {
+        expect(container!.textContent).toContain('Tưới chuyển quá hạn tự động');
+        expect(container!.textContent).toContain('1 việc hôm nay • 0 việc quá hạn');
+        expect(container!.textContent).toContain('Quá hạn (0)');
+        expect(container!.textContent).toContain('Trong ngày (1)');
+      });
+      expect(todayCalls).toBe(1);
+
+      // Advance past deadline + 10s clock interval tick -> 02:00:10Z (strictly after nextScheduledAt)
+      await flushFakeTimersAndMicrotasks(20_000);
+
+      await waitForFake(() => {
+        expect(container!.textContent).toContain('1 việc hôm nay • 1 việc quá hạn');
+        expect(container!.textContent).toContain('Quá hạn (1)');
+        expect(container!.textContent).toContain('Trong ngày (0)');
+      });
+      expect(todayCalls).toBe(1);
+
+      clickElement(
+        Array.from(container!.querySelectorAll('[role="button"]')).find((el) =>
+          el.textContent?.startsWith('Quá hạn (1)')
+        )
+      );
+      expect(container!.textContent).toContain('Tưới chuyển quá hạn tự động');
+      expect(container!.textContent).toContain('Quá hạn');
+
+      // 2) Verify ScheduleDetailScreen transitions automatically to Overdue without refetch
+      await act(async () => {
+        root!.unmount();
+      });
+      root = createRoot(container!);
+      vi.setSystemTime(new Date('2026-11-12T01:59:50.000Z'));
+      routeParamsState.current = { plantId: 'plt-1', scheduleId: 'sch-auto-overdue' };
+
+      mountWithProviders(<ScheduleDetailScreen />);
+      await waitForFake(() => {
+        expect(container!.textContent).toContain('Tưới chuyển quá hạn tự động');
+        expect(container!.textContent).toContain('Chưa đến giờ');
+      });
+      expect(plantSchedulesCalls).toBe(1);
+
+      await flushFakeTimersAndMicrotasks(20_000);
+      await waitForFake(() => {
+        expect(container!.textContent).toContain('Quá hạn');
+        expect(container!.textContent).toContain('Lượt chăm sóc này đã quá hạn');
+      });
+      expect(plantSchedulesCalls).toBe(1);
+
+      // 3) Verify PlantDetailScreen recalculates Quá hạn ONLY for ACTIVE schedules across time without refetch
+      await act(async () => {
+        root!.unmount();
+      });
+      root = createRoot(container!);
+      qc.clear();
+      vi.setSystemTime(new Date('2026-11-12T01:59:50.000Z'));
+      routeParamsState.current = { plantId: 'plt-1' };
+      plantSchedulesCalls = 0;
+
+      mountWithProviders(<PlantDetailScreen />);
+      await waitForFake(() => {
+        expect(container!.textContent).toContain('Tưới chuyển quá hạn tự động');
+        expect(container!.textContent).toContain('Tỉa cành đang tạm ngưng');
+      });
+      expect(container!.textContent).not.toContain('Quá hạn');
+      expect(plantSchedulesCalls).toBe(1);
+
+      await flushFakeTimersAndMicrotasks(20_000);
+      await waitForFake(() => {
+        expect(container!.textContent).toContain('Quá hạn');
+      });
+      // Only 1 "Quá hạn" tag (for ACTIVE schedule, never for PAUSED schedule) and 0 refetches
+      const overdueOccurrences = (container!.textContent?.match(/Quá hạn/g) ?? []).length;
+      expect(overdueOccurrences).toBe(1);
+      expect(plantSchedulesCalls).toBe(1);
+    });
+
+    it('Test 4 (AppState Foreground, Refocus & VN Midnight): syncs clock and refetches GET /schedules/today on resume, route refocus & Asia/Ho_Chi_Minh day rollover', async () => {
+      vi.useFakeTimers();
+      vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(sessionA);
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+
+      let visibilityStateValue: DocumentVisibilityState = 'visible';
+      const originalVisibilityDescriptor = Object.getOwnPropertyDescriptor(document, 'visibilityState');
+      Object.defineProperty(document, 'visibilityState', {
+        configurable: true,
+        get: () => visibilityStateValue,
+      });
+
+      try {
+        // Part A & C: AppState background -> active + ScreenFocusProvider blur -> focus
+        vi.setSystemTime(new Date('2026-11-11T16:59:50.000Z')); // 23:59:50 on 2026-11-11 VN (UTC+7!)
+        expect(getTodayVnDateString(new Date('2026-11-11T16:59:50.000Z'))).toBe('2026-11-11');
+        expect(getNextVnMidnightMs(Date.parse('2026-11-11T16:59:50.000Z'))).toBe(
+          Date.parse('2026-11-11T17:00:00.000Z')
+        );
+
+        let todayCalls = 0;
+        let serverItems: TodayScheduleItemDto[] = [
+          {
+            ...todayNotYetDueItem,
+            scheduleId: 'sch-day-11',
+            taskLabel: 'Công việc ngày 11-11 VN',
+            nextScheduledAt: '2026-11-11T17:05:00.000Z',
+            isOverdue: false,
+          },
+        ];
+
+        apiClient.defaults.adapter = vi.fn().mockImplementation((config) => {
+          if (config.url === '/users/me') {
+            return Promise.resolve({ status: 200, data: { success: true, data: profileA }, headers: {}, config });
+          }
+          if (config.url === '/schedules/today' && config.method === 'get') {
+            todayCalls += 1;
+            return Promise.resolve({
+              status: 200,
+              data: { success: true, data: serverItems },
+              headers: {},
+              config,
+            });
+          }
+          throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+        });
+
+        act(() => {
+          root!.render(
+            <QueryClientProvider client={qc}>
+              <AuthProvider>
+                <PlantDataProvider>
+                  <ScreenFocusProvider isFocused={true}>
+                    <ScheduleScreen />
+                  </ScreenFocusProvider>
+                </PlantDataProvider>
+              </AuthProvider>
+            </QueryClientProvider>
+          );
+        });
+
+        await waitForFake(() => {
+          expect(container!.textContent).toContain('Công việc ngày 11-11 VN');
+          expect(container!.textContent).toContain('Chưa đến giờ');
+        });
+        expect(todayCalls).toBe(1);
+
+        // Step 1: Cross VN midnight (16:59:50Z -> 17:00:05Z = 2026-11-12 00:00:05 VN) while screen stays open
+        serverItems = [
+          {
+            scheduleId: 'sch-day-12',
+            plantId: 'plt-1',
+            plantName: 'Monstera Cửa Sổ',
+            gardenName: 'Ban công hướng Đông',
+            taskType: 'WATERING',
+            taskLabel: 'Công việc mới ngày 12-11 VN',
+            nextScheduledAt: '2026-11-11T17:00:03.000Z', // 00:00:03 VN (past at 00:00:05!)
+            isOverdue: false,
+            status: 'ACTIVE',
+          },
+        ];
+
+        await flushFakeTimersAndMicrotasks(15_000);
+
+        await waitForFake(() => {
+          expect(todayCalls).toBe(2);
+          expect(container!.textContent).toContain('Công việc mới ngày 12-11 VN');
+          expect(container!.textContent).not.toContain('Công việc ngày 11-11 VN');
+        });
+
+        // Step 2: Background the app -> change clock + server payload -> foreground AppState 'active'
+        act(() => {
+          visibilityStateValue = 'hidden';
+          document.dispatchEvent(new Event('visibilitychange'));
+        });
+
+        serverItems = [
+          {
+            scheduleId: 'sch-resumed',
+            plantId: 'plt-1',
+            plantName: 'Monstera Cửa Sổ',
+            gardenName: 'Ban công hướng Đông',
+            taskType: 'PRUNING',
+            taskLabel: 'Đồng bộ sau khi mở lại AppState',
+            nextScheduledAt: '2026-11-11T17:10:00.000Z', // 00:10:00 VN
+            isOverdue: false,
+            status: 'ACTIVE',
+          },
+        ];
+        // Jump time to 00:15:00 VN cleanly while in background
+        vi.setSystemTime(new Date('2026-11-11T17:15:00.000Z'));
+        expect(todayCalls).toBe(2);
+
+        await act(async () => {
+          visibilityStateValue = 'visible';
+          document.dispatchEvent(new Event('visibilitychange'));
+          await vi.advanceTimersByTimeAsync(20);
+        });
+
+        await waitForFake(() => {
+          expect(todayCalls).toBe(3);
+          expect(container!.textContent).toContain('Đồng bộ sau khi mở lại AppState');
+          expect(container!.textContent).toContain('Quá hạn');
+        });
+
+        // Step 3: Route blur -> refocus via ScreenFocusProvider refreshes GET /schedules/today
+        act(() => {
+          root!.render(
+            <QueryClientProvider client={qc}>
+              <AuthProvider>
+                <PlantDataProvider>
+                  <ScreenFocusProvider isFocused={false}>
+                    <ScheduleScreen />
+                  </ScreenFocusProvider>
+                </PlantDataProvider>
+              </AuthProvider>
+            </QueryClientProvider>
+          );
+        });
+        expect(todayCalls).toBe(3);
+
+        serverItems = [
+          {
+            ...serverItems[0],
+            taskLabel: 'Dữ liệu làm mới khi quay lại tab Schedule',
+          },
+        ];
+        act(() => {
+          root!.render(
+            <QueryClientProvider client={qc}>
+              <AuthProvider>
+                <PlantDataProvider>
+                  <ScreenFocusProvider isFocused={true}>
+                    <ScheduleScreen />
+                  </ScreenFocusProvider>
+                </PlantDataProvider>
+              </AuthProvider>
+            </QueryClientProvider>
+          );
+        });
+
+        await waitForFake(() => {
+          expect(todayCalls).toBe(4);
+          expect(container!.textContent).toContain('Dữ liệu làm mới khi quay lại tab Schedule');
+        });
+      } finally {
+        if (originalVisibilityDescriptor) {
+          Object.defineProperty(document, 'visibilityState', originalVisibilityDescriptor);
+        }
+      }
+    });
+
+    it('Test 5 (Timer Lifecycle & Unmount Safety): creates single 10s interval (no 1s polling), cleans up timers & AppState listeners on blur/unmount without post-unmount state updates', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-11-12T01:59:50.000Z'));
+
+      const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
+      const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
+      const addListenerSpy = vi.spyOn(AppState, 'addEventListener');
+      const consoleErrorSpy = vi.spyOn(console, 'error');
+
+      let capturedHandler: ((nextState: 'active' | 'background') => void) | null = null;
+      const removeListenerSpy = vi.fn();
+      addListenerSpy.mockImplementation((_type, handler) => {
+        capturedHandler = handler as typeof capturedHandler;
+        return { remove: removeListenerSpy };
+      });
+
+      const harnessTransitions = ['2026-11-12T02:00:00.000Z'];
+      const onCommitSpy = vi.fn();
+      function ClockHarness() {
+        const result = useScheduleClock({
+          enabled: true,
+          intervalMs: DEFAULT_SCHEDULE_CLOCK_INTERVAL_MS,
+          transitionIsoTimestamps: harnessTransitions,
+          trackVnMidnight: true,
+        });
+        useEffect(() => {
+          onCommitSpy(result.nowMs);
+        });
+        return (
+          <div data-testid="clock-probe" data-active={String(result.isClockActive)}>
+            {String(result.nowMs)}
+          </div>
+        );
+      }
+
+      act(() => {
+        root!.render(
+          <ScreenFocusProvider isFocused={true}>
+            <ClockHarness />
+          </ScreenFocusProvider>
+        );
+      });
+
+      const clockIntervals = setIntervalSpy.mock.calls.filter(
+        ([, delay]) => delay === DEFAULT_SCHEDULE_CLOCK_INTERVAL_MS
+      );
+      const oneSecondPolling = setIntervalSpy.mock.calls.filter(([, delay]) => delay === 1000);
+      expect(clockIntervals.length).toBe(1);
+      expect(oneSecondPolling.length).toBe(0);
+      expect(container!.querySelector('[data-testid="clock-probe"]')?.getAttribute('data-active')).toBe(
+        'true'
+      );
+
+      // Lose focus -> clears interval without creating duplicates
+      const clearCountBeforeBlur = clearIntervalSpy.mock.calls.length;
+      act(() => {
+        root!.render(
+          <ScreenFocusProvider isFocused={false}>
+            <ClockHarness />
+          </ScreenFocusProvider>
+        );
+      });
+      expect(clearIntervalSpy.mock.calls.length).toBeGreaterThan(clearCountBeforeBlur);
+      expect(container!.querySelector('[data-testid="clock-probe"]')?.getAttribute('data-active')).toBe(
+        'false'
+      );
+
+      // Refocus -> re-establishes single interval
+      act(() => {
+        root!.render(
+          <ScreenFocusProvider isFocused={true}>
+            <ClockHarness />
+          </ScreenFocusProvider>
+        );
+      });
+      expect(
+        setIntervalSpy.mock.calls.filter(([, delay]) => delay === DEFAULT_SCHEDULE_CLOCK_INTERVAL_MS).length
+      ).toBe(2);
+
+      // Unmount -> removes AppState listener and prevents post-unmount renders/state updates
+      await act(async () => {
+        root?.unmount();
+      });
+      root = null;
+      expect(removeListenerSpy).toHaveBeenCalledTimes(1);
+
+      const commitsAtUnmount = onCommitSpy.mock.calls.length;
+      act(() => {
+        capturedHandler?.('background');
+        capturedHandler?.('active');
+      });
+      await flushFakeTimersAndMicrotasks(60_000);
+      expect(onCommitSpy.mock.calls.length).toBe(commitsAtUnmount);
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
+    });
+
+    it('Test 6 (Account A -> B Clock & Refetch Isolation): blocks stale Account A /schedules/today refetch after switching to Account B', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-11-12T01:59:50.000Z'));
+
+      await tokenStorage.saveSession(sessionA);
+      const deferredTodayA = createDeferred<void>();
+      let blockNextARefetch = false;
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        const auth = String(config.headers?.Authorization ?? '');
+        const isB = auth === `Bearer ${sessionB.accessToken}`;
+        if (config.url === '/auth/login') {
+          const payload = JSON.parse(String(config.data ?? '{}')) as { account?: string };
+          return {
+            status: 200,
+            data: { success: true, data: payload.account === mockUserB.email ? sessionB : sessionA },
+            headers: {},
+            config,
+          };
+        }
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: isB ? profileB : profileA }, headers: {}, config };
+        }
+        if (config.url === '/schedules/today' && config.method === 'get') {
+          if (!isB && blockNextARefetch) {
+            await deferredTodayA.promise;
+            return {
+              status: 200,
+              data: {
+                success: true,
+                data: [
+                  {
+                    ...todayOverdueItem,
+                    scheduleId: 'sch-leak-a',
+                    plantName: 'RÒ RỈ TÀI KHOẢN A',
+                    taskLabel: 'Lịch bí mật của User A',
+                  },
+                ],
+              },
+              headers: {},
+              config,
+            };
+          }
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: isB
+                ? [
+                    {
+                      ...todayNotYetDueItem,
+                      scheduleId: 'sch-b-only',
+                      plantName: 'Cây Riêng User B',
+                      taskLabel: 'Lịch An Toàn Của User B',
+                      nextScheduledAt: '2026-11-12T02:00:00.000Z',
+                      isOverdue: false,
+                    },
+                  ]
+                : [todayOverdueItem],
+            },
+            headers: {},
+            config,
+          };
+        }
+        throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+      });
+
+      let authCtx!: ReturnType<typeof useAuth>;
+      function Probe() {
+        authCtx = useAuth();
+        return null;
+      }
+
+      act(() => {
+        root!.render(
+          <QueryClientProvider client={qc}>
+            <AuthProvider>
+              <PlantDataProvider>
+                <Probe />
+                <ScheduleOverviewContent />
+              </PlantDataProvider>
+            </AuthProvider>
+          </QueryClientProvider>
+        );
+      });
+
+      await waitForFake(() => {
+        expect(container!.textContent).toContain('Tưới 300ml nước quanh gốc');
+      });
+
+      // Trigger manual refresh for User A and switch to User B before it resolves
+      blockNextARefetch = true;
+      clickElement(container!.querySelector('[aria-label="Làm mới lịch hôm nay"]'));
+
+      await act(async () => {
+        await authCtx.login({ account: mockUserB.email, password: 'Secret123!' });
+      });
+
+      await waitForFake(() => {
+        expect(authCtx.user?.id).toBe(mockUserB.id);
+        expect(container!.textContent).toContain('Lịch An Toàn Của User B');
+      });
+
+      // Resolve User A's late response -> MUST NOT touch User B cache or UI
+      await act(async () => {
+        deferredTodayA.resolve();
+        await vi.advanceTimersByTimeAsync(40);
+      });
+
+      expect(container!.textContent).toContain('Lịch An Toàn Của User B');
+      expect(container!.textContent).not.toContain('RÒ RỈ TÀI KHOẢN A');
+      expect(container!.textContent).not.toContain('Lịch bí mật của User A');
+      const cachedB = qc.getQueryData<TodayScheduleItemDto[]>(queryKeys.schedules.today(mockUserB.id));
+      expect(cachedB?.map((i) => i.scheduleId)).toEqual(['sch-b-only']);
+
+      // Live clock continues ticking accurately for User B
+      await flushFakeTimersAndMicrotasks(20_000);
+      await waitForFake(() => {
+        expect(container!.textContent).toContain('Quá hạn');
+      });
     });
   });
 });

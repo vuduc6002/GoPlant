@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -25,7 +25,9 @@ import {
   type UserPlantSummaryDto,
 } from '@/features/plants/plantTypes';
 import { ScheduleOverviewContent } from '@/features/schedule/ScheduleScreens';
+import { getScheduleRuntimeState } from '@/features/schedule/scheduleApi';
 import { useTodaySchedules } from '@/features/schedule/scheduleHooks';
+import { useScheduleClock } from '@/features/schedule/useScheduleClock';
 import { FavoritesSection } from '@/features/species/FavoritesSection';
 import { useFavoriteSpecies } from '@/features/species/speciesHooks';
 import { AppApiError } from '@/services/api/apiError';
@@ -709,7 +711,7 @@ function PageBody({ kind }: { kind: PageKind }) {
 }
 
 function PageContent({ kind }: { kind: PageKind }) {
-  const { user } = useAuth();
+  const { user, status } = useAuth();
   const currentUserId = typeof user?.id === 'string' ? user.id.trim() : '';
   const prevUserIdRef = useRef(currentUserId);
 
@@ -750,6 +752,24 @@ function PageContent({ kind }: { kind: PageKind }) {
   const gardensQuery = useGardensList({ enabled: kind === 'gardens' || isPlantsTab });
   const favoritesQuery = useFavoriteSpecies({ page: 0, size: 20 }, { enabled: isPlantsTab });
   const todaySchedulesQuery = useTodaySchedules({ enabled: isScheduleTab });
+  const todayItems = useMemo(
+    () => todaySchedulesQuery.data ?? [],
+    [todaySchedulesQuery.data]
+  );
+  const scheduleClockTimestamps = useMemo(
+    () =>
+      isScheduleTab
+        ? todayItems
+            .filter((item) => item.status === 'ACTIVE')
+            .map((item) => item.nextScheduledAt)
+        : [],
+    [isScheduleTab, todayItems]
+  );
+  const { nowMs: scheduleNowMs } = useScheduleClock({
+    enabled: isScheduleTab && status === 'authenticated' && Boolean(currentUserId),
+    transitionIsoTimestamps: scheduleClockTimestamps,
+    trackVnMidnight: isScheduleTab,
+  });
   const plantsQuery = useUserPlantsList(
     {
       keyword: debouncedKeyword || undefined,
@@ -791,8 +811,9 @@ function PageContent({ kind }: { kind: PageKind }) {
   const gardensCount = gardens.length;
   const favCount = favoritesQuery.data?.totalElements ?? 0;
   const plantsTotal = plantsQuery.data?.totalElements ?? 0;
-  const todayItems = todaySchedulesQuery.data ?? [];
-  const todayOverdueCount = todayItems.filter((item) => item.isOverdue).length;
+  const todayOverdueCount = isScheduleTab
+    ? todayItems.filter((item) => getScheduleRuntimeState(item, scheduleNowMs).isOverdue).length
+    : 0;
   const hasActiveFilters = Boolean(
     debouncedKeyword || selectedGardenId || selectedHealthStatus
   );
