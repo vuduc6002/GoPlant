@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -122,26 +122,13 @@ function StatusTag({
   );
 }
 
-export function ScheduleOverviewContent() {
-  const { user, status } = useAuth();
-  const isAuthenticated = status === 'authenticated';
+export function ScheduleOverviewContent({ nowMs }: { nowMs: number }) {
+  const { user } = useAuth();
   const currentUserId = typeof user?.id === 'string' ? user.id.trim() : '';
   const currentUserIdRef = useRef(currentUserId);
   const prevUserIdRef = useRef(currentUserId);
 
   const todayQuery = useTodaySchedules();
-  const todayRefetch = todayQuery.refetch;
-  const todayRefetchRef = useRef(todayRefetch);
-  useEffect(() => {
-    todayRefetchRef.current = todayRefetch;
-  }, [todayRefetch]);
-  const isMountedRef = useRef(true);
-  useEffect(() => {
-    isMountedRef.current = true;
-    return () => {
-      isMountedRef.current = false;
-    };
-  }, []);
 
   const completeMutation = useCompleteScheduleMutation();
   const skipMutation = useSkipScheduleMutation();
@@ -164,27 +151,6 @@ export function ScheduleOverviewContent() {
   }, [currentUserId]);
 
   const items = useMemo(() => todayQuery.data ?? [], [todayQuery.data]);
-  const activeTransitionTimestamps = useMemo(
-    () =>
-      items
-        .filter((item) => item.status === 'ACTIVE')
-        .map((item) => item.nextScheduledAt),
-    [items]
-  );
-
-  const handleClockRefresh = useCallback(() => {
-    if (!isMountedRef.current || !isAuthenticated || !currentUserIdRef.current) {
-      return;
-    }
-    void todayRefetchRef.current();
-  }, [isAuthenticated]);
-
-  const { nowMs } = useScheduleClock({
-    enabled: isAuthenticated && Boolean(currentUserId),
-    transitionIsoTimestamps: activeTransitionTimestamps,
-    trackVnMidnight: true,
-    onActiveRefresh: handleClockRefresh,
-  });
 
   const overdueItems = useMemo(
     () => items.filter((item) => getScheduleRuntimeState(item, nowMs).isOverdue),

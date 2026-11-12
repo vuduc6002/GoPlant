@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -597,7 +597,7 @@ function PlantsManagementBody({
   );
 }
 
-function PageBody({ kind }: { kind: PageKind }) {
+function PageBody({ kind, scheduleNowMs }: { kind: PageKind; scheduleNowMs: number }) {
   if (kind === 'gardens') {
     return <GardensTabContent />;
   }
@@ -707,13 +707,21 @@ function PageBody({ kind }: { kind: PageKind }) {
       </>
     );
   }
-  return <ScheduleOverviewContent />;
+  return <ScheduleOverviewContent nowMs={scheduleNowMs} />;
 }
 
 function PageContent({ kind }: { kind: PageKind }) {
   const { user, status } = useAuth();
   const currentUserId = typeof user?.id === 'string' ? user.id.trim() : '';
   const prevUserIdRef = useRef(currentUserId);
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   const [plantQuery, setPlantQuery] = useState('');
   const [debouncedKeyword, setDebouncedKeyword] = useState('');
@@ -752,6 +760,48 @@ function PageContent({ kind }: { kind: PageKind }) {
   const gardensQuery = useGardensList({ enabled: kind === 'gardens' || isPlantsTab });
   const favoritesQuery = useFavoriteSpecies({ page: 0, size: 20 }, { enabled: isPlantsTab });
   const todaySchedulesQuery = useTodaySchedules({ enabled: isScheduleTab });
+  const todayRefetch = todaySchedulesQuery.refetch;
+  const authOwnerRef = useRef<{ status: string; userId: string }>({
+    status,
+    userId: currentUserId,
+  });
+  const todayRefetchOwnerRef = useRef<{
+    userId: string;
+    sessionGeneration: number;
+    refetch: typeof todayRefetch;
+  }>({
+    userId: currentUserId,
+    sessionGeneration: getSessionGeneration(),
+    refetch: todayRefetch,
+  });
+
+  useEffect(() => {
+    const generation = getSessionGeneration();
+    authOwnerRef.current = { status, userId: currentUserId };
+    todayRefetchOwnerRef.current = {
+      userId: currentUserId,
+      sessionGeneration: generation,
+      refetch: todayRefetch,
+    };
+  }, [status, currentUserId, todayRefetch]);
+
+  const handleScheduleClockRefresh = useCallback(() => {
+    if (!isMountedRef.current || !isScheduleTab) {
+      return;
+    }
+    const { status: latestStatus, userId: latestUserId } = authOwnerRef.current;
+    const owner = todayRefetchOwnerRef.current;
+    if (
+      latestStatus !== 'authenticated' ||
+      !latestUserId ||
+      owner.userId !== latestUserId ||
+      owner.sessionGeneration !== getSessionGeneration()
+    ) {
+      return;
+    }
+    void owner.refetch();
+  }, [isScheduleTab]);
+
   const todayItems = useMemo(
     () => todaySchedulesQuery.data ?? [],
     [todaySchedulesQuery.data]
@@ -769,6 +819,7 @@ function PageContent({ kind }: { kind: PageKind }) {
     enabled: isScheduleTab && status === 'authenticated' && Boolean(currentUserId),
     transitionIsoTimestamps: scheduleClockTimestamps,
     trackVnMidnight: isScheduleTab,
+    onActiveRefresh: isScheduleTab ? handleScheduleClockRefresh : undefined,
   });
   const plantsQuery = useUserPlantsList(
     {
@@ -919,7 +970,7 @@ function PageContent({ kind }: { kind: PageKind }) {
         />
       );
     }
-    return <PageBody kind={kind} />;
+    return <PageBody kind={kind} scheduleNowMs={scheduleNowMs} />;
   };
 
   return (

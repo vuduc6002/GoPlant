@@ -8,7 +8,7 @@ import { AuthProvider, useAuth } from '@/features/auth/AuthProvider';
 import { useDeleteGardenMutation } from '@/features/gardens/gardenHooks';
 import { type GardenSummaryDto } from '@/features/gardens/gardenTypes';
 import HomeScreen from '@/features/home/HomeScreen';
-import { ScheduleScreen } from '@/features/main/MainScreens';
+import { GardensScreen, ScheduleScreen } from '@/features/main/MainScreens';
 import PlantDetailScreen from '@/features/plants/PlantDetailScreen';
 import { PlantDataProvider } from '@/features/plants/PlantDataStore';
 import {
@@ -22,7 +22,6 @@ import {
 import {
   CreateScheduleScreen,
   ScheduleDetailScreen,
-  ScheduleOverviewContent,
 } from '@/features/schedule/ScheduleScreens';
 import {
   buildCreateSchedulePayload,
@@ -3313,7 +3312,7 @@ describe('G5.4.2 Care Schedules REST API Integration (Mocked Axios HTTP Adapter)
         'true'
       );
 
-      // Lose focus -> clears interval without creating duplicates
+      // Lose focus -> clears interval and removes AppState listener immediately without creating duplicates
       const clearCountBeforeBlur = clearIntervalSpy.mock.calls.length;
       act(() => {
         root!.render(
@@ -3323,11 +3322,12 @@ describe('G5.4.2 Care Schedules REST API Integration (Mocked Axios HTTP Adapter)
         );
       });
       expect(clearIntervalSpy.mock.calls.length).toBeGreaterThan(clearCountBeforeBlur);
+      expect(removeListenerSpy).toHaveBeenCalledTimes(1);
       expect(container!.querySelector('[data-testid="clock-probe"]')?.getAttribute('data-active')).toBe(
         'false'
       );
 
-      // Refocus -> re-establishes single interval
+      // Refocus -> re-establishes single interval and single AppState listener
       act(() => {
         root!.render(
           <ScreenFocusProvider isFocused={true}>
@@ -3338,13 +3338,14 @@ describe('G5.4.2 Care Schedules REST API Integration (Mocked Axios HTTP Adapter)
       expect(
         setIntervalSpy.mock.calls.filter(([, delay]) => delay === DEFAULT_SCHEDULE_CLOCK_INTERVAL_MS).length
       ).toBe(2);
+      expect(addListenerSpy).toHaveBeenCalledTimes(2);
 
-      // Unmount -> removes AppState listener and prevents post-unmount renders/state updates
+      // Unmount -> removes remaining AppState listener and prevents post-unmount renders/state updates
       await act(async () => {
         root?.unmount();
       });
       root = null;
-      expect(removeListenerSpy).toHaveBeenCalledTimes(1);
+      expect(removeListenerSpy).toHaveBeenCalledTimes(2);
 
       const commitsAtUnmount = onCommitSpy.mock.calls.length;
       act(() => {
@@ -3435,7 +3436,7 @@ describe('G5.4.2 Care Schedules REST API Integration (Mocked Axios HTTP Adapter)
             <AuthProvider>
               <PlantDataProvider>
                 <Probe />
-                <ScheduleOverviewContent />
+                <ScheduleScreen />
               </PlantDataProvider>
             </AuthProvider>
           </QueryClientProvider>
@@ -3476,6 +3477,770 @@ describe('G5.4.2 Care Schedules REST API Integration (Mocked Axios HTTP Adapter)
       await waitForFake(() => {
         expect(container!.textContent).toContain('Quá hạn');
       });
+    });
+  });
+
+  describe('11. G5.4.2.1.1 Shared Schedule Clock & AppState Listener Lifecycle', () => {
+    async function flushFakeTimersAndMicrotasks(ms = 20) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+    }
+
+    async function waitForFake(assertion: () => void, stepMs = 15, maxSteps = 120): Promise<void> {
+      let lastError: unknown;
+      for (let i = 0; i < maxSteps; i++) {
+        try {
+          assertion();
+          return;
+        } catch (err) {
+          lastError = err;
+          await flushFakeTimersAndMicrotasks(stepMs);
+        }
+      }
+      assertion();
+      if (lastError) {
+        throw lastError;
+      }
+    }
+
+    function createAppStateTracker() {
+      const origAdd = AppState.addEventListener.bind(AppState);
+      const activeListeners = new Set<symbol>();
+      let addCount = 0;
+      let removeCount = 0;
+      const capturedHandlers: ((nextState: 'active' | 'background' | 'inactive') => void)[] = [];
+
+      const addSpy = vi.spyOn(AppState, 'addEventListener').mockImplementation((type, handler) => {
+        const token = Symbol(`appstate-${++addCount}`);
+        activeListeners.add(token);
+        capturedHandlers.push(handler as (nextState: 'active' | 'background' | 'inactive') => void);
+        const sub = origAdd(type, handler);
+        return {
+          remove: () => {
+            if (activeListeners.delete(token)) {
+              removeCount += 1;
+            }
+            sub?.remove?.();
+          },
+        };
+      });
+
+      return {
+        addSpy,
+        activeListeners,
+        capturedHandlers,
+        getAddCount: () => addCount,
+        getRemoveCount: () => removeCount,
+      };
+    }
+
+    function createTimerTracker() {
+      const origSetInterval = globalThis.setInterval;
+      const origClearInterval = globalThis.clearInterval;
+      const active10sIntervals = new Set<ReturnType<typeof setInterval>>();
+      let total10sIntervals = 0;
+      let total1sIntervals = 0;
+
+      vi.spyOn(globalThis, 'setInterval').mockImplementation(((
+        cb: TimerHandler,
+        delay?: number,
+        ...args: unknown[]
+      ) => {
+        const id = origSetInterval(cb, delay, ...args);
+        if (delay === DEFAULT_SCHEDULE_CLOCK_INTERVAL_MS) {
+          total10sIntervals += 1;
+          active10sIntervals.add(id);
+        }
+        if (delay === 1000) {
+          total1sIntervals += 1;
+        }
+        return id;
+      }) as typeof globalThis.setInterval);
+
+      vi.spyOn(globalThis, 'clearInterval').mockImplementation(((id?: ReturnType<typeof setInterval>) => {
+        if (id !== undefined) {
+          active10sIntervals.delete(id);
+        }
+        origClearInterval(id);
+      }) as typeof globalThis.clearInterval);
+
+      return {
+        active10sIntervals,
+        getTotal10sIntervals: () => total10sIntervals,
+        getTotal1sIntervals: () => total1sIntervals,
+      };
+    }
+
+    it('Test A (Shared Clock in ScheduleScreen): mounts 1 interval, 0 1s polling & 1 AppState listener while synchronizing header, overview UI and VN midnight refetch', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-11-11T16:59:45.000Z')); // 23:59:45 VN on 2026-11-11
+      vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(sessionA);
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+
+      const appStateTracker = createAppStateTracker();
+      const timerTracker = createTimerTracker();
+
+      const dueSoonIso = '2026-11-11T16:59:50.000Z'; // +5s, 23:59:50 VN
+      let todayCalls = 0;
+      let serverItems: TodayScheduleItemDto[] = [
+        {
+          ...todayNotYetDueItem,
+          taskType: 'WATERING',
+          scheduleId: 'sch-shared-clock',
+          taskLabel: 'Đồng bộ header và danh sách',
+          nextScheduledAt: dueSoonIso,
+          isOverdue: false,
+          status: 'ACTIVE',
+        },
+      ];
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation((config) => {
+        if (config.url === '/users/me') {
+          return Promise.resolve({ status: 200, data: { success: true, data: profileA }, headers: {}, config });
+        }
+        if (config.url === '/schedules/today' && config.method === 'get') {
+          todayCalls += 1;
+          return Promise.resolve({
+            status: 200,
+            data: { success: true, data: serverItems },
+            headers: {},
+            config,
+          });
+        }
+        throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+      });
+
+      act(() => {
+        root!.render(
+          <QueryClientProvider client={qc}>
+            <AuthProvider>
+              <PlantDataProvider>
+                <ScreenFocusProvider isFocused={true}>
+                  <ScheduleScreen />
+                </ScreenFocusProvider>
+              </PlantDataProvider>
+            </AuthProvider>
+          </QueryClientProvider>
+        );
+      });
+
+      await waitForFake(() => {
+        expect(container!.textContent).toContain('Đồng bộ header và danh sách');
+        expect(container!.textContent).toContain('1 việc hôm nay • 0 việc quá hạn');
+        expect(container!.textContent).toContain('Chưa đến giờ');
+      });
+
+      expect(todayCalls).toBe(1);
+      expect(appStateTracker.getAddCount()).toBe(1);
+      expect(appStateTracker.activeListeners.size).toBe(1);
+      expect(timerTracker.getTotal10sIntervals()).toBe(1);
+      expect(timerTracker.active10sIntervals.size).toBe(1);
+      expect(timerTracker.getTotal1sIntervals()).toBe(0);
+
+      // Advance to exact deadline boundary (16:59:50Z) -> boundary timeout unlocks Đến hạn immediately
+      const deltaToBoundary = Math.max(0, Date.parse(dueSoonIso) - Date.now());
+      await flushFakeTimersAndMicrotasks(deltaToBoundary);
+      await waitForFake(() => {
+        expect(container!.textContent).toContain('Đến hạn');
+        expect(container!.textContent).not.toContain('Chưa đến giờ');
+      });
+      const completeBtn = container!.querySelector('[aria-label="Hoàn thành Tưới nước cho Monstera Cửa Sổ"]');
+      const skipBtn = container!.querySelector('[aria-label="Bỏ qua Tưới nước cho Monstera Cửa Sổ"]');
+      expect(completeBtn?.getAttribute('aria-disabled')).not.toBe('true');
+      expect(skipBtn?.getAttribute('aria-disabled')).not.toBe('true');
+
+      // Advance past first 10s interval (16:59:55Z, strictly after 16:59:50Z) -> header and overview sync Quá hạn
+      await flushFakeTimersAndMicrotasks(5_500);
+      await waitForFake(() => {
+        expect(container!.textContent).toContain('1 việc hôm nay • 1 việc quá hạn');
+        expect(container!.textContent).toContain('Quá hạn (1)');
+        expect(container!.textContent).toContain('Trong ngày (0)');
+      });
+      expect(todayCalls).toBe(1);
+
+      // Cross VN midnight (17:00:02Z = 00:00:02 VN 2026-11-12) -> single refetch only
+      serverItems = [
+        {
+          ...todayNotYetDueItem,
+          taskType: 'WATERING',
+          scheduleId: 'sch-new-day-vn',
+          taskLabel: 'Lịch ngày 12-11 mới',
+          nextScheduledAt: '2026-11-11T17:10:00.000Z',
+          isOverdue: false,
+          status: 'ACTIVE',
+        },
+      ];
+      await flushFakeTimersAndMicrotasks(6_000);
+
+      await waitForFake(() => {
+        expect(todayCalls).toBe(2);
+        expect(container!.textContent).toContain('Lịch ngày 12-11 mới');
+        expect(container!.textContent).toContain('1 việc hôm nay • 0 việc quá hạn');
+      });
+    });
+
+    it('Test B (Eligibility & Repeated Blur/Refocus Lifecycle): registers 0 listeners/timers when disabled or blurred initially and avoids listener accumulation across cycles', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-11-12T01:59:50.000Z'));
+
+      const appStateTracker = createAppStateTracker();
+      const timerTracker = createTimerTracker();
+      const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+      const consoleErrorSpy = vi.spyOn(console, 'error');
+
+      // 1) Non-schedule PageContent tab (GardensScreen) passes enabled=false -> 0 listeners & 0 timers
+      vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(sessionA);
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+      apiClient.defaults.adapter = vi.fn().mockImplementation((config) => {
+        if (config.url === '/users/me') {
+          return Promise.resolve({ status: 200, data: { success: true, data: profileA }, headers: {}, config });
+        }
+        if (config.url === '/gardens') {
+          return Promise.resolve({
+            status: 200,
+            data: { success: true, data: [] },
+            headers: {},
+            config,
+          });
+        }
+        throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+      });
+
+      act(() => {
+        root!.render(
+          <QueryClientProvider client={qc}>
+            <AuthProvider>
+              <PlantDataProvider>
+                <ScreenFocusProvider isFocused={true}>
+                  <GardensScreen />
+                </ScreenFocusProvider>
+              </PlantDataProvider>
+            </AuthProvider>
+          </QueryClientProvider>
+        );
+      });
+      await waitForFake(() => {
+        expect(container!.textContent).toContain('Khu Vườn');
+      });
+      expect(appStateTracker.getAddCount()).toBe(0);
+      expect(appStateTracker.activeListeners.size).toBe(0);
+      expect(timerTracker.getTotal10sIntervals()).toBe(0);
+
+      await act(async () => {
+        root?.unmount();
+      });
+      root = createRoot(container!);
+
+      // 2) Mount ClockHarness initially with isFocused={false} -> 0 listeners, 0 intervals, 0 boundary timeouts
+      const onCommitSpy = vi.fn();
+      const transitions = ['2026-11-12T02:00:00.000Z'];
+      function LifecycleHarness({ enabled }: { enabled: boolean }) {
+        const result = useScheduleClock({
+          enabled,
+          transitionIsoTimestamps: transitions,
+          trackVnMidnight: true,
+        });
+        useEffect(() => {
+          onCommitSpy(result.nowMs);
+        });
+        return (
+          <div data-testid="lifecycle-probe" data-active={String(result.isClockActive)}>
+            {String(result.nowMs)}
+          </div>
+        );
+      }
+
+      const boundaryTimeoutCount = () =>
+        setTimeoutSpy.mock.calls.filter(
+          ([, delay]) => typeof delay === 'number' && delay >= 5_000 && delay <= 20_000
+        ).length;
+
+      act(() => {
+        root!.render(
+          <ScreenFocusProvider isFocused={false}>
+            <LifecycleHarness enabled={true} />
+          </ScreenFocusProvider>
+        );
+      });
+      expect(appStateTracker.getAddCount()).toBe(0);
+      expect(appStateTracker.activeListeners.size).toBe(0);
+      expect(timerTracker.active10sIntervals.size).toBe(0);
+      expect(boundaryTimeoutCount()).toBe(0);
+      expect(container!.querySelector('[data-testid="lifecycle-probe"]')?.getAttribute('data-active')).toBe(
+        'false'
+      );
+
+      // 3) Repeat focus/blur 3 cycles -> active listeners always toggle cleanly 1 -> 0 -> 1 without leak
+      for (let cycle = 1; cycle <= 3; cycle++) {
+        act(() => {
+          root!.render(
+            <ScreenFocusProvider isFocused={true}>
+              <LifecycleHarness enabled={true} />
+            </ScreenFocusProvider>
+          );
+        });
+        expect(appStateTracker.getAddCount()).toBe(cycle);
+        expect(appStateTracker.activeListeners.size).toBe(1);
+        expect(timerTracker.active10sIntervals.size).toBe(1);
+        expect(container!.querySelector('[data-testid="lifecycle-probe"]')?.getAttribute('data-active')).toBe(
+          'true'
+        );
+
+        act(() => {
+          root!.render(
+            <ScreenFocusProvider isFocused={false}>
+              <LifecycleHarness enabled={true} />
+            </ScreenFocusProvider>
+          );
+        });
+        expect(appStateTracker.getRemoveCount()).toBe(cycle);
+        expect(appStateTracker.activeListeners.size).toBe(0);
+        expect(timerTracker.active10sIntervals.size).toBe(0);
+        expect(container!.querySelector('[data-testid="lifecycle-probe"]')?.getAttribute('data-active')).toBe(
+          'false'
+        );
+      }
+
+      // Focus once more, then disable clock -> removes listener & interval cleanly
+      act(() => {
+        root!.render(
+          <ScreenFocusProvider isFocused={true}>
+            <LifecycleHarness enabled={true} />
+          </ScreenFocusProvider>
+        );
+      });
+      expect(appStateTracker.activeListeners.size).toBe(1);
+      expect(timerTracker.active10sIntervals.size).toBe(1);
+
+      act(() => {
+        root!.render(
+          <ScreenFocusProvider isFocused={true}>
+            <LifecycleHarness enabled={false} />
+          </ScreenFocusProvider>
+        );
+      });
+      expect(appStateTracker.activeListeners.size).toBe(0);
+      expect(appStateTracker.getRemoveCount()).toBe(4);
+      expect(timerTracker.active10sIntervals.size).toBe(0);
+
+      // Re-enable -> 1 listener & 1 interval, then unmount -> full cleanup + 0 post-unmount updates
+      act(() => {
+        root!.render(
+          <ScreenFocusProvider isFocused={true}>
+            <LifecycleHarness enabled={true} />
+          </ScreenFocusProvider>
+        );
+      });
+      expect(appStateTracker.activeListeners.size).toBe(1);
+      expect(timerTracker.active10sIntervals.size).toBe(1);
+
+      await act(async () => {
+        root?.unmount();
+      });
+      root = null;
+      expect(appStateTracker.activeListeners.size).toBe(0);
+      expect(appStateTracker.getRemoveCount()).toBe(5);
+      expect(timerTracker.active10sIntervals.size).toBe(0);
+
+      const commitsAtUnmount = onCommitSpy.mock.calls.length;
+      act(() => {
+        for (const handler of appStateTracker.capturedHandlers) {
+          handler('background');
+          handler('active');
+        }
+      });
+      await flushFakeTimersAndMicrotasks(60_000);
+      expect(onCommitSpy.mock.calls.length).toBe(commitsAtUnmount);
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
+    });
+
+    it('Test C (Background & Foreground Resume): clears intervals in background while keeping 1 listener, then resyncs time, restarts 1 interval and refetches once on resume', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-11-12T01:59:50.000Z'));
+      vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(sessionA);
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+
+      let visibilityStateValue: DocumentVisibilityState = 'visible';
+      const originalVisibilityDescriptor = Object.getOwnPropertyDescriptor(document, 'visibilityState');
+      Object.defineProperty(document, 'visibilityState', {
+        configurable: true,
+        get: () => visibilityStateValue,
+      });
+
+      try {
+        const appStateTracker = createAppStateTracker();
+        const timerTracker = createTimerTracker();
+
+        const dueItem: TodayScheduleItemDto = {
+          ...todayNotYetDueItem,
+          scheduleId: 'sch-bg-resume',
+          taskLabel: 'Chăm cây khi trở lại foreground',
+          nextScheduledAt: '2026-11-12T02:00:00.000Z',
+          isOverdue: false,
+          status: 'ACTIVE',
+        };
+
+        let todayCalls = 0;
+        apiClient.defaults.adapter = vi.fn().mockImplementation((config) => {
+          if (config.url === '/users/me') {
+            return Promise.resolve({ status: 200, data: { success: true, data: profileA }, headers: {}, config });
+          }
+          if (config.url === '/schedules/today' && config.method === 'get') {
+            todayCalls += 1;
+            return Promise.resolve({
+              status: 200,
+              data: { success: true, data: [dueItem] },
+              headers: {},
+              config,
+            });
+          }
+          throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+        });
+
+        act(() => {
+          root!.render(
+            <QueryClientProvider client={qc}>
+              <AuthProvider>
+                <PlantDataProvider>
+                  <ScreenFocusProvider isFocused={true}>
+                    <ScheduleScreen />
+                  </ScreenFocusProvider>
+                </PlantDataProvider>
+              </AuthProvider>
+            </QueryClientProvider>
+          );
+        });
+
+        await waitForFake(() => {
+          expect(container!.textContent).toContain('Chăm cây khi trở lại foreground');
+          expect(container!.textContent).toContain('Chưa đến giờ');
+        });
+        expect(todayCalls).toBe(1);
+        expect(appStateTracker.activeListeners.size).toBe(1);
+        expect(timerTracker.active10sIntervals.size).toBe(1);
+
+        // Background the app -> stops intervals cleanly while retaining the single AppState listener
+        act(() => {
+          visibilityStateValue = 'hidden';
+          document.dispatchEvent(new Event('visibilitychange'));
+        });
+        expect(appStateTracker.activeListeners.size).toBe(1);
+        expect(timerTracker.active10sIntervals.size).toBe(0);
+
+        // Advance time past deadline while still in background -> no premature background polling or refetch
+        vi.setSystemTime(new Date('2026-11-12T02:05:00.000Z'));
+        await flushFakeTimersAndMicrotasks(30_000);
+        expect(todayCalls).toBe(1);
+        expect(timerTracker.active10sIntervals.size).toBe(0);
+        expect(container!.textContent).toContain('Chưa đến giờ');
+
+        // Resume to foreground -> single refetch, immediate overdue sync & 1 restarted interval
+        await act(async () => {
+          visibilityStateValue = 'visible';
+          document.dispatchEvent(new Event('visibilitychange'));
+          await vi.advanceTimersByTimeAsync(20);
+        });
+
+        await waitForFake(() => {
+          expect(todayCalls).toBe(2);
+          expect(container!.textContent).toContain('Quá hạn');
+          expect(container!.textContent).toContain('1 việc hôm nay • 1 việc quá hạn');
+        });
+        expect(appStateTracker.activeListeners.size).toBe(1);
+        expect(timerTracker.active10sIntervals.size).toBe(1);
+      } finally {
+        if (originalVisibilityDescriptor) {
+          Object.defineProperty(document, 'visibilityState', originalVisibilityDescriptor);
+        }
+      }
+    });
+
+    it('Test D (PlantDetailScreen Clock Gating): attaches 0 listeners/intervals with empty or non-ACTIVE schedules, activates 1 listener/interval with ACTIVE schedule, and cleans up on blur/unmount', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-11-12T01:59:50.000Z'));
+      vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(sessionA);
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+      routeParamsState.current = { plantId: 'plt-1' };
+
+      const appStateTracker = createAppStateTracker();
+      const timerTracker = createTimerTracker();
+
+      let serverSchedules: CareScheduleDto[] = [];
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation((config) => {
+        if (config.url === '/users/me') {
+          return Promise.resolve({ status: 200, data: { success: true, data: profileA }, headers: {}, config });
+        }
+        if (config.url === '/plants/plt-1') {
+          return Promise.resolve({ status: 200, data: { success: true, data: plantDetailOne }, headers: {}, config });
+        }
+        if (config.url === '/plants/plt-1/schedules' && config.method === 'get') {
+          return Promise.resolve({
+            status: 200,
+            data: {
+              success: true,
+              data: {
+                content: serverSchedules,
+                page: 0,
+                size: 10,
+                totalElements: serverSchedules.length,
+                totalPages: serverSchedules.length > 0 ? 1 : 0,
+                last: true,
+              },
+            },
+            headers: {},
+            config,
+          });
+        }
+        throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+      });
+
+      const renderPlantDetail = (focused: boolean) => {
+        act(() => {
+          root!.render(
+            <QueryClientProvider client={qc}>
+              <AuthProvider>
+                <PlantDataProvider>
+                  <ScreenFocusProvider isFocused={focused}>
+                    <PlantDetailScreen />
+                  </ScreenFocusProvider>
+                </PlantDataProvider>
+              </AuthProvider>
+            </QueryClientProvider>
+          );
+        });
+      };
+
+      // 1) Empty schedules -> 0 listeners & 0 intervals
+      renderPlantDetail(true);
+      await waitForFake(() => {
+        expect(container!.textContent).toContain('Chưa có lịch chăm sóc cho cây này');
+      });
+      expect(appStateTracker.activeListeners.size).toBe(0);
+      expect(appStateTracker.getAddCount()).toBe(0);
+      expect(timerTracker.active10sIntervals.size).toBe(0);
+
+      // 2) Only PAUSED / COMPLETED schedules -> still 0 listeners & 0 intervals
+      serverSchedules = [
+        {
+          ...scheduleDetailPaused,
+          id: 'sch-paused-only',
+          taskLabel: 'Lịch tạm ngưng không cần clock',
+          status: 'PAUSED',
+        },
+        {
+          ...scheduleDetailOne,
+          id: 'sch-completed-only',
+          taskLabel: 'Lịch đã hoàn tất',
+          status: 'COMPLETED',
+        },
+      ];
+      await act(async () => {
+        await qc.invalidateQueries({ queryKey: queryKeys.plants.schedulesBase(mockUserA.id, 'plt-1') });
+      });
+      await waitForFake(() => {
+        expect(container!.textContent).toContain('Lịch tạm ngưng không cần clock');
+      });
+      expect(appStateTracker.activeListeners.size).toBe(0);
+      expect(appStateTracker.getAddCount()).toBe(0);
+      expect(timerTracker.active10sIntervals.size).toBe(0);
+
+      // 3) ACTIVE schedule appears -> activates exactly 1 AppState listener & 1 interval
+      serverSchedules = [
+        {
+          ...scheduleDetailOne,
+          id: 'sch-active-appeared',
+          taskLabel: 'Lịch mới kích hoạt clock',
+          nextScheduledAt: '2026-11-12T02:00:00.000Z',
+          isOverdue: false,
+          status: 'ACTIVE',
+        },
+      ];
+      await act(async () => {
+        await qc.invalidateQueries({ queryKey: queryKeys.plants.schedulesBase(mockUserA.id, 'plt-1') });
+      });
+      await waitForFake(() => {
+        expect(container!.textContent).toContain('Lịch mới kích hoạt clock');
+        expect(appStateTracker.activeListeners.size).toBe(1);
+        expect(timerTracker.active10sIntervals.size).toBe(1);
+      });
+
+      // Deadline passes -> UI transitions cleanly to Quá hạn
+      await flushFakeTimersAndMicrotasks(20_000);
+      await waitForFake(() => {
+        expect(container!.textContent).toContain('Quá hạn');
+      });
+
+      // 4) All ACTIVE schedules paused/removed -> automatically tears down AppState listener & interval (0/0)
+      const activeServerSchedule = serverSchedules[0];
+      serverSchedules = [{ ...activeServerSchedule, status: 'PAUSED' }];
+      await act(async () => {
+        await qc.invalidateQueries({ queryKey: queryKeys.plants.schedulesBase(mockUserA.id, 'plt-1') });
+      });
+      await waitForFake(() => {
+        expect(appStateTracker.activeListeners.size).toBe(0);
+        expect(timerTracker.active10sIntervals.size).toBe(0);
+      });
+
+      // Re-activate -> 1/1 again, then Blur -> 0/0, Refocus -> 1/1, Unmount -> 0/0
+      serverSchedules = [activeServerSchedule];
+      await act(async () => {
+        await qc.invalidateQueries({ queryKey: queryKeys.plants.schedulesBase(mockUserA.id, 'plt-1') });
+      });
+      await waitForFake(() => {
+        expect(appStateTracker.activeListeners.size).toBe(1);
+        expect(timerTracker.active10sIntervals.size).toBe(1);
+      });
+
+      renderPlantDetail(false);
+      expect(appStateTracker.activeListeners.size).toBe(0);
+      expect(timerTracker.active10sIntervals.size).toBe(0);
+
+      renderPlantDetail(true);
+      expect(appStateTracker.activeListeners.size).toBe(1);
+      expect(timerTracker.active10sIntervals.size).toBe(1);
+
+      await act(async () => {
+        root?.unmount();
+      });
+      root = null;
+      expect(appStateTracker.activeListeners.size).toBe(0);
+      expect(timerTracker.active10sIntervals.size).toBe(0);
+    });
+
+    it('Test E (Resume + Refocus Dedupe): prevents duplicate GET /schedules/today refetch when AppState resume and route refocus occur together while preserving later refocus refreshes', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-11-12T01:59:50.000Z'));
+      vi.spyOn(tokenStorage, 'getSession').mockResolvedValue(sessionA);
+      vi.spyOn(tokenStorage, 'getAccessToken').mockResolvedValue(sessionA.accessToken);
+
+      let visibilityStateValue: DocumentVisibilityState = 'visible';
+      const originalVisibilityDescriptor = Object.getOwnPropertyDescriptor(document, 'visibilityState');
+      Object.defineProperty(document, 'visibilityState', {
+        configurable: true,
+        get: () => visibilityStateValue,
+      });
+
+      try {
+        const appStateTracker = createAppStateTracker();
+
+        let todayCalls = 0;
+        apiClient.defaults.adapter = vi.fn().mockImplementation((config) => {
+          if (config.url === '/users/me') {
+            return Promise.resolve({ status: 200, data: { success: true, data: profileA }, headers: {}, config });
+          }
+          if (config.url === '/schedules/today' && config.method === 'get') {
+            todayCalls += 1;
+            return Promise.resolve({
+              status: 200,
+              data: { success: true, data: [todayNotYetDueItem] },
+              headers: {},
+              config,
+            });
+          }
+          throw new Error(`Unexpected call: ${config.method} ${config.url}`);
+        });
+
+        const renderFocused = (focused: boolean) =>
+          root!.render(
+            <QueryClientProvider client={qc}>
+              <AuthProvider>
+                <PlantDataProvider>
+                  <ScreenFocusProvider isFocused={focused}>
+                    <ScheduleScreen />
+                  </ScreenFocusProvider>
+                </PlantDataProvider>
+              </AuthProvider>
+            </QueryClientProvider>
+          );
+
+        act(() => {
+          renderFocused(true);
+        });
+        await waitForFake(() => {
+          expect(todayCalls).toBe(1);
+        });
+
+        // Case E1: Background + Blur -> resume both AppState & focus together -> ONLY 1 refetch
+        act(() => {
+          visibilityStateValue = 'hidden';
+          document.dispatchEvent(new Event('visibilitychange'));
+          renderFocused(false);
+        });
+        expect(appStateTracker.activeListeners.size).toBe(0);
+        expect(todayCalls).toBe(1);
+
+        await act(async () => {
+          visibilityStateValue = 'visible';
+          document.dispatchEvent(new Event('visibilitychange'));
+          renderFocused(true);
+          await vi.advanceTimersByTimeAsync(20);
+        });
+        await waitForFake(() => {
+          expect(todayCalls).toBe(2);
+          expect(appStateTracker.activeListeners.size).toBe(1);
+        });
+
+        // Case E2: Blur while hidden -> refocus while AppState is still hidden -> then AppState resumes -> ONLY 1 refetch
+        act(() => {
+          visibilityStateValue = 'hidden';
+          document.dispatchEvent(new Event('visibilitychange'));
+          renderFocused(false);
+        });
+        expect(todayCalls).toBe(2);
+
+        act(() => {
+          renderFocused(true);
+        });
+        // App is still hidden (backgrounded) -> must not fire spurious focus refetch yet
+        expect(todayCalls).toBe(2);
+
+        await act(async () => {
+          visibilityStateValue = 'visible';
+          document.dispatchEvent(new Event('visibilitychange'));
+          await vi.advanceTimersByTimeAsync(20);
+        });
+        await waitForFake(() => {
+          expect(todayCalls).toBe(3);
+        });
+
+        // Case E3: Visibility switched active + route focused, followed immediately by visibilitychange -> ONLY 1 refetch
+        act(() => {
+          visibilityStateValue = 'hidden';
+          document.dispatchEvent(new Event('visibilitychange'));
+          renderFocused(false);
+        });
+        expect(todayCalls).toBe(3);
+
+        act(() => {
+          visibilityStateValue = 'visible';
+          renderFocused(true);
+        });
+        await act(async () => {
+          document.dispatchEvent(new Event('visibilitychange'));
+          await vi.advanceTimersByTimeAsync(20);
+        });
+        await waitForFake(() => {
+          expect(todayCalls).toBe(4);
+        });
+
+        // Case E4: Genuine subsequent blur -> refocus (even without timer jump) still triggers valid refresh
+        act(() => {
+          renderFocused(false);
+        });
+        await act(async () => {
+          renderFocused(true);
+          await vi.advanceTimersByTimeAsync(20);
+        });
+        await waitForFake(() => {
+          expect(todayCalls).toBe(5);
+        });
+      } finally {
+        if (originalVisibilityDescriptor) {
+          Object.defineProperty(document, 'visibilityState', originalVisibilityDescriptor);
+        }
+      }
     });
   });
 });

@@ -96,6 +96,7 @@ export function useScheduleClock(
     MIN_SCHEDULE_CLOCK_INTERVAL_MS,
     Number.isFinite(intervalMs) ? Math.trunc(intervalMs) : DEFAULT_SCHEDULE_CLOCK_INTERVAL_MS
   );
+  const shouldWatchAppState = enabled && effectiveFocused;
 
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const [isAppActive, setIsAppActive] = useState<boolean>(() => readIsAppActive());
@@ -107,6 +108,16 @@ export function useScheduleClock(
   const trackVnMidnightRef = useRef(trackVnMidnight);
   const onActiveRefreshRef = useRef(onActiveRefresh);
   const lastVnDateKeyRef = useRef<string | null>(null);
+  const wasFocusedRef = useRef(effectiveFocused);
+  const prevShouldWatchAppStateRef = useRef(false);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    lastVnDateKeyRef.current = getTodayVnDateString(new Date(Date.now()));
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     enabledRef.current = enabled;
@@ -119,16 +130,33 @@ export function useScheduleClock(
   const isClockActive = enabled && effectiveFocused && isAppActive;
 
   useEffect(() => {
-    isMountedRef.current = true;
-    const initialActive = readIsAppActive();
-    appActiveRef.current = initialActive;
-    setIsAppActive((prev) => (prev === initialActive ? prev : initialActive));
-    lastVnDateKeyRef.current = getTodayVnDateString(new Date(Date.now()));
+    const prevFocused = wasFocusedRef.current;
+    wasFocusedRef.current = effectiveFocused;
+    const prevWatching = prevShouldWatchAppStateRef.current;
+    prevShouldWatchAppStateRef.current = shouldWatchAppState;
 
+    if (!shouldWatchAppState) {
+      return;
+    }
+
+    const currentNow = Date.now();
+    const actualAppActive = readIsAppActive();
+    appActiveRef.current = actualAppActive;
+    enabledRef.current = true;
+    focusedRef.current = true;
+
+    setNowMs((prev) => (prev === currentNow ? prev : currentNow));
+    setIsAppActive((prev) => (prev === actualAppActive ? prev : actualAppActive));
+
+    const currentVnDate = getTodayVnDateString(new Date(currentNow));
+    const prevVnDate = lastVnDateKeyRef.current;
+    lastVnDateKeyRef.current = currentVnDate;
+
+    let isListenerActive = true;
     const subscription = AppState.addEventListener(
       'change',
       (nextState: AppStateStatus) => {
-        if (!isMountedRef.current) {
+        if (!isListenerActive || !isMountedRef.current) {
           return;
         }
         const nextActive = nextState === 'active';
@@ -137,52 +165,31 @@ export function useScheduleClock(
         setIsAppActive((prev) => (prev === nextActive ? prev : nextActive));
 
         if (!prevActive && nextActive) {
-          const currentNow = Date.now();
-          setNowMs(currentNow);
+          const resumeNow = Date.now();
+          setNowMs((prev) => (prev === resumeNow ? prev : resumeNow));
           if (enabledRef.current && focusedRef.current) {
-            const currentVnDate = getTodayVnDateString(new Date(currentNow));
-            const prevVnDate = lastVnDateKeyRef.current;
-            lastVnDateKeyRef.current = currentVnDate;
+            const resumeVnDate = getTodayVnDateString(new Date(resumeNow));
+            const priorVnDate = lastVnDateKeyRef.current;
+            lastVnDateKeyRef.current = resumeVnDate;
             const reason: ScheduleClockResumeReason =
-              prevVnDate && prevVnDate !== currentVnDate ? 'vn-midnight' : 'appstate';
+              priorVnDate && priorVnDate !== resumeVnDate ? 'vn-midnight' : 'appstate';
             onActiveRefreshRef.current?.(reason);
           }
         }
       }
     );
 
-    return () => {
-      isMountedRef.current = false;
-      subscription?.remove?.();
-    };
-  }, []);
-
-  const wasFocusedRef = useRef(effectiveFocused);
-  useEffect(() => {
-    const prevFocused = wasFocusedRef.current;
-    wasFocusedRef.current = effectiveFocused;
-    if (!prevFocused && effectiveFocused && enabled && appActiveRef.current) {
-      const currentNow = Date.now();
-      setNowMs(currentNow);
-      const currentVnDate = getTodayVnDateString(new Date(currentNow));
-      const prevVnDate = lastVnDateKeyRef.current;
-      lastVnDateKeyRef.current = currentVnDate;
+    if (!prevFocused && effectiveFocused && actualAppActive && !prevWatching) {
       const reason: ScheduleClockResumeReason =
         prevVnDate && prevVnDate !== currentVnDate ? 'vn-midnight' : 'focus';
       onActiveRefreshRef.current?.(reason);
     }
-  }, [effectiveFocused, enabled]);
 
-  const wasEnabledRef = useRef(enabled);
-  useEffect(() => {
-    const prevEnabled = wasEnabledRef.current;
-    wasEnabledRef.current = enabled;
-    if (!prevEnabled && enabled) {
-      const currentNow = Date.now();
-      setNowMs(currentNow);
-      lastVnDateKeyRef.current = getTodayVnDateString(new Date(currentNow));
-    }
-  }, [enabled]);
+    return () => {
+      isListenerActive = false;
+      subscription?.remove?.();
+    };
+  }, [shouldWatchAppState, effectiveFocused]);
 
   useEffect(() => {
     if (!isClockActive) {
