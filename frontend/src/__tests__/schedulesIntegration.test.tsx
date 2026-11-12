@@ -1007,6 +1007,20 @@ describe('G5.4.2 Care Schedules REST API Integration (Mocked Axios HTTP Adapter)
             config,
           });
         }
+        if (
+          (config.url === '/plants/plt-1/care-logs' || config.url === '/plants/plt-1/journals') &&
+          config.method === 'get'
+        ) {
+          return Promise.resolve({
+            status: 200,
+            data: {
+              success: true,
+              data: { content: [], page: 0, size: 20, totalElements: 0, totalPages: 0, last: true },
+            },
+            headers: {},
+            config,
+          });
+        }
         throw new Error(`Unexpected call: ${config.url}`);
       });
 
@@ -1100,6 +1114,20 @@ describe('G5.4.2 Care Schedules REST API Integration (Mocked Axios HTTP Adapter)
                 totalPages: 1,
                 last: true,
               },
+            },
+            headers: {},
+            config,
+          });
+        }
+        if (
+          (config.url === '/plants/plt-1/care-logs' || config.url === '/plants/plt-1/journals') &&
+          config.method === 'get'
+        ) {
+          return Promise.resolve({
+            status: 200,
+            data: {
+              success: true,
+              data: { content: [], page: 0, size: 20, totalElements: 0, totalPages: 0, last: true },
             },
             headers: {},
             config,
@@ -1301,6 +1329,24 @@ describe('G5.4.2 Care Schedules REST API Integration (Mocked Axios HTTP Adapter)
                 totalPages: 1,
                 last: true,
               },
+            },
+            headers: {},
+            config,
+          };
+        }
+        if (
+          (config.url === '/plants/plt-1/care-logs' || config.url === '/plants/plt-1/journals') &&
+          config.method === 'get'
+        ) {
+          if (deleteStarted) {
+            spuriousScheduleFetch = true;
+            throw new Error(`Spurious GET ${config.url} after plant delete`);
+          }
+          return {
+            status: 200,
+            data: {
+              success: true,
+              data: { content: [], page: 0, size: 20, totalElements: 0, totalPages: 0, last: true },
             },
             headers: {},
             config,
@@ -3006,6 +3052,20 @@ describe('G5.4.2 Care Schedules REST API Integration (Mocked Axios HTTP Adapter)
             config,
           });
         }
+        if (
+          (config.url === '/plants/plt-1/care-logs' || config.url === '/plants/plt-1/journals') &&
+          config.method === 'get'
+        ) {
+          return Promise.resolve({
+            status: 200,
+            data: {
+              success: true,
+              data: { content: [], page: 0, size: 20, totalElements: 0, totalPages: 0, last: true },
+            },
+            headers: {},
+            config,
+          });
+        }
         throw new Error(`Unexpected call: ${config.method} ${config.url}`);
       });
 
@@ -3988,6 +4048,20 @@ describe('G5.4.2 Care Schedules REST API Integration (Mocked Axios HTTP Adapter)
                 totalPages: serverSchedules.length > 0 ? 1 : 0,
                 last: true,
               },
+            },
+            headers: {},
+            config,
+          });
+        }
+        if (
+          (config.url === '/plants/plt-1/care-logs' || config.url === '/plants/plt-1/journals') &&
+          config.method === 'get'
+        ) {
+          return Promise.resolve({
+            status: 200,
+            data: {
+              success: true,
+              data: { content: [], page: 0, size: 20, totalElements: 0, totalPages: 0, last: true },
             },
             headers: {},
             config,

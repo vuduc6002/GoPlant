@@ -18,6 +18,8 @@ import { useAuth } from '@/features/auth/AuthProvider';
 import { GardensTabContent } from '@/features/gardens/GardenScreens';
 import { useGardensList } from '@/features/gardens/gardenHooks';
 import { getHealthStatusMeta, type GardenSummaryDto, type HealthStatus } from '@/features/gardens/gardenTypes';
+import { JournalOverviewContent } from '@/features/journal/JournalScreens';
+import { usePlantJournals } from '@/features/journal/journalHooks';
 import { useDeletePlantMutation, useUserPlantsList } from '@/features/plants/plantHooks';
 import {
   HEALTH_STATUS_OPTIONS,
@@ -98,14 +100,6 @@ function BottomNav({ current }: { current: string }) {
         </Pressable>
       ))}
     </View>
-  );
-}
-
-function Tag({ children, tone = 'mint' }: { children: ReactNode; tone?: 'mint' | 'peach' | 'plain' }) {
-  return (
-    <Text style={[s.tag, tone === 'peach' ? s.tagPeach : tone === 'plain' ? s.tagPlain : s.tagMint]}>
-      {children}
-    </Text>
   );
 }
 
@@ -601,58 +595,8 @@ function PageBody({ kind, scheduleNowMs }: { kind: PageKind; scheduleNowMs: numb
   if (kind === 'gardens') {
     return <GardensTabContent />;
   }
-  if (kind === 'plants') {
+  if (kind === 'plants' || kind === 'journal') {
     return null;
-  }
-  if (kind === 'journal') {
-    return (
-      <>
-        <View style={s.metrics}>
-          {[
-            ['0', 'Ghi nhận'],
-            ['0', 'Cây có nhật ký'],
-            ['0', 'Khu vườn'],
-            ['—', 'Cập nhật gần nhất'],
-          ].map(([value, label]) => (
-            <View key={label} style={s.metric}>
-              <Text style={s.metricValue}>{value}</Text>
-              <Text style={s.body}>{label}</Text>
-            </View>
-          ))}
-        </View>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.pills}>
-          {['Tất cả vườn', 'Nhật ký từng cây'].map((x, i) => (
-            <Tag key={x} tone={i === 0 ? 'mint' : 'plain'}>
-              {x}
-            </Tag>
-          ))}
-        </ScrollView>
-        <Section title="Nhật ký khu vườn">
-          <EmptyCard
-            icon="▤"
-            title="Chưa có nhật ký khu vườn"
-            description="Ghi lại hoạt động, thay đổi và hình ảnh trong khu vườn."
-            action="＋  Thêm nhật ký khu vườn"
-            onPress={() => router.push('/journal/new' as never)}
-          />
-        </Section>
-        <Section title="Nhật ký từng cây">
-          <EmptyCard
-            icon="♧"
-            title="Chưa có nhật ký cây trồng"
-            description="Theo dõi từng giai đoạn phát triển và chăm sóc của cây."
-            action="＋  Thêm nhật ký cây"
-            onPress={() => router.push('/journal/new' as never)}
-          />
-        </Section>
-        <View style={s.recommend}>
-          <Text style={s.cardTitle}>Mẹo ghi nhật ký</Text>
-          <Text style={s.body}>
-            Ghi lại việc chăm sóc thường xuyên để dễ theo dõi thay đổi theo thời gian.
-          </Text>
-        </View>
-      </>
-    );
   }
   if (kind === 'monitoring') {
     return (
@@ -729,6 +673,8 @@ function PageContent({ kind }: { kind: PageKind }) {
   const [selectedHealthStatus, setSelectedHealthStatus] = useState<HealthStatus | ''>('');
   const [sort, setSort] = useState('createdAt,desc');
   const [page, setPage] = useState(0);
+  const [selectedJournalPlantId, setSelectedJournalPlantId] = useState('');
+  const [journalPage, setJournalPage] = useState(0);
 
   useEffect(() => {
     const prevUserId = prevUserIdRef.current;
@@ -740,6 +686,8 @@ function PageContent({ kind }: { kind: PageKind }) {
       setSelectedHealthStatus('');
       setSort('createdAt,desc');
       setPage(0);
+      setSelectedJournalPlantId('');
+      setJournalPage(0);
     }
   }, [currentUserId]);
 
@@ -756,9 +704,87 @@ function PageContent({ kind }: { kind: PageKind }) {
   }, [plantQuery, debouncedKeyword]);
 
   const isPlantsTab = kind === 'plants';
+  const isJournalTab = kind === 'journal';
   const isScheduleTab = kind === 'schedule';
   const gardensQuery = useGardensList({ enabled: kind === 'gardens' || isPlantsTab });
   const favoritesQuery = useFavoriteSpecies({ page: 0, size: 20 }, { enabled: isPlantsTab });
+  const journalPlantsQuery = useUserPlantsList(
+    { page: 0, size: 100, sort: 'displayName,asc' },
+    { enabled: isJournalTab }
+  );
+  const journalPlantsData = journalPlantsQuery.data;
+  const journalPlants = useMemo(
+    () => journalPlantsData?.content ?? [],
+    [journalPlantsData]
+  );
+  const effectiveJournalPlant = useMemo(
+    () =>
+      journalPlants.find((item) => item.id === selectedJournalPlantId) ??
+      journalPlants[0] ??
+      null,
+    [journalPlants, selectedJournalPlantId]
+  );
+  const effectiveJournalPlantId = effectiveJournalPlant?.id ?? '';
+
+  const plantJournalsQuery = usePlantJournals(
+    effectiveJournalPlantId,
+    { page: journalPage, size: 20 },
+    { enabled: isJournalTab && Boolean(effectiveJournalPlantId) }
+  );
+
+  const journalsData = plantJournalsQuery.data;
+  const isJournalsFetching = plantJournalsQuery.isFetching;
+  const isJournalsPlaceholder = plantJournalsQuery.isPlaceholderData;
+  const isJournalsError = plantJournalsQuery.isError;
+
+  useEffect(() => {
+    if (!isJournalTab || !selectedJournalPlantId) {
+      return;
+    }
+    if (journalPlantsQuery.isFetching || journalPlantsQuery.isPlaceholderData || !journalPlantsData) {
+      return;
+    }
+    if (!journalPlants.some((item) => item.id === selectedJournalPlantId)) {
+      setSelectedJournalPlantId('');
+      setJournalPage(0);
+    }
+  }, [
+    isJournalTab,
+    selectedJournalPlantId,
+    journalPlantsQuery.isFetching,
+    journalPlantsQuery.isPlaceholderData,
+    journalPlantsData,
+    journalPlants,
+  ]);
+
+  useEffect(() => {
+    if (!isJournalTab || !effectiveJournalPlantId) {
+      return;
+    }
+    if (isJournalsFetching || isJournalsPlaceholder || isJournalsError || !journalsData) {
+      return;
+    }
+    const rawTotalPages = journalsData.totalPages;
+    if (typeof rawTotalPages !== 'number' || !Number.isFinite(rawTotalPages)) {
+      return;
+    }
+    const totalPages = Math.max(0, Math.trunc(rawTotalPages));
+    if (journalPage < 0 || journalPage >= totalPages) {
+      const nextPage = journalPage < 0 || totalPages === 0 ? 0 : totalPages - 1;
+      if (nextPage !== journalPage) {
+        setJournalPage(nextPage);
+      }
+    }
+  }, [
+    isJournalTab,
+    effectiveJournalPlantId,
+    journalPage,
+    journalsData,
+    isJournalsFetching,
+    isJournalsPlaceholder,
+    isJournalsError,
+  ]);
+
   const todaySchedulesQuery = useTodaySchedules({ enabled: isScheduleTab });
   const todayRefetch = todaySchedulesQuery.refetch;
   const authOwnerRef = useRef<{ status: string; userId: string }>({
@@ -887,7 +913,24 @@ function PageContent({ kind }: { kind: PageKind }) {
           ? `${favCount} loài yêu thích • Đang tải cây sở hữu... • ${gardensCount} khu vườn`
           : `${favCount} loài yêu thích • ${plantsTotal} cây sở hữu • ${gardensCount} khu vườn`,
     },
-    journal: { title: 'Nhật ký', subtitle: 'Nhật ký phát triển', intro: 'Chưa có ghi nhận nào' },
+    journal: {
+      title: 'Nhật ký',
+      subtitle: 'Nhật ký phát triển',
+      intro:
+        journalPlantsQuery.isLoading || (!journalPlantsData && !journalPlantsQuery.isError)
+          ? 'Đang tải danh sách cây trồng...'
+          : journalPlantsQuery.isError && journalPlants.length === 0
+            ? 'Không thể tải danh sách cây trồng'
+            : journalPlants.length === 0
+              ? 'Bạn chưa có cây trồng để ghi nhật ký'
+              : effectiveJournalPlant
+                ? `${effectiveJournalPlant.displayName} • ${
+                    plantJournalsQuery.isLoading || (!journalsData && !isJournalsError)
+                      ? 'Đang tải nhật ký...'
+                      : `${journalsData?.totalElements ?? 0} ghi nhận`
+                  }`
+                : 'Chọn một cây để xem nhật ký phát triển',
+    },
     schedule: {
       title: 'Lịch Chăm Sóc',
       subtitle: 'Lập lịch chăm sóc',
@@ -967,6 +1010,43 @@ function PageContent({ kind }: { kind: PageKind }) {
             void plantsQuery.refetch();
           }}
           hasActiveFilters={hasActiveFilters}
+        />
+      );
+    }
+    if (kind === 'journal') {
+      return (
+        <JournalOverviewContent
+          plants={journalPlants}
+          isPlantsLoading={journalPlantsQuery.isLoading}
+          isPlantsFetching={journalPlantsQuery.isFetching}
+          isPlantsError={journalPlantsQuery.isError}
+          plantsErrorMessage={journalPlantsQuery.error?.message}
+          onRetryPlants={() => {
+            void journalPlantsQuery.refetch();
+          }}
+          selectedPlantId={effectiveJournalPlantId}
+          onSelectPlant={(nextPlantId) => {
+            setSelectedJournalPlantId(nextPlantId);
+            setJournalPage(0);
+          }}
+          effectivePlant={effectiveJournalPlant}
+          journalsData={journalsData}
+          isJournalsLoading={plantJournalsQuery.isLoading}
+          isJournalsFetching={plantJournalsQuery.isFetching}
+          isJournalsPlaceholder={plantJournalsQuery.isPlaceholderData}
+          isJournalsError={plantJournalsQuery.isError}
+          journalsErrorMessage={plantJournalsQuery.error?.message}
+          onRetryJournals={() => {
+            void plantJournalsQuery.refetch();
+          }}
+          journalPage={journalPage}
+          onChangeJournalPage={setJournalPage}
+          onRefreshAll={() => {
+            void Promise.all([
+              journalPlantsQuery.refetch(),
+              effectiveJournalPlantId ? plantJournalsQuery.refetch() : Promise.resolve(),
+            ]);
+          }}
         />
       );
     }

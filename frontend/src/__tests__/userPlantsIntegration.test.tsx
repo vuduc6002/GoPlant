@@ -635,6 +635,20 @@ describe('G5.4.1 User Plants REST API Integration (Mocked Axios HTTP Adapter)', 
             config,
           });
         }
+        if (
+          (config.url === '/plants/plt-1/care-logs' ||
+            config.url === '/plants/plt-no-code/care-logs' ||
+            config.url === '/plants/plt-1/journals' ||
+            config.url === '/plants/plt-no-code/journals') &&
+          config.method === 'get'
+        ) {
+          return Promise.resolve({
+            status: 200,
+            data: { success: true, data: { content: [], page: 0, size: 20, totalElements: 0, totalPages: 0, last: true } },
+            headers: {},
+            config,
+          });
+        }
         throw new Error(`Unexpected API call: ${config.url}`);
       });
 
@@ -745,6 +759,17 @@ describe('G5.4.1 User Plants REST API Integration (Mocked Axios HTTP Adapter)', 
           return {
             status: 200,
             data: { success: true, data: { content: [], page: 0, size: 10, totalElements: 0, totalPages: 0, last: true } },
+            headers: {},
+            config,
+          };
+        }
+        if (
+          (config.url === '/plants/plt-1/care-logs' || config.url === '/plants/plt-1/journals') &&
+          config.method === 'get'
+        ) {
+          return {
+            status: 200,
+            data: { success: true, data: { content: [], page: 0, size: 20, totalElements: 0, totalPages: 0, last: true } },
             headers: {},
             config,
           };
@@ -1807,6 +1832,18 @@ describe('G5.4.1 User Plants REST API Integration (Mocked Axios HTTP Adapter)', 
           return {
             status: 200,
             data: { success: true, data: { content: [], page: 0, size: 10, totalElements: 0, totalPages: 0, last: true } },
+            headers: {},
+            config,
+          };
+        }
+        if (
+          (config.url === '/plants/plt-shared-1/care-logs' ||
+            config.url === '/plants/plt-shared-1/journals') &&
+          config.method === 'get'
+        ) {
+          return {
+            status: 200,
+            data: { success: true, data: { content: [], page: 0, size: 20, totalElements: 0, totalPages: 0, last: true } },
             headers: {},
             config,
           };

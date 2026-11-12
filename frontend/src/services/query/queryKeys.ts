@@ -32,6 +32,16 @@ export interface PlantScheduleListQueryKeyParams {
   size: number;
 }
 
+export interface PlantCareLogListQueryKeyParams {
+  page: number;
+  size: number;
+}
+
+export interface PlantJournalListQueryKeyParams {
+  page: number;
+  size: number;
+}
+
 export const queryKeys = {
   auth: {
     session: ['auth', 'session'] as const,
@@ -79,8 +89,22 @@ export const queryKeys = {
     all: (userId: string) => ['schedules', userId] as const,
     today: (userId: string) => ['schedules', userId, 'today'] as const,
   },
+  careLogs: {
+    all: (userId: string) => ['careLogs', userId] as const,
+    plants: (userId: string) => ['careLogs', userId, 'plants'] as const,
+    plantBase: (userId: string, plantId: string) =>
+      ['careLogs', userId, 'plants', plantId] as const,
+    list: (userId: string, plantId: string, params: PlantCareLogListQueryKeyParams) =>
+      ['careLogs', userId, 'plants', plantId, params] as const,
+  },
   journals: {
-    all: ['journals'] as const,
-    detail: (id: string) => ['journals', id] as const,
+    all: (userId: string) => ['journals', userId] as const,
+    plants: (userId: string) => ['journals', userId, 'plants'] as const,
+    plantBase: (userId: string, plantId: string) =>
+      ['journals', userId, 'plants', plantId] as const,
+    list: (userId: string, plantId: string, params: PlantJournalListQueryKeyParams) =>
+      ['journals', userId, 'plants', plantId, params] as const,
+    detailLookup: (userId: string, plantId: string, journalId: string) =>
+      ['journals', userId, 'plants', plantId, 'detail-lookup', journalId] as const,
   },
 } as const;

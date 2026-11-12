@@ -14,7 +14,16 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GoPlantColors as C, GoPlantTypography as F } from '@/constants/theme';
 import { useAuth } from '@/features/auth/AuthProvider';
+import { formatIsoDateTimeVn } from '@/features/carelog/careLogApi';
+import { usePlantCareLogs } from '@/features/carelog/careLogHooks';
+import { getCareLogStatusMeta } from '@/features/carelog/careLogTypes';
 import { getHealthStatusMeta } from '@/features/gardens/gardenTypes';
+import { useDeleteJournalMutation, usePlantJournals } from '@/features/journal/journalHooks';
+import {
+  getEntryTypeMeta,
+  getJournalHealthStatusMeta,
+  type GrowthJournalDto,
+} from '@/features/journal/journalTypes';
 import { useDeletePlantMutation, useUserPlantDetail } from '@/features/plants/plantHooks';
 import type { UserPlantDetailDto } from '@/features/plants/plantTypes';
 import {
@@ -71,6 +80,7 @@ export default function PlantDetailScreen() {
   const isPlantMode = Boolean(cleanPlantId);
 
   const deletePlantMutation = useDeletePlantMutation();
+  const deleteJournalMutation = useDeleteJournalMutation();
   const [deletedOwnerKey, setDeletedOwnerKey] = useState<string | null>(null);
   const [deletingSnapshotState, setDeletingSnapshotState] = useState<{
     ownerKey: string;
@@ -84,10 +94,21 @@ export default function PlantDetailScreen() {
       : null;
   const [scheduleStatusFilter, setScheduleStatusFilter] = useState<ScheduleStatus | ''>('');
   const [schedulePage, setSchedulePage] = useState(0);
+  const [careLogPage, setCareLogPage] = useState(0);
+  const [journalPage, setJournalPage] = useState(0);
+  const [deletingJournalId, setDeletingJournalId] = useState<string | null>(null);
+  const [journalActionError, setJournalActionError] = useState<string | null>(null);
 
   const plantQuery = useUserPlantDetail(cleanPlantId, {
     enabled: isPlantMode && !isDeleted && !deletePlantMutation.isPending,
   });
+
+  const isPlantSubresourceEnabled =
+    isPlantMode &&
+    Boolean(cleanPlantId) &&
+    !isDeleted &&
+    !deletePlantMutation.isPending &&
+    Boolean(plantQuery.data);
 
   const plantSchedulesQuery = usePlantSchedules(
     cleanPlantId,
@@ -97,12 +118,29 @@ export default function PlantDetailScreen() {
       size: 10,
     },
     {
-      enabled:
-        isPlantMode &&
-        Boolean(cleanPlantId) &&
-        !isDeleted &&
-        !deletePlantMutation.isPending &&
-        Boolean(plantQuery.data),
+      enabled: isPlantSubresourceEnabled,
+    }
+  );
+
+  const plantCareLogsQuery = usePlantCareLogs(
+    cleanPlantId,
+    {
+      page: careLogPage,
+      size: 20,
+    },
+    {
+      enabled: isPlantSubresourceEnabled,
+    }
+  );
+
+  const plantJournalsQuery = usePlantJournals(
+    cleanPlantId,
+    {
+      page: journalPage,
+      size: 20,
+    },
+    {
+      enabled: isPlantSubresourceEnabled,
     }
   );
 
@@ -125,6 +163,10 @@ export default function PlantDetailScreen() {
       setDeleteError(null);
       setScheduleStatusFilter('');
       setSchedulePage(0);
+      setCareLogPage(0);
+      setJournalPage(0);
+      setDeletingJournalId(null);
+      setJournalActionError(null);
     }
   }, [currentUserId]);
 
@@ -134,12 +176,27 @@ export default function PlantDetailScreen() {
     setDeleteError(null);
     setScheduleStatusFilter('');
     setSchedulePage(0);
+    setCareLogPage(0);
+    setJournalPage(0);
+    setDeletingJournalId(null);
+    setJournalActionError(null);
   }, [cleanPlantId]);
 
   const schedulesData = plantSchedulesQuery.data;
   const isSchedulesFetching = plantSchedulesQuery.isFetching;
   const isSchedulesPlaceholder = plantSchedulesQuery.isPlaceholderData;
   const isSchedulesError = plantSchedulesQuery.isError;
+
+  const careLogsData = plantCareLogsQuery.data;
+  const isCareLogsFetching = plantCareLogsQuery.isFetching;
+  const isCareLogsPlaceholder = plantCareLogsQuery.isPlaceholderData;
+  const isCareLogsError = plantCareLogsQuery.isError;
+
+  const journalsData = plantJournalsQuery.data;
+  const isJournalsFetching = plantJournalsQuery.isFetching;
+  const isJournalsPlaceholder = plantJournalsQuery.isPlaceholderData;
+  const isJournalsError = plantJournalsQuery.isError;
+
   const hasPlantData = Boolean(plantQuery.data);
 
   useEffect(() => {
@@ -170,6 +227,66 @@ export default function PlantDetailScreen() {
     isSchedulesFetching,
     isSchedulesPlaceholder,
     isSchedulesError,
+  ]);
+
+  useEffect(() => {
+    if (!isPlantMode || !cleanPlantId || isDeleted || !hasPlantData) {
+      return;
+    }
+    if (isCareLogsFetching || isCareLogsPlaceholder || isCareLogsError || !careLogsData) {
+      return;
+    }
+    const rawTotalPages = careLogsData.totalPages;
+    if (typeof rawTotalPages !== 'number' || !Number.isFinite(rawTotalPages)) {
+      return;
+    }
+    const totalPages = Math.max(0, Math.trunc(rawTotalPages));
+    if (careLogPage < 0 || careLogPage >= totalPages) {
+      const nextPage = careLogPage < 0 || totalPages === 0 ? 0 : totalPages - 1;
+      if (nextPage !== careLogPage) {
+        setCareLogPage(nextPage);
+      }
+    }
+  }, [
+    isPlantMode,
+    cleanPlantId,
+    isDeleted,
+    hasPlantData,
+    careLogPage,
+    careLogsData,
+    isCareLogsFetching,
+    isCareLogsPlaceholder,
+    isCareLogsError,
+  ]);
+
+  useEffect(() => {
+    if (!isPlantMode || !cleanPlantId || isDeleted || !hasPlantData) {
+      return;
+    }
+    if (isJournalsFetching || isJournalsPlaceholder || isJournalsError || !journalsData) {
+      return;
+    }
+    const rawTotalPages = journalsData.totalPages;
+    if (typeof rawTotalPages !== 'number' || !Number.isFinite(rawTotalPages)) {
+      return;
+    }
+    const totalPages = Math.max(0, Math.trunc(rawTotalPages));
+    if (journalPage < 0 || journalPage >= totalPages) {
+      const nextPage = journalPage < 0 || totalPages === 0 ? 0 : totalPages - 1;
+      if (nextPage !== journalPage) {
+        setJournalPage(nextPage);
+      }
+    }
+  }, [
+    isPlantMode,
+    cleanPlantId,
+    isDeleted,
+    hasPlantData,
+    journalPage,
+    journalsData,
+    isJournalsFetching,
+    isJournalsPlaceholder,
+    isJournalsError,
   ]);
 
   const hasActiveScheduleForClock =
@@ -203,6 +320,16 @@ export default function PlantDetailScreen() {
     const scheduleTotalElements = schedulesData?.totalElements ?? 0;
     const scheduleTotalPages = schedulesData?.totalPages ?? 0;
     const displayScheduleTotalPages = Math.max(1, scheduleTotalPages, schedulePage + 1);
+
+    const visibleCareLogs = careLogsData?.content ?? [];
+    const careLogTotalElements = careLogsData?.totalElements ?? 0;
+    const careLogTotalPages = careLogsData?.totalPages ?? 0;
+    const displayCareLogTotalPages = Math.max(1, careLogTotalPages, careLogPage + 1);
+
+    const visibleJournals = journalsData?.content ?? [];
+    const journalTotalElements = journalsData?.totalElements ?? 0;
+    const journalTotalPages = journalsData?.totalPages ?? 0;
+    const displayJournalTotalPages = Math.max(1, journalTotalPages, journalPage + 1);
 
     if (plantQuery.isLoading && !plant) {
       return (
@@ -346,6 +473,53 @@ export default function PlantDetailScreen() {
                     return;
                   }
                   setDeleteError('Không thể xóa cây trồng. Vui lòng thử lại.');
+                });
+            },
+          },
+        ]
+      );
+    };
+
+    const handleRequestDeleteJournal = (item: GrowthJournalDto) => {
+      const initiatedGeneration = getSessionGeneration();
+      const initiatedByUserId = currentUserIdRef.current;
+      const hasSwitchedSession = () =>
+        getSessionGeneration() !== initiatedGeneration ||
+        (Boolean(initiatedByUserId) && currentUserIdRef.current !== initiatedByUserId);
+
+      Alert.alert(
+        'Xác nhận xóa nhật ký',
+        'Bạn có chắc chắn muốn xóa bản ghi nhật ký phát triển này? Thao tác không thể hoàn tác.',
+        [
+          { text: 'Hủy', style: 'cancel' },
+          {
+            text: 'Xóa',
+            style: 'destructive',
+            onPress: () => {
+              if (hasSwitchedSession()) {
+                return;
+              }
+              setJournalActionError(null);
+              setDeletingJournalId(item.id);
+              void deleteJournalMutation
+                .mutateAsync({ journalId: item.id, plantId: plant.id })
+                .catch((err) => {
+                  if (hasSwitchedSession()) {
+                    return;
+                  }
+                  if (err instanceof AppApiError) {
+                    if (err.code === 'SESSION_USER_MISMATCH') {
+                      return;
+                    }
+                    setJournalActionError(err.message);
+                    return;
+                  }
+                  setJournalActionError('Không thể xóa nhật ký. Vui lòng thử lại.');
+                })
+                .finally(() => {
+                  if (!hasSwitchedSession()) {
+                    setDeletingJournalId(null);
+                  }
                 });
             },
           },
@@ -671,6 +845,372 @@ export default function PlantDetailScreen() {
                         (Boolean(schedulesData?.last) || isSchedulesFetching) && d.buttonDisabled,
                       ]}
                       accessibilityRole="button"
+                    >
+                      <Text style={d.pageButtonText}>Trang sau</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+              </>
+            )}
+          </View>
+
+          <View style={d.card}>
+            <View style={d.scheduleSectionHeader}>
+              <View style={d.scheduleHeaderCopy}>
+                <Text style={d.sectionTitle}>Lịch sử chăm sóc</Text>
+                <Text style={d.scheduleCountHint}>
+                  {plantCareLogsQuery.isLoading || (!careLogsData && !isCareLogsError)
+                    ? 'Đang tải...'
+                    : `${careLogTotalElements} lượt`}
+                </Text>
+              </View>
+              <Pressable
+                disabled={deletePlantMutation.isPending}
+                onPress={() =>
+                  router.push({
+                    pathname: '/care-log/new',
+                    params: { plantId: plant.id },
+                  } as never)
+                }
+                accessibilityRole="button"
+                accessibilityLabel="Ghi nhận chăm sóc cho cây này"
+                accessibilityState={{ disabled: deletePlantMutation.isPending }}
+                style={[d.addScheduleBtn, deletePlantMutation.isPending && d.buttonDisabled]}
+              >
+                <Text style={d.addScheduleBtnText}>＋ Ghi nhận chăm sóc</Text>
+              </Pressable>
+            </View>
+
+            {plantCareLogsQuery.isLoading ? (
+              <View style={d.scheduleStateBox}>
+                <ActivityIndicator size="small" color={C.primary} />
+                <Text style={d.stateBody}>Đang tải lịch sử chăm sóc của cây...</Text>
+              </View>
+            ) : isCareLogsError ? (
+              <View style={d.scheduleStateBox} accessibilityRole="alert">
+                <Text style={d.stateBody}>
+                  {plantCareLogsQuery.error?.message || 'Không thể tải lịch sử chăm sóc của cây.'}
+                </Text>
+                <Pressable
+                  onPress={() => {
+                    void plantCareLogsQuery.refetch();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Thử lại tải lịch sử chăm sóc"
+                  style={d.secondaryButton}
+                >
+                  <Text style={d.secondaryText}>Thử lại</Text>
+                </Pressable>
+              </View>
+            ) : !careLogsData ? (
+              <View style={d.scheduleStateBox}>
+                <ActivityIndicator size="small" color={C.primary} />
+                <Text style={d.stateBody}>Đang tải lịch sử chăm sóc của cây...</Text>
+              </View>
+            ) : visibleCareLogs.length === 0 ? (
+              careLogTotalElements > 0 || isCareLogsFetching || isCareLogsPlaceholder ? (
+                <View style={d.scheduleStateBox}>
+                  <ActivityIndicator size="small" color={C.primary} />
+                  <Text style={d.stateBody}>Đang cập nhật lịch sử chăm sóc...</Text>
+                </View>
+              ) : (
+                <View style={d.scheduleStateBox}>
+                  <Text style={d.stateBody}>Chưa có lịch sử chăm sóc cho cây này.</Text>
+                </View>
+              )
+            ) : (
+              <>
+                {visibleCareLogs.map((log) => {
+                  const taskMeta = getTaskTypeMeta(log.taskType);
+                  const logStatus = getCareLogStatusMeta(log.status);
+                  const logToneStyle = logStatus.tone === 'plain' ? d.tagPlain : undefined;
+                  const logTextToneStyle = logStatus.tone === 'plain' ? d.tagPlainText : undefined;
+
+                  return (
+                    <View key={log.id} style={d.scheduleRow}>
+                      <View style={d.scheduleRowTop}>
+                        <View style={d.scheduleRowCopy}>
+                          <Text style={d.scheduleRowTitle}>
+                            {taskMeta.icon} {taskMeta.label}
+                          </Text>
+                        </View>
+                        <Text style={[d.tag, logToneStyle, logTextToneStyle]}>
+                          {logStatus.label}
+                        </Text>
+                      </View>
+                      <Text style={d.scheduleSubText}>
+                        Thời điểm: {formatIsoDateTimeVn(log.performedAt)}
+                      </Text>
+                      {log.note ? <Text style={d.scheduleSubText}>{log.note}</Text> : null}
+                      {log.imageUrls.length > 0 ? (
+                        <ScrollView
+                          horizontal
+                          showsHorizontalScrollIndicator={false}
+                          contentContainerStyle={d.photoRow}
+                        >
+                          {log.imageUrls.map((url, idx) => (
+                            <Image
+                              key={`${log.id}-img-${idx}`}
+                              source={{ uri: url }}
+                              style={d.photoImage}
+                              contentFit="cover"
+                            />
+                          ))}
+                        </ScrollView>
+                      ) : null}
+                    </View>
+                  );
+                })}
+
+                {careLogTotalPages > 1 || careLogPage > 0 ? (
+                  <View style={d.paginationRow}>
+                    <Pressable
+                      disabled={careLogPage <= 0 || isCareLogsFetching}
+                      onPress={() => setCareLogPage(Math.max(0, careLogPage - 1))}
+                      style={[
+                        d.pageButton,
+                        (careLogPage <= 0 || isCareLogsFetching) && d.buttonDisabled,
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityLabel="Trang trước lịch sử chăm sóc"
+                    >
+                      <Text style={d.pageButtonText}>Trang trước</Text>
+                    </Pressable>
+                    <Text style={d.scheduleSubText}>
+                      Trang {careLogPage + 1} / {displayCareLogTotalPages}
+                    </Text>
+                    <Pressable
+                      disabled={Boolean(careLogsData?.last) || isCareLogsFetching}
+                      onPress={() => setCareLogPage(careLogPage + 1)}
+                      style={[
+                        d.pageButton,
+                        (Boolean(careLogsData?.last) || isCareLogsFetching) && d.buttonDisabled,
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityLabel="Trang sau lịch sử chăm sóc"
+                    >
+                      <Text style={d.pageButtonText}>Trang sau</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+              </>
+            )}
+          </View>
+
+          <View style={d.card}>
+            <View style={d.scheduleSectionHeader}>
+              <View style={d.scheduleHeaderCopy}>
+                <Text style={d.sectionTitle}>Nhật ký phát triển</Text>
+                <Text style={d.scheduleCountHint}>
+                  {plantJournalsQuery.isLoading || (!journalsData && !isJournalsError)
+                    ? 'Đang tải...'
+                    : `${journalTotalElements} ghi nhận`}
+                </Text>
+              </View>
+              <Pressable
+                disabled={deletePlantMutation.isPending}
+                onPress={() =>
+                  router.push({
+                    pathname: '/journal/new',
+                    params: { plantId: plant.id },
+                  } as never)
+                }
+                accessibilityRole="button"
+                accessibilityLabel="Thêm nhật ký cho cây này"
+                accessibilityState={{ disabled: deletePlantMutation.isPending }}
+                style={[d.addScheduleBtn, deletePlantMutation.isPending && d.buttonDisabled]}
+              >
+                <Text style={d.addScheduleBtnText}>＋ Thêm nhật ký</Text>
+              </Pressable>
+            </View>
+
+            {journalActionError ? (
+              <View style={d.errorBanner} accessibilityRole="alert">
+                <Text style={d.errorBannerText}>{journalActionError}</Text>
+                <Pressable onPress={() => setJournalActionError(null)} accessibilityRole="button">
+                  <Text style={d.dismissText}>Đóng</Text>
+                </Pressable>
+              </View>
+            ) : null}
+
+            {plantJournalsQuery.isLoading ? (
+              <View style={d.scheduleStateBox}>
+                <ActivityIndicator size="small" color={C.primary} />
+                <Text style={d.stateBody}>Đang tải nhật ký phát triển của cây...</Text>
+              </View>
+            ) : isJournalsError ? (
+              <View style={d.scheduleStateBox} accessibilityRole="alert">
+                <Text style={d.stateBody}>
+                  {plantJournalsQuery.error?.message || 'Không thể tải nhật ký phát triển của cây.'}
+                </Text>
+                <Pressable
+                  onPress={() => {
+                    void plantJournalsQuery.refetch();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Thử lại tải nhật ký phát triển"
+                  style={d.secondaryButton}
+                >
+                  <Text style={d.secondaryText}>Thử lại</Text>
+                </Pressable>
+              </View>
+            ) : !journalsData ? (
+              <View style={d.scheduleStateBox}>
+                <ActivityIndicator size="small" color={C.primary} />
+                <Text style={d.stateBody}>Đang tải nhật ký phát triển của cây...</Text>
+              </View>
+            ) : visibleJournals.length === 0 ? (
+              journalTotalElements > 0 || isJournalsFetching || isJournalsPlaceholder ? (
+                <View style={d.scheduleStateBox}>
+                  <ActivityIndicator size="small" color={C.primary} />
+                  <Text style={d.stateBody}>Đang cập nhật nhật ký phát triển...</Text>
+                </View>
+              ) : (
+                <View style={d.scheduleStateBox}>
+                  <Text style={d.stateBody}>Chưa có nhật ký phát triển cho cây này.</Text>
+                </View>
+              )
+            ) : (
+              <>
+                {visibleJournals.map((entry) => {
+                  const entryMeta = getEntryTypeMeta(entry.entryType);
+                  const entryHealth = getJournalHealthStatusMeta(entry.healthStatus);
+                  const isDeletingEntry =
+                    deleteJournalMutation.isPending && deletingJournalId === entry.id;
+                  const entryToneStyle =
+                    entryHealth.tone === 'peach'
+                      ? d.tagWarning
+                      : entryHealth.tone === 'danger'
+                        ? d.tagDanger
+                        : undefined;
+                  const entryTextToneStyle =
+                    entryHealth.tone === 'peach'
+                      ? d.tagWarningText
+                      : entryHealth.tone === 'danger'
+                        ? d.tagDangerText
+                        : undefined;
+
+                  return (
+                    <View key={entry.id} style={d.scheduleRow}>
+                      <View style={d.scheduleRowTop}>
+                        <View style={d.scheduleRowCopy}>
+                          <Text style={d.scheduleRowTitle}>
+                            {entryMeta.icon} {entryMeta.label}
+                          </Text>
+                        </View>
+                        <Text style={[d.tag, entryToneStyle, entryTextToneStyle]}>
+                          {entryHealth.label}
+                        </Text>
+                      </View>
+                      <Text style={d.scheduleSubText}>
+                        Ghi nhận: {formatIsoDateTimeVn(entry.recordedAt)}
+                      </Text>
+                      <Text style={d.scheduleSubText}>{entry.note}</Text>
+                      {entry.imageUrls.length > 0 ? (
+                        <ScrollView
+                          horizontal
+                          showsHorizontalScrollIndicator={false}
+                          contentContainerStyle={d.photoRow}
+                        >
+                          {entry.imageUrls.map((url, idx) => (
+                            <Image
+                              key={`${entry.id}-img-${idx}`}
+                              source={{ uri: url }}
+                              style={d.photoImage}
+                              contentFit="cover"
+                            />
+                          ))}
+                        </ScrollView>
+                      ) : null}
+                      <View style={d.entryActions}>
+                        <Pressable
+                          disabled={
+                            deletePlantMutation.isPending || deleteJournalMutation.isPending
+                          }
+                          onPress={() =>
+                            router.push({
+                              pathname: '/journal/detail',
+                              params: { plantId: plant.id, journalId: entry.id },
+                            } as never)
+                          }
+                          accessibilityRole="button"
+                          accessibilityLabel={`Chi tiết nhật ký ${entryMeta.label}`}
+                          accessibilityState={{
+                            disabled:
+                              deletePlantMutation.isPending || deleteJournalMutation.isPending,
+                          }}
+                          style={d.inlineLinkButton}
+                        >
+                          <Text style={d.inlineLinkText}>Chi tiết ›</Text>
+                        </Pressable>
+                        <Pressable
+                          disabled={
+                            deletePlantMutation.isPending || deleteJournalMutation.isPending
+                          }
+                          onPress={() =>
+                            router.push({
+                              pathname: '/journal/edit',
+                              params: { plantId: plant.id, journalId: entry.id },
+                            } as never)
+                          }
+                          accessibilityRole="button"
+                          accessibilityLabel={`Chỉnh sửa nhật ký ${entryMeta.label}`}
+                          accessibilityState={{
+                            disabled:
+                              deletePlantMutation.isPending || deleteJournalMutation.isPending,
+                          }}
+                          style={d.inlineLinkButton}
+                        >
+                          <Text style={d.inlineLinkText}>Sửa</Text>
+                        </Pressable>
+                        <Pressable
+                          disabled={
+                            deletePlantMutation.isPending || deleteJournalMutation.isPending
+                          }
+                          onPress={() => handleRequestDeleteJournal(entry)}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Xóa nhật ký ${entryMeta.label}`}
+                          accessibilityState={{
+                            disabled:
+                              deletePlantMutation.isPending || deleteJournalMutation.isPending,
+                          }}
+                          style={d.inlineLinkButton}
+                        >
+                          <Text style={d.dangerLink}>
+                            {isDeletingEntry ? 'Đang xóa...' : 'Xóa'}
+                          </Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  );
+                })}
+
+                {journalTotalPages > 1 || journalPage > 0 ? (
+                  <View style={d.paginationRow}>
+                    <Pressable
+                      disabled={journalPage <= 0 || isJournalsFetching}
+                      onPress={() => setJournalPage(Math.max(0, journalPage - 1))}
+                      style={[
+                        d.pageButton,
+                        (journalPage <= 0 || isJournalsFetching) && d.buttonDisabled,
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityLabel="Trang trước nhật ký phát triển"
+                    >
+                      <Text style={d.pageButtonText}>Trang trước</Text>
+                    </Pressable>
+                    <Text style={d.scheduleSubText}>
+                      Trang {journalPage + 1} / {displayJournalTotalPages}
+                    </Text>
+                    <Pressable
+                      disabled={Boolean(journalsData?.last) || isJournalsFetching}
+                      onPress={() => setJournalPage(journalPage + 1)}
+                      style={[
+                        d.pageButton,
+                        (Boolean(journalsData?.last) || isJournalsFetching) && d.buttonDisabled,
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityLabel="Trang sau nhật ký phát triển"
                     >
                       <Text style={d.pageButtonText}>Trang sau</Text>
                     </Pressable>
@@ -1137,4 +1677,8 @@ const d = StyleSheet.create({
   },
   pageButton: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8, backgroundColor: C.softSurface },
   pageButtonText: { color: C.forest, fontFamily: F.semiBold, fontSize: 11 },
+  photoRow: { flexDirection: 'row', gap: 6, paddingTop: 4 },
+  photoImage: { width: 64, height: 64, borderRadius: 8, backgroundColor: '#E4F0E7' },
+  entryActions: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingTop: 2 },
+  dangerLink: { color: '#B42318', fontFamily: F.semiBold, fontSize: 11 },
 });

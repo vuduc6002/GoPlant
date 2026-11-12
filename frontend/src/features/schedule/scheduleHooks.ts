@@ -268,6 +268,41 @@ function isOwnerPlantScheduleQuery(
   return true;
 }
 
+function resolveSchedulePlantId(
+  qc: ReturnType<typeof useQueryClient>,
+  ownerUserId: string,
+  scheduleId: string,
+  explicitPlantId?: string
+): string | undefined {
+  const cleanExplicit = explicitPlantId?.trim();
+  if (cleanExplicit) {
+    return cleanExplicit;
+  }
+
+  const todayList = qc.getQueryData<TodayScheduleItemDto[]>(
+    queryKeys.schedules.today(ownerUserId)
+  );
+  if (Array.isArray(todayList)) {
+    const todayMatch = todayList.find((item) => item.scheduleId === scheduleId);
+    if (todayMatch?.plantId?.trim()) {
+      return todayMatch.plantId.trim();
+    }
+  }
+
+  const plantScheduleEntries = qc.getQueriesData<PageResponse<CareScheduleDto>>({
+    predicate: (query) => isOwnerPlantScheduleQuery(query, ownerUserId),
+  });
+  for (const [, pageData] of plantScheduleEntries) {
+    if (!pageData || !Array.isArray(pageData.content)) continue;
+    const match = pageData.content.find((item) => item.id === scheduleId);
+    if (match?.userPlantId?.trim()) {
+      return match.userPlantId.trim();
+    }
+  }
+
+  return undefined;
+}
+
 function getQueryFilterStatus(queryKey: QueryKey): ScheduleStatus | undefined {
   if (!Array.isArray(queryKey) || queryKey.length < 6) {
     return undefined;
@@ -937,6 +972,7 @@ export function useCompleteScheduleMutation() {
 
       const cleanId = vars.scheduleId.trim();
       const targetPlantId = vars.plantId?.trim() || undefined;
+      const resolvedPlantId = resolveSchedulePlantId(qc, ownerUserId, cleanId, targetPlantId);
 
       syncCompletedOrSkippedScheduleInCaches(qc, ownerUserId, cleanId, result, targetPlantId);
 
@@ -948,6 +984,16 @@ export function useCompleteScheduleMutation() {
       } else {
         qc.invalidateQueries({
           predicate: (query) => isOwnerPlantScheduleQuery(query, ownerUserId),
+        });
+      }
+
+      if (resolvedPlantId) {
+        qc.invalidateQueries({
+          queryKey: queryKeys.careLogs.plantBase(ownerUserId, resolvedPlantId),
+        });
+      } else {
+        qc.invalidateQueries({
+          queryKey: queryKeys.careLogs.plants(ownerUserId),
         });
       }
     },
@@ -1056,6 +1102,7 @@ export function useSkipScheduleMutation() {
 
       const cleanId = vars.scheduleId.trim();
       const targetPlantId = vars.plantId?.trim() || undefined;
+      const resolvedPlantId = resolveSchedulePlantId(qc, ownerUserId, cleanId, targetPlantId);
 
       syncCompletedOrSkippedScheduleInCaches(qc, ownerUserId, cleanId, result, targetPlantId);
 
@@ -1067,6 +1114,16 @@ export function useSkipScheduleMutation() {
       } else {
         qc.invalidateQueries({
           predicate: (query) => isOwnerPlantScheduleQuery(query, ownerUserId),
+        });
+      }
+
+      if (resolvedPlantId) {
+        qc.invalidateQueries({
+          queryKey: queryKeys.careLogs.plantBase(ownerUserId, resolvedPlantId),
+        });
+      } else {
+        qc.invalidateQueries({
+          queryKey: queryKeys.careLogs.plants(ownerUserId),
         });
       }
     },

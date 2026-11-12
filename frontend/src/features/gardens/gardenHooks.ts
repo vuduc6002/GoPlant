@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, type MutableRefObject } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/features/auth/AuthProvider';
+import type { UserPlantDetailDto, UserPlantSummaryDto } from '@/features/plants/plantTypes';
 import type { TodayScheduleItemDto } from '@/features/schedule/scheduleTypes';
 import { AppApiError } from '@/services/api/apiError';
-import type { SimpleMessageResponseDto } from '@/services/api/apiTypes';
+import type { PageResponse, SimpleMessageResponseDto } from '@/services/api/apiTypes';
 import { getSession, getSessionGeneration } from '@/services/api/tokenStorage';
-import { queryKeys } from '@/services/query/queryKeys';
+import { queryKeys, type UserPlantListQueryKeyParams } from '@/services/query/queryKeys';
 import {
   createGarden,
   deleteGarden,
@@ -476,6 +477,30 @@ export function useDeleteGardenMutation() {
         Array.isArray(cachedDetail?.plants) ? cachedDetail.plants.map((p) => p.id) : []
       );
 
+      const plantDetailEntries = qc.getQueriesData<UserPlantDetailDto>({
+        queryKey: queryKeys.plants.details(ownerUserId),
+      });
+      for (const [key, plantDetail] of plantDetailEntries) {
+        if (Array.isArray(key) && key.length === 4 && plantDetail?.garden?.id === cleanId) {
+          deletedPlantIds.add(plantDetail.id);
+        }
+      }
+
+      const plantListEntries = qc.getQueriesData<PageResponse<UserPlantSummaryDto>>({
+        queryKey: queryKeys.plants.lists(ownerUserId),
+      });
+      for (const [key, pageData] of plantListEntries) {
+        if (!Array.isArray(key) || key.length < 4) continue;
+        const listParams = key[3] as Partial<UserPlantListQueryKeyParams> | undefined;
+        if (listParams?.gardenId === cleanId && Array.isArray(pageData?.content)) {
+          for (const plant of pageData.content) {
+            if (plant.id) {
+              deletedPlantIds.add(plant.id);
+            }
+          }
+        }
+      }
+
       await qc.cancelQueries({
         queryKey: queryKeys.gardens.detail(ownerUserId, cleanId),
         exact: true,
@@ -492,6 +517,18 @@ export function useDeleteGardenMutation() {
           queryKey: queryKeys.plants.schedulesBase(ownerUserId, plantId),
         });
         await qc.cancelQueries({
+          queryKey: queryKeys.careLogs.plantBase(ownerUserId, plantId),
+        });
+        qc.removeQueries({
+          queryKey: queryKeys.careLogs.plantBase(ownerUserId, plantId),
+        });
+        await qc.cancelQueries({
+          queryKey: queryKeys.journals.plantBase(ownerUserId, plantId),
+        });
+        qc.removeQueries({
+          queryKey: queryKeys.journals.plantBase(ownerUserId, plantId),
+        });
+        await qc.cancelQueries({
           queryKey: queryKeys.plants.detail(ownerUserId, plantId),
           exact: true,
         });
@@ -504,6 +541,9 @@ export function useDeleteGardenMutation() {
         qc.setQueryData<TodayScheduleItemDto[]>(queryKeys.schedules.today(ownerUserId), (old) =>
           Array.isArray(old) ? old.filter((item) => !deletedPlantIds.has(item.plantId)) : old
         );
+      } else {
+        qc.invalidateQueries({ queryKey: queryKeys.careLogs.plants(ownerUserId) });
+        qc.invalidateQueries({ queryKey: queryKeys.journals.plants(ownerUserId) });
       }
       qc.setQueryData<GardenSummaryDto[]>(queryKeys.gardens.list(ownerUserId), (old) => {
         if (!Array.isArray(old)) return old;
