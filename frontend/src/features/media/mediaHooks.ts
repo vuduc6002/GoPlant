@@ -61,7 +61,20 @@ export function useMediaReadUrl(
 
   return useQuery<MediaReadUrlResponse, AppApiError>({
     queryKey: queryKeys.media.readUrl(cacheOwner, mediaId || ''),
-    queryFn: () => getMediaReadUrl(mediaId!, { expectedUserId: userId }),
+    queryFn: async () => {
+      const startGeneration = getSessionGeneration();
+      const response = await getMediaReadUrl(mediaId!, {
+        expectedUserId: userId,
+        expectedSessionGeneration: startGeneration,
+      });
+      if (getSessionGeneration() !== startGeneration) {
+        throw new AppApiError({
+          message: 'Phiên người dùng đã thay đổi trong khi đang xử lý.',
+          code: 'SESSION_USER_MISMATCH',
+        });
+      }
+      return response;
+    },
     enabled: isEnabled,
     staleTime: 4 * 60 * 1000, // 4 minutes (signed URLs expire in 5 minutes)
     gcTime: 5 * 60 * 1000,
@@ -92,7 +105,15 @@ export function useUploadMediaMutation() {
     };
   }, [status, user]);
 
-  return useMutation<MediaItem, AppApiError, LocalImageFile>({
+  return useMutation<
+    MediaItem,
+    AppApiError,
+    LocalImageFile,
+    { ownerUserId: string; sessionGeneration: number }
+  >({
+    onMutate: async () => {
+      return resolveMutationSessionOwner(latestAuthRef);
+    },
     mutationFn: async (file: LocalImageFile) => {
       const { ownerUserId, sessionGeneration } =
         await resolveMutationSessionOwner(latestAuthRef);
@@ -102,13 +123,21 @@ export function useUploadMediaMutation() {
         expectedSessionGeneration: sessionGeneration,
       });
     },
-    onSuccess: (data) => {
-      const ownerUserId = latestAuthRef.current.userId;
-      if (ownerUserId) {
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.media.all(ownerUserId),
-        });
+    onSuccess: (data, variables, context) => {
+      const currentUserId = latestAuthRef.current.userId;
+      const currentGeneration = getSessionGeneration();
+      if (
+        !context ||
+        currentUserId !== context.ownerUserId ||
+        currentGeneration !== context.sessionGeneration
+      ) {
+        // User switched (A -> B) or logged out while upload was in flight.
+        // Discard result and prevent cache pollution for User B.
+        return;
       }
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.media.all(context.ownerUserId),
+      });
     },
   });
 }
@@ -136,7 +165,15 @@ export function useDeleteMediaMutation() {
     };
   }, [status, user]);
 
-  return useMutation<SimpleMessageResponseDto, AppApiError, string>({
+  return useMutation<
+    SimpleMessageResponseDto,
+    AppApiError,
+    string,
+    { ownerUserId: string; sessionGeneration: number }
+  >({
+    onMutate: async () => {
+      return resolveMutationSessionOwner(latestAuthRef);
+    },
     mutationFn: async (mediaId: string) => {
       const { ownerUserId, sessionGeneration } =
         await resolveMutationSessionOwner(latestAuthRef);
@@ -146,16 +183,24 @@ export function useDeleteMediaMutation() {
         expectedSessionGeneration: sessionGeneration,
       });
     },
-    onSuccess: (_, mediaId) => {
-      const ownerUserId = latestAuthRef.current.userId;
-      if (ownerUserId) {
-        queryClient.removeQueries({
-          queryKey: queryKeys.media.readUrl(ownerUserId, mediaId),
-        });
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.media.all(ownerUserId),
-        });
+    onSuccess: (_, mediaId, context) => {
+      const currentUserId = latestAuthRef.current.userId;
+      const currentGeneration = getSessionGeneration();
+      if (
+        !context ||
+        currentUserId !== context.ownerUserId ||
+        currentGeneration !== context.sessionGeneration
+      ) {
+        // User switched (A -> B) or logged out while delete was in flight.
+        // Discard result and prevent cache pollution for User B.
+        return;
       }
+      queryClient.removeQueries({
+        queryKey: queryKeys.media.readUrl(context.ownerUserId, mediaId),
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.media.all(context.ownerUserId),
+      });
     },
   });
 }

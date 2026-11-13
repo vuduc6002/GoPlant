@@ -24,8 +24,8 @@ public class MediaUrlValidator {
         "^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$"
     );
 
-    private static final Pattern NUMERIC_HOST_PATTERN = Pattern.compile(
-        "^(?:0x[0-9a-fA-F]+|0[0-7]+|\\d+)$"
+    private static final Pattern NUMERIC_SEGMENT_PATTERN = Pattern.compile(
+        "^(?:0x[0-9a-f]+|\\d+)$"
     );
 
     private final Set<String> allowedSchemes;
@@ -110,25 +110,55 @@ public class MediaUrlValidator {
             throw new ValidationException("Không được sử dụng URL trỏ tới máy chủ nội bộ hoặc localhost.", field);
         }
 
-        // Check numeric/obfuscated host (e.g. 2130706433, 017700000001, 0x7f000001)
-        if (NUMERIC_HOST_PATTERN.matcher(normalizedHost).matches()) {
-            throw new ValidationException("Địa chỉ IP dạng số nguyên hoặc mã hóa không được phép sử dụng.", field);
+        // Reject invalid dots (consecutive dots, leading dot)
+        if (normalizedHost.startsWith(".") || normalizedHost.contains("..")) {
+            throw new ValidationException("Tên máy chủ trong URL hình ảnh không hợp lệ.", field);
         }
 
-        // Check IPv4 literal
-        Matcher ipv4Matcher = IPV4_PATTERN.matcher(normalizedHost);
-        if (ipv4Matcher.matches()) {
-            int b0 = Integer.parseInt(ipv4Matcher.group(1));
-            int b1 = Integer.parseInt(ipv4Matcher.group(2));
-            int b2 = Integer.parseInt(ipv4Matcher.group(3));
-            int b3 = Integer.parseInt(ipv4Matcher.group(4));
-
-            if (b0 > 255 || b1 > 255 || b2 > 255 || b3 > 255) {
-                throw new ValidationException("Địa chỉ IPv4 không hợp lệ.", field);
+        // Check if host consists entirely of numeric/hex/octal segments (SSRF defense against obfuscated/short IPs)
+        String[] hostParts = normalizedHost.split("\\.", -1);
+        boolean allNumericSegments = true;
+        for (String part : hostParts) {
+            if (part.isEmpty() || !NUMERIC_SEGMENT_PATTERN.matcher(part).matches()) {
+                allNumericSegments = false;
+                break;
             }
+        }
 
-            if (isPrivateOrReservedIpv4(b0, b1, b2, b3)) {
-                throw new ValidationException("Không được sử dụng URL trỏ tới dải địa chỉ IP riêng tư hoặc bảo lưu (" + normalizedHost + ").", field);
+        if (allNumericSegments) {
+            // Check if it is a canonical 4-octet IPv4 (each octet 0-255, no hex, no leading zeroes except "0")
+            if (hostParts.length == 4) {
+                boolean canonicalDecimal = true;
+                int[] octets = new int[4];
+                for (int i = 0; i < 4; i++) {
+                    String part = hostParts[i];
+                    if (part.startsWith("0x") || (part.length() > 1 && part.startsWith("0"))) {
+                        canonicalDecimal = false;
+                        break;
+                    }
+                    try {
+                        long val = Long.parseLong(part);
+                        if (val < 0 || val > 255) {
+                            canonicalDecimal = false;
+                            break;
+                        }
+                        octets[i] = (int) val;
+                    } catch (NumberFormatException e) {
+                        canonicalDecimal = false;
+                        break;
+                    }
+                }
+
+                if (!canonicalDecimal) {
+                    throw new ValidationException("Địa chỉ IP dạng số nguyên hoặc mã hóa không được phép sử dụng.", field);
+                }
+
+                if (isPrivateOrReservedIpv4(octets[0], octets[1], octets[2], octets[3])) {
+                    throw new ValidationException("Không được sử dụng URL trỏ tới dải địa chỉ IP riêng tư hoặc bảo lưu (" + normalizedHost + ").", field);
+                }
+            } else {
+                // Short, integer, or invalid numeric IP format (e.g. 127.1, 127.0.1, 0x7f.1, 2130706433)
+                throw new ValidationException("Địa chỉ IP dạng số nguyên hoặc mã hóa không được phép sử dụng.", field);
             }
         }
 

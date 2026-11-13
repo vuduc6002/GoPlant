@@ -5,9 +5,9 @@ GoPlant là giải pháp ứng dụng di động hỗ trợ người dùng số 
 Kiến trúc mục tiêu của dự án là **Ứng dụng di động React Native + Expo (Android) kết nối qua RESTful API với Backend Spring Boot và cơ sở dữ liệu Supabase PostgreSQL**.
 
 > **Trạng thái phát triển hiện tại (Giai đoạn 5 — Hoàn thành G5.5.2b Private Media Storage & Secure Image Upload Pipeline):**
-> - **Frontend (`frontend/`):** Xây dựng trên **React Native (`0.86.3`) + Expo SDK `57.0.32` + Expo Router + TypeScript Strict + Axios + TanStack React Query v5 + Expo SecureStore**. Đã hoàn thành Auth & Bảo mật, Species, Gardens, User Plants, Care Schedules, Care Logs, Growth Journals, Monitoring MVP G5.5.1, Camera Metadata CRUD G5.5.2a, và Media Client/Hooks G5.5.2b. Bộ kiểm thử tự động đạt **245/245 Vitest tests** (`12` file kiểm thử) cùng `typecheck` và `eslint` đều pass `0 errors, 0 warnings`.
-> - **Backend (`backend/`):** Hoàn thành Backend **Java 21 + Spring Boot `4.1.1`** với đầy đủ **49/49 RESTful API** (40 API Core MVP + 2 API Monitoring G5.5.1 + 4 API Cameras G5.5.2a + 3 API Media G5.5.2b), bảo mật JWT, phân quyền, kiểm soát sở hữu, `MediaUrlValidator` chống SSRF, bộ xử lý ảnh `ImageMetadataProcessor` (pure Java, magic bytes, stripping EXIF GPS/thiết bị, xoay upright, SHA-256), gateway Supabase Private Bucket, Flyway Migrations `V1__initial_schema.sql` và `V2__media_objects.sql`. Đạt **197/197 Unit & Integration Tests**.
-> - **Cơ sở dữ liệu & Đặc tả (`docs/`):** Thiết kế chuẩn hóa 12 bảng (`media_objects`), hợp đồng REST (`docs/api/api-contract.md` v1.3.0, `openapi.yaml` v1.3.0 — 49 endpoints). Hỗ trợ H2 local in-memory (dev nhanh, tắt Flyway), PostgreSQL + Flyway (`postgres` profile trên CI) và Supabase PostgreSQL (`supabase` profile).
+> - **Frontend (`frontend/`):** Xây dựng trên **React Native (`0.86.3`) + Expo SDK `57.0.33` + Expo Router `~57.0.31` + TypeScript Strict + Axios + TanStack React Query v5 + Expo SecureStore**. Đã hoàn thành Auth & Bảo mật, Species, Gardens, User Plants, Care Schedules, Care Logs, Growth Journals, Monitoring MVP G5.5.1, Camera Metadata CRUD G5.5.2a, và Media Client/Hooks G5.5.2b. Bộ kiểm thử tự động đạt **251/251 Vitest tests** (`12` file kiểm thử) cùng `typecheck` và `eslint` đều pass `0 errors, 0 warnings`.
+> - **Backend (`backend/`):** Hoàn thành Backend **Java 21 + Spring Boot `4.1.1`** với đầy đủ **49/49 RESTful API** (40 API Core MVP + 2 API Monitoring G5.5.1 + 4 API Cameras G5.5.2a + 3 API Media G5.5.2b), bảo mật JWT, phân quyền, kiểm soát sở hữu, `MediaUrlValidator` chống SSRF (hỗ trợ chặn toàn diện IP số, rút gọn, hex, octal), bộ xử lý ảnh `ImageMetadataProcessor` (pure Java, magic bytes, stripping EXIF GPS/thiết bị, xoay upright, SHA-256 VARCHAR(64)), gateway Supabase Private Bucket, điều phối giao dịch độc lập với cơ chế bồi hoàn lưu trữ (compensation delete), Flyway Migrations `V1__initial_schema.sql` và `V2__media_objects.sql`. Đạt **236/236 Unit & Integration Tests**.
+> - **Cơ sở dữ liệu & Đặc tả (`docs/`):** Thiết kế chuẩn hóa 12 bảng (`media_objects` với trường `sha256 VARCHAR(64)`), hợp đồng REST (`docs/api/api-contract.md` v1.3.0, `openapi.yaml` v1.3.0 — 49 endpoints). `MediaUrlValidator` đã triển khai đầy đủ; Rate Limiting hiện tại là đề xuất kiến trúc (Proposed). Hỗ trợ H2 local in-memory (dev nhanh, tắt Flyway), PostgreSQL + Flyway (`postgres` profile trên CI) và Supabase PostgreSQL (`supabase` profile).
 > - **Hướng dẫn chi tiết:** Xem thêm tại [docs/backend/backend-setup-guide.md](docs/backend/backend-setup-guide.md) và [frontend/README.md](frontend/README.md).
 
 ---
@@ -75,8 +75,8 @@ Bảng ma trận đối soát hiện trạng triển khai giữa Frontend, Backe
 
 ### 3.1. Phía Frontend Di động (`frontend/`)
 
-- **Nền tảng:** React Native `0.86.3` kết hợp **Expo SDK `57.0.32`** (Managed Workflow).
-- **Điều hướng:** Expo Router `~57.0.30` (File-based Routing trong `src/app/`).
+- **Nền tảng:** React Native `0.86.3` kết hợp **Expo SDK `57.0.33`** (Managed Workflow).
+- **Điều hướng:** Expo Router `~57.0.31` (File-based Routing trong `src/app/`).
 - **Ngôn ngữ:** TypeScript `~6.0.3` (Strict Mode), React `19.2.3`.
 - **Kết nối API & Server State:** `axios` (`^1.21.0`) với Trusted Origin / `baseURL` Guard, `@tanstack/react-query` (`^5.107.1`), lưu trữ JWT an toàn qua `expo-secure-store` (`~57.0.4`) trên Native / in-memory trên Web.
 - **Giao diện & Đồ họa:** Vector Icons qua `react-native-svg` (`15.15.4`) và `react-native-svg-transformer`, Animations qua `react-native-reanimated` (`4.5.1`).
@@ -364,7 +364,7 @@ Menu điều khiển của Expo CLI sẽ xuất hiện:
 | `web` | `expo start --web` | Chạy ứng dụng trên nền tảng Web |
 | `typecheck` | `tsc --noEmit` | Kiểm tra tĩnh toàn bộ mã TypeScript theo cấu hình `tsconfig.json` |
 | `lint` | `expo lint` | Chạy bộ kiểm tra quy chuẩn mã nguồn ESLint v9 (`eslint-config-expo`) |
-| `test` | `vitest run` | Chạy toàn bộ bộ kiểm thử tự động Vitest (103 tests / 6 file) |
+| `test` | `vitest run` | Chạy toàn bộ bộ kiểm thử tự động Vitest (251 tests / 12 file) |
 | `reset-project` | `node ./scripts/reset-project.js` | Script dọn dẹp đưa template về trạng thái ban đầu (không dùng khi dev) |
 
 ---
@@ -427,7 +427,7 @@ npm.cmd run typecheck
 # 2. Kiểm tra quy chuẩn mã nguồn ESLint (0 errors, 0 warnings)
 npm.cmd run lint
 
-# 3. Chạy bộ kiểm thử tự động Vitest (103/103 PASS trên 6 file)
+# 3. Chạy bộ kiểm thử tự động Vitest (251/251 PASS trên 12 file)
 npm.cmd test
 
 # 4. Kiểm tra cấu hình Expo
@@ -445,7 +445,7 @@ Từ thư mục `E:\GoPlant\backend`, thực hiện:
 ```powershell
 .\mvnw.cmd clean verify
 ```
-Maven sẽ dọn dẹp, tải các dependency cần thiết, biên dịch Java 21, thực thi toàn bộ **96/96 Unit & Integration Tests** trên 18 file kiểm thử trong `src/test/java/` và tạo gói JAR tại `target/`. Kết quả đạt `BUILD SUCCESS`.
+Maven sẽ dọn dẹp, tải các dependency cần thiết, biên dịch Java 21, thực thi toàn bộ **236/236 Unit & Integration Tests** trên 20 file kiểm thử trong `src/test/java/` và tạo gói JAR tại `target/`. Kết quả đạt `BUILD SUCCESS`.
 
 ---
 

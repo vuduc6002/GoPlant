@@ -1617,6 +1617,12 @@ paths:
           $ref: '#/components/responses/403Forbidden'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '503':
+          description: Dịch vụ lưu trữ tạm thời không khả dụng
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /media/{mediaId}:
     delete:
@@ -1666,6 +1672,12 @@ paths:
                   message: Không thể xóa tệp phương tiện đang được liên kết sử dụng.
                   field: mediaId
                 timestamp: '2026-11-13T00:00:00Z'
+        '503':
+          description: Dịch vụ lưu trữ tạm thời không khả dụng
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
 components:
   securitySchemes:

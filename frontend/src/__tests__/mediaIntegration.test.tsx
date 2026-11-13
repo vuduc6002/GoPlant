@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { AuthProvider } from '@/features/auth/AuthProvider';
+import { AuthProvider, useAuth } from '@/features/auth/AuthProvider';
 import {
   deleteMedia,
   getMediaReadUrl,
@@ -80,6 +80,34 @@ async function flushAsync(ms = 25) {
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, ms));
   });
+}
+
+function createDeferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+async function waitFor(assertion: () => void, timeoutMs = 1500): Promise<void> {
+  const start = Date.now();
+  let lastError: unknown;
+  while (Date.now() - start < timeoutMs) {
+    try {
+      assertion();
+      return;
+    } catch (err) {
+      lastError = err;
+      await flushAsync(15);
+    }
+  }
+  assertion();
+  if (lastError) {
+    throw lastError;
+  }
 }
 
 describe('G5.5.2b — Frontend Media Module Tests', () => {
@@ -567,6 +595,247 @@ describe('G5.5.2b — Frontend Media Module Tests', () => {
       expect(queryKeys.media.all(mockUserB.id)).toEqual(['media', mockUserB.id]);
       expect(profileA.id).not.toEqual(profileB.id);
       expect(sessionA.user?.id).not.toEqual(sessionB.user?.id);
+    });
+
+    it('isolates pending useUploadMediaMutation when switching Session A -> Session B without polluting User B cache', async () => {
+      await tokenStorage.saveSession(sessionA);
+      const pendingUploadA = createDeferred<void>();
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        const auth = String(config.headers?.Authorization ?? '');
+        const isB = auth === `Bearer ${sessionB.accessToken}`;
+
+        if (config.url === '/auth/login') {
+          return { status: 200, data: { success: true, data: sessionB }, headers: {}, config };
+        }
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: isB ? profileB : profileA }, headers: {}, config };
+        }
+        if (config.url === '/media' && config.method === 'post') {
+          await pendingUploadA.promise;
+          return {
+            status: 201,
+            data: {
+              success: true,
+              data: {
+                id: 'med_upload_user_a',
+                mimeType: 'image/jpeg',
+                sizeBytes: 2048,
+                width: 640,
+                height: 480,
+                status: 'READY',
+                createdAt: '2026-11-13T00:00:00Z',
+                updatedAt: '2026-11-13T00:00:00Z',
+              },
+            },
+            headers: {},
+            config,
+          };
+        }
+        throw new Error(`Unexpected request: ${config.method} ${config.url}`);
+      });
+
+      let authCtx!: ReturnType<typeof useAuth>;
+      let uploadMut!: ReturnType<typeof useUploadMediaMutation>;
+
+      function Harness() {
+        authCtx = useAuth();
+        uploadMut = useUploadMediaMutation();
+        return null;
+      }
+
+      mountWithProviders(<Harness />);
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(mockUserA.id);
+      });
+
+      // Pre-seed User B's cache with existing data
+      const userBInitialCache = [{ id: 'user-b-photo-1' }];
+      queryClient.setQueryData(queryKeys.media.all(mockUserB.id), userBInitialCache);
+
+      // Trigger User A upload while request is in flight
+      const uploadPromiseA = uploadMut.mutateAsync({
+        uri: 'file:///photo_a.jpg',
+        name: 'photo_a.jpg',
+        type: 'image/jpeg',
+        size: 2048,
+      });
+
+      await flushAsync(10);
+
+      // Switch to User B before User A's upload resolves
+      await act(async () => {
+        await authCtx.login({ account: mockUserB.email, password: 'pw' });
+      });
+
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(mockUserB.id);
+      });
+
+      // Now resolve User A's pending upload
+      await act(async () => {
+        pendingUploadA.resolve();
+        await uploadPromiseA.catch(() => {});
+        await flushAsync(30);
+      });
+
+      // Verify User B's cache was NOT invalidated, wiped, or polluted
+      const cachedB = queryClient.getQueryData(queryKeys.media.all(mockUserB.id));
+      expect(cachedB).toEqual(userBInitialCache);
+    });
+
+    it('isolates pending useDeleteMediaMutation when switching Session A -> Session B without removing User B cache', async () => {
+      await tokenStorage.saveSession(sessionA);
+      const pendingDeleteA = createDeferred<void>();
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        const auth = String(config.headers?.Authorization ?? '');
+        const isB = auth === `Bearer ${sessionB.accessToken}`;
+
+        if (config.url === '/auth/login') {
+          return { status: 200, data: { success: true, data: sessionB }, headers: {}, config };
+        }
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: isB ? profileB : profileA }, headers: {}, config };
+        }
+        if (config.url === '/media/med_shared' && config.method === 'delete') {
+          await pendingDeleteA.promise;
+          return {
+            status: 200,
+            data: { success: true, data: { message: 'Đã xóa thành công' } },
+            headers: {},
+            config,
+          };
+        }
+        throw new Error(`Unexpected request: ${config.method} ${config.url}`);
+      });
+
+      let authCtx!: ReturnType<typeof useAuth>;
+      let deleteMut!: ReturnType<typeof useDeleteMediaMutation>;
+
+      function Harness() {
+        authCtx = useAuth();
+        deleteMut = useDeleteMediaMutation();
+        return null;
+      }
+
+      mountWithProviders(<Harness />);
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(mockUserA.id);
+      });
+
+      // Pre-seed User B's cache for med_shared readUrl
+      const userBReadUrlData = {
+        mediaId: 'med_shared',
+        readUrl: 'https://cdn.example.com/user_b_shared.jpg',
+        expiresAt: '2026-11-13T01:00:00Z',
+      };
+      queryClient.setQueryData(
+        queryKeys.media.readUrl(mockUserB.id, 'med_shared'),
+        userBReadUrlData
+      );
+
+      // Trigger delete for User A
+      const deletePromiseA = deleteMut.mutateAsync('med_shared');
+      await flushAsync(10);
+
+      // Switch to User B
+      await act(async () => {
+        await authCtx.login({ account: mockUserB.email, password: 'pw' });
+      });
+
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(mockUserB.id);
+      });
+
+      // Resolve User A's delete
+      await act(async () => {
+        pendingDeleteA.resolve();
+        await deletePromiseA.catch(() => {});
+        await flushAsync(30);
+      });
+
+      // Verify User B's readUrl cache is still preserved and was NOT removed
+      const cachedB = queryClient.getQueryData(
+        queryKeys.media.readUrl(mockUserB.id, 'med_shared')
+      );
+      expect(cachedB).toEqual(userBReadUrlData);
+    });
+
+    it('isolates pending useMediaReadUrl when switching Session A -> Session B', async () => {
+      await tokenStorage.saveSession(sessionA);
+      const pendingReadUrlA = createDeferred<void>();
+
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        const auth = String(config.headers?.Authorization ?? '');
+        const isB = auth === `Bearer ${sessionB.accessToken}`;
+
+        if (config.url === '/auth/login') {
+          return { status: 200, data: { success: true, data: sessionB }, headers: {}, config };
+        }
+        if (config.url === '/users/me') {
+          return { status: 200, data: { success: true, data: isB ? profileB : profileA }, headers: {}, config };
+        }
+        if (config.url === '/media/med_secret_a/read-url' && config.method === 'get') {
+          if (!isB) {
+            await pendingReadUrlA.promise;
+            return {
+              status: 200,
+              data: {
+                success: true,
+                data: {
+                  mediaId: 'med_secret_a',
+                  readUrl: 'https://cdn.example.com/secret_for_a.jpg',
+                  expiresAt: '2026-11-13T01:00:00Z',
+                },
+              },
+              headers: {},
+              config,
+            };
+          }
+          return {
+            status: 403,
+            data: { success: false, message: 'Forbidden' },
+            headers: {},
+            config,
+          };
+        }
+        throw new Error(`Unexpected request: ${config.method} ${config.url}`);
+      });
+
+      let authCtx!: ReturnType<typeof useAuth>;
+
+      function Harness() {
+        authCtx = useAuth();
+        useMediaReadUrl('med_secret_a');
+        return null;
+      }
+
+      mountWithProviders(<Harness />);
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(mockUserA.id);
+      });
+
+      // Switch to User B while User A GET is in-flight
+      await act(async () => {
+        await authCtx.login({ account: mockUserB.email, password: 'pw' });
+      });
+
+      await waitFor(() => {
+        expect(authCtx.user?.id).toBe(mockUserB.id);
+      });
+
+      // Resolve User A's slow read-url GET
+      await act(async () => {
+        pendingReadUrlA.resolve();
+        await flushAsync(30);
+      });
+
+      // Verify User B has no cache for User A's secret media
+      const cachedB = queryClient.getQueryData(
+        queryKeys.media.readUrl(mockUserB.id, 'med_secret_a')
+      );
+      expect(cachedB).toBeUndefined();
     });
   });
 });

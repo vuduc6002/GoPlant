@@ -42,17 +42,22 @@ public class SupabaseStorageGateway {
             throw new StorageUnavailableException("Dịch vụ lưu trữ Supabase Storage chưa được cấu hình.");
         }
 
-        String baseUrl = trimTrailingSlash(properties.getUrl());
+        String baseUrl = properties.getUrl();
         String url = baseUrl + "/storage/v1/object/" + bucket + "/" + objectKey;
 
         try {
-            restClient.post()
+            RestClient.RequestBodySpec requestSpec = restClient.post()
                 .uri(url)
-                .header("Authorization", "Bearer " + properties.getApiKey())
-                .header("apiKey", properties.getApiKey())
+                .header("apikey", properties.getApiKey())
                 .header("x-upsert", "false")
                 .contentType(MediaType.parseMediaType(mimeType))
-                .body(data)
+                .body(data);
+
+            if (properties.getEffectiveKeyType() == SupabaseStorageProperties.ApiKeyType.LEGACY_SERVICE_ROLE) {
+                requestSpec = requestSpec.header("Authorization", "Bearer " + properties.getApiKey());
+            }
+
+            requestSpec
                 .retrieve()
                 .onStatus(HttpStatusCode::isError, (req, res) -> {
                     int statusCode = res.getStatusCode().value();
@@ -73,17 +78,22 @@ public class SupabaseStorageGateway {
             throw new StorageUnavailableException("Dịch vụ lưu trữ Supabase Storage chưa được cấu hình.");
         }
 
-        String baseUrl = trimTrailingSlash(properties.getUrl());
+        String baseUrl = properties.getUrl();
         String url = baseUrl + "/storage/v1/object/sign/" + bucket + "/" + objectKey;
         int ttl = ttlSeconds > 0 ? ttlSeconds : properties.getSignedUrlTtlSeconds();
 
         try {
-            Map<String, Object> response = restClient.post()
+            RestClient.RequestBodySpec requestSpec = restClient.post()
                 .uri(url)
-                .header("Authorization", "Bearer " + properties.getApiKey())
-                .header("apiKey", properties.getApiKey())
+                .header("apikey", properties.getApiKey())
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(Map.of("expiresIn", ttl))
+                .body(Map.of("expiresIn", ttl));
+
+            if (properties.getEffectiveKeyType() == SupabaseStorageProperties.ApiKeyType.LEGACY_SERVICE_ROLE) {
+                requestSpec = requestSpec.header("Authorization", "Bearer " + properties.getApiKey());
+            }
+
+            Map<String, Object> response = requestSpec
                 .retrieve()
                 .onStatus(HttpStatusCode::isError, (req, res) -> {
                     int statusCode = res.getStatusCode().value();
@@ -119,16 +129,21 @@ public class SupabaseStorageGateway {
             throw new StorageUnavailableException("Dịch vụ lưu trữ Supabase Storage chưa được cấu hình.");
         }
 
-        String baseUrl = trimTrailingSlash(properties.getUrl());
+        String baseUrl = properties.getUrl();
         String url = baseUrl + "/storage/v1/object/" + bucket;
 
         try {
-            restClient.method(org.springframework.http.HttpMethod.DELETE)
+            RestClient.RequestBodySpec requestSpec = restClient.method(org.springframework.http.HttpMethod.DELETE)
                 .uri(url)
-                .header("Authorization", "Bearer " + properties.getApiKey())
-                .header("apiKey", properties.getApiKey())
+                .header("apikey", properties.getApiKey())
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(Map.of("prefixes", List.of(objectKey)))
+                .body(Map.of("prefixes", List.of(objectKey)));
+
+            if (properties.getEffectiveKeyType() == SupabaseStorageProperties.ApiKeyType.LEGACY_SERVICE_ROLE) {
+                requestSpec = requestSpec.header("Authorization", "Bearer " + properties.getApiKey());
+            }
+
+            requestSpec
                 .retrieve()
                 .onStatus(status -> status.value() == 404, (req, res) -> {
                     // Object already gone, consider delete idempotent

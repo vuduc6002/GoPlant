@@ -117,9 +117,17 @@ class MediaUrlValidatorTest {
     @ValueSource(strings = {
         "https://2130706433/pic.jpg",
         "https://0x7f000001/pic.jpg",
-        "https://017700000001/pic.jpg"
+        "https://017700000001/pic.jpg",
+        "https://127.1/pic.jpg",
+        "https://127.0.1/pic.jpg",
+        "https://0x7f.1/pic.jpg",
+        "https://0x7f.0x1/pic.jpg",
+        "https://0177.1/pic.jpg",
+        "https://0177.0.0.1/pic.jpg",
+        "https://0x7f.0.0.1/pic.jpg",
+        "https://127.00.00.01/pic.jpg"
     })
-    @DisplayName("Obfuscated decimal or hex host formats should be rejected")
+    @DisplayName("Obfuscated decimal, hex, octal, or short IP host formats should be rejected")
     void obfuscatedHosts_ShouldThrow(String url) {
         ValidationException ex = assertThrows(ValidationException.class, () -> validator.validate(url, "imageUrl"));
         assertEquals("imageUrl", ex.getField());

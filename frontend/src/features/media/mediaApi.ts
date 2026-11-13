@@ -10,6 +10,15 @@ import type {
 } from './mediaTypes';
 import { assertValidImageFile } from './mediaValidation';
 
+const ALLOWED_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const VALID_MEDIA_STATUSES = new Set<MediaStatus>([
+  'PENDING',
+  'READY',
+  'ATTACHED',
+  'DELETING',
+  'DELETED',
+]);
+
 function normalizeMediaItem(raw: any): MediaItem {
   if (!raw || typeof raw !== 'object') {
     throw new AppApiError({
@@ -18,22 +27,44 @@ function normalizeMediaItem(raw: any): MediaItem {
     });
   }
 
-  const validStatuses: Record<string, MediaStatus> = {
-    PENDING: 'PENDING',
-    READY: 'READY',
-    ATTACHED: 'ATTACHED',
-    DELETING: 'DELETING',
-    DELETED: 'DELETED',
-  };
+  const id = typeof raw.id === 'string' ? raw.id.trim() : '';
+  if (!id) {
+    throw new AppApiError({
+      message: 'Dữ liệu phản hồi tệp tin thiếu ID hợp lệ.',
+      code: 'INVALID_RESPONSE',
+    });
+  }
 
-  const status: MediaStatus = validStatuses[raw.status] || 'READY';
+  const mimeType = typeof raw.mimeType === 'string' ? raw.mimeType.trim().toLowerCase() : '';
+  if (!ALLOWED_MIME_TYPES.has(mimeType)) {
+    throw new AppApiError({
+      message: `Định dạng tệp tin '${mimeType}' không được hỗ trợ.`,
+      code: 'INVALID_RESPONSE',
+    });
+  }
+
+  const sizeBytes = typeof raw.sizeBytes === 'number' ? raw.sizeBytes : -1;
+  if (sizeBytes <= 0 || sizeBytes > 5 * 1024 * 1024) {
+    throw new AppApiError({
+      message: 'Kích thước tệp tin phản hồi không hợp lệ.',
+      code: 'INVALID_RESPONSE',
+    });
+  }
+
+  const status = typeof raw.status === 'string' ? (raw.status as MediaStatus) : ('' as MediaStatus);
+  if (!VALID_MEDIA_STATUSES.has(status)) {
+    throw new AppApiError({
+      message: `Trạng thái tệp tin '${raw.status}' không hợp lệ.`,
+      code: 'INVALID_RESPONSE',
+    });
+  }
 
   return {
-    id: String(raw.id ?? ''),
-    mimeType: typeof raw.mimeType === 'string' ? raw.mimeType : 'image/jpeg',
-    sizeBytes: typeof raw.sizeBytes === 'number' ? raw.sizeBytes : 0,
-    width: typeof raw.width === 'number' ? raw.width : null,
-    height: typeof raw.height === 'number' ? raw.height : null,
+    id,
+    mimeType,
+    sizeBytes,
+    width: typeof raw.width === 'number' && raw.width > 0 ? raw.width : null,
+    height: typeof raw.height === 'number' && raw.height > 0 ? raw.height : null,
     status,
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : '',
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : '',
@@ -106,17 +137,21 @@ export async function getMediaReadUrl(
     buildScopeConfig(scope)
   );
 
-  if (!response.data?.data) {
+  const data = response.data?.data;
+  const readUrl = typeof data?.readUrl === 'string' ? data.readUrl.trim() : '';
+  const expiresAt = typeof data?.expiresAt === 'string' ? data.expiresAt.trim() : '';
+
+  if (!readUrl || !expiresAt || !readUrl.startsWith('https://')) {
     throw new AppApiError({
-      message: 'Không thể lấy URL đọc tệp tin đa phương tiện.',
+      message: 'Dữ liệu phản hồi URL đọc không hợp lệ hoặc không an toàn.',
       code: 'INVALID_RESPONSE',
     });
   }
 
   return {
-    mediaId: String(response.data.data.mediaId ?? mediaId),
-    readUrl: String(response.data.data.readUrl ?? ''),
-    expiresAt: String(response.data.data.expiresAt ?? ''),
+    mediaId: String(data?.mediaId || mediaId).trim(),
+    readUrl,
+    expiresAt,
   };
 }
 

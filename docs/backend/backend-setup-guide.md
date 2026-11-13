@@ -60,6 +60,37 @@ Backend cung cấp các profile ứng dụng phân tách rõ ràng:
 - `SUPABASE_FLYWAY_ENABLED`: Mặc định là `false` để ngăn chặn việc tự động áp migration lên database cloud ngoài ý muốn. Khi cần chạy Flyway V1 migration lên Supabase, đặt biến này thành `true`.
 - `spring.jpa.hibernate.ddl-auto`: Luôn đặt là `validate` để đảm bảo Hibernate đối chiếu an toàn với schema thực tế, không tự ý can thiệp cấu trúc bảng.
 
+### 3.5. Cấu hình Supabase Storage Private Bucket (Phân hệ Media G5.5.2b)
+- `SUPABASE_URL`: URL canonical của dự án Supabase (dạng `https://<project-ref>.supabase.co`, không chứa hậu tố `/storage/v1`).
+- `SUPABASE_STORAGE_API_KEY`: Secret key của Supabase (`sb_secret_...`) hoặc Service Role JWT key kế thừa.
+- `SUPABASE_STORAGE_API_KEY_TYPE`: Loại API key (`auto` - tự nhận diện theo prefix, `secret`, hoặc `legacy_service_role`).
+- `SUPABASE_STORAGE_BUCKET`: Tên bucket riêng tư (mặc định: `goplant-private-media`).
+- `MEDIA_MAX_FILE_SIZE_BYTES`: Giới hạn kích thước tệp upload (mặc định: `5242880` bytes = 5MB).
+- `MEDIA_SIGNED_URL_TTL_SECONDS`: Thời hạn hiệu lực của pre-signed read URL (mặc định: `300` giây = 5 phút; kẹp trong dải an toàn 60 - 900 giây).
+
+#### Hướng dẫn tạo Private Bucket trên Supabase Dashboard:
+1. Đăng nhập Supabase Dashboard -> chọn Project của GoPlant.
+2. Điều hướng tới **Storage** -> nhấn **New bucket**.
+3. Điền thông tin bucket:
+   - **Name:** `goplant-private-media`
+   - **Public bucket:** **TẮT** (Phải là Private Bucket, cấm truy cập công khai).
+   - **File size limit:** `5MB`
+   - **Allowed MIME types:** `image/jpeg, image/png, image/webp`
+4. Lấy Secret Key / Service Role Key:
+   - Điều hướng tới **Project Settings** -> **API**.
+   - Tại mục **Secret keys**, sao chép Secret Key (`sb_secret_...`) hoặc `service_role` (secret) token.
+   - Cấu hình vào biến môi trường Backend:
+     ```env
+     SUPABASE_URL=https://<project-ref>.supabase.co
+     SUPABASE_STORAGE_API_KEY=sb_secret_xxxxxxxxxxxxxxxxxxxxxxxx
+     SUPABASE_STORAGE_API_KEY_TYPE=auto
+     SUPABASE_STORAGE_BUCKET=goplant-private-media
+     ```
+5. **Cảnh báo an toàn tuyệt đối:**
+   - Secret key và Service Role key chỉ được cấu hình duy nhất tại Backend Spring Boot.
+   - Tuyệt đối **KHÔNG** đưa key vào file `frontend/.env` hay cấu hình Expo `EXPO_PUBLIC_*`.
+   - Ứng dụng di động (Frontend) luôn giao tiếp qua Backend Multipart Proxy (`POST /api/v1/media`, `GET /api/v1/media/{id}/read-url`), không bao giờ gọi trực tiếp Supabase Storage API.
+
 ---
 
 ## 4. Hướng dẫn khởi chạy Backend
