@@ -618,4 +618,82 @@ class ImageMetadataProcessorTest {
             () -> ImageMetadataProcessor.stripWebPMetadata(conflicting));
         assertTrue(ex.getMessage().contains("nhiều chunk hình ảnh mâu thuẫn"));
     }
+
+    @ParameterizedTest
+    @ValueSource(ints = { 0, 9, 10 })
+    @DisplayName("WebP images with EXIF orientation 0 or outside 1..8 are rejected fail-closed")
+    void rejectWebp_WithOrientationOutside1To8(int orientation) throws Exception {
+        byte[] input = createWebpWithExifOrientation(orientation);
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> processor.process(input, "image/webp"));
+        assertTrue(ex.getMessage().contains("không hợp lệ") || ex.getMessage().contains("xoay hướng"));
+    }
+
+    @Test
+    @DisplayName("Reject WebP with fake VP8X chunk placed outside declared RIFF boundary")
+    void rejectWebp_FakeVp8xChunkOutsideRiffBoundary() {
+        byte[] valid = createMinimalValidWebp();
+        byte[] fakeVp8x = "VP8X\n\0\0\0\0\0\0\0\0\0\0\0\0\0".getBytes(StandardCharsets.US_ASCII);
+        byte[] withFake = new byte[valid.length + fakeVp8x.length];
+        System.arraycopy(valid, 0, withFake, 0, valid.length);
+        System.arraycopy(fakeVp8x, 0, withFake, valid.length, fakeVp8x.length);
+
+        assertThrows(ValidationException.class,
+            () -> processor.process(withFake, "image/webp"));
+        assertNull(ImageMetadataProcessor.extractWebPDimensions(withFake));
+    }
+
+    @Test
+    @DisplayName("Reject WebP with fake VP8 chunk placed outside declared RIFF boundary")
+    void rejectWebp_FakeVp8ChunkOutsideRiffBoundary() {
+        byte[] valid = createMinimalValidWebp();
+        byte[] fakeVp8 = "VP8 \n\0\0\0\0\0\0\0\0\0\0\0\0\0".getBytes(StandardCharsets.US_ASCII);
+        byte[] withFake = new byte[valid.length + fakeVp8.length];
+        System.arraycopy(valid, 0, withFake, 0, valid.length);
+        System.arraycopy(fakeVp8, 0, withFake, valid.length, fakeVp8.length);
+
+        assertThrows(ValidationException.class,
+            () -> processor.process(withFake, "image/webp"));
+        assertNull(ImageMetadataProcessor.extractWebPDimensions(withFake));
+    }
+
+    @Test
+    @DisplayName("Reject WebP when declared RIFF size is greater than actual file length")
+    void rejectWebp_RiffDeclaredSizeGreaterThanActual() {
+        byte[] valid = createMinimalValidWebp();
+        byte[] modified = valid.clone();
+        // Modify declared size to be larger than actual length
+        modified[4] = (byte) 0xFF;
+        modified[5] = (byte) 0x00;
+        assertThrows(ValidationException.class,
+            () -> processor.process(modified, "image/webp"));
+    }
+
+    @Test
+    @DisplayName("Reject WebP with VP8 chunk shorter than 10 bytes")
+    void rejectWebp_Vp8PayloadTooShort() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        byte[] shortVp8Data = new byte[] { (byte) 0x9D, 0x01, 0x2A, 0x00, 0x00 }; // 5 bytes instead of >= 10
+        int totalPayload = 4 + 8 + shortVp8Data.length + 1;
+
+        baos.write('R'); baos.write('I'); baos.write('F'); baos.write('F');
+        baos.write(totalPayload & 0xFF);
+        baos.write((totalPayload >> 8) & 0xFF);
+        baos.write((totalPayload >> 16) & 0xFF);
+        baos.write((totalPayload >> 24) & 0xFF);
+        baos.write('W'); baos.write('E'); baos.write('B'); baos.write('P');
+
+        baos.write('V'); baos.write('P'); baos.write('8'); baos.write(' ');
+        baos.write(shortVp8Data.length & 0xFF);
+        baos.write((shortVp8Data.length >> 8) & 0xFF);
+        baos.write((shortVp8Data.length >> 16) & 0xFF);
+        baos.write((shortVp8Data.length >> 24) & 0xFF);
+        baos.write(shortVp8Data);
+        baos.write(0);
+
+        byte[] malformed = baos.toByteArray();
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.parseAndValidateWebP(malformed));
+        assertTrue(ex.getMessage().contains("VP8 quá ngắn"));
+    }
 }

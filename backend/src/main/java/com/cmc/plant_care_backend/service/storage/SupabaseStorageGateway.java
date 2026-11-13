@@ -196,12 +196,16 @@ public class SupabaseStorageGateway {
     }
 
     public String resolveFullSignedUrl(String baseUrl, String rawSignedUrl) {
+        if (baseUrl == null || baseUrl.trim().isEmpty() || !baseUrl.trim().toLowerCase().startsWith("https://")) {
+            throw new StorageUnavailableException("Dịch vụ lưu trữ yêu cầu cấu hình base URL sử dụng giao thức HTTPS bảo mật.");
+        }
+
         if (rawSignedUrl == null || rawSignedUrl.trim().isEmpty()) {
             throw new StorageUnavailableException("URL truy cập tệp tin từ dịch vụ lưu trữ rỗng.");
         }
 
         String trimmed = rawSignedUrl.trim();
-        if (trimmed.startsWith("//") || trimmed.startsWith("http://")) {
+        if (trimmed.startsWith("//") || trimmed.startsWith("http://") || trimmed.contains("@") || trimmed.contains("\\")) {
             throw new StorageUnavailableException("Dịch vụ lưu trữ trả về giao thức không an toàn hoặc không hợp lệ.");
         }
 
@@ -235,7 +239,7 @@ public class SupabaseStorageGateway {
             }
 
             int signedPort = signedUri.getPort() == -1 ? 443 : signedUri.getPort();
-            int basePort = baseUri.getPort() == -1 ? (baseUri.getScheme() != null && baseUri.getScheme().equalsIgnoreCase("https") ? 443 : 80) : baseUri.getPort();
+            int basePort = baseUri.getPort() == -1 ? 443 : baseUri.getPort();
             if (signedPort != basePort) {
                 throw new StorageUnavailableException("Cổng kết nối trong URL truy cập tệp tin không khớp máy chủ lưu trữ.");
             }
@@ -267,8 +271,16 @@ public class SupabaseStorageGateway {
         if (properties != null && properties.getApiKey() != null && !properties.getApiKey().isEmpty()) {
             sanitized = sanitized.replace(properties.getApiKey(), "[REDACTED]");
         }
-        sanitized = sanitized.replaceAll("(?i)(apikey|token|secret|key|bearer)\\s*[=:]\\s*[^&\\s]+", "$1=[REDACTED]");
-        sanitized = sanitized.replaceAll("Bearer\\s+[A-Za-z0-9._~+/-]+", "Bearer [REDACTED]");
+        return sanitizeLogMessageStatic(sanitized);
+    }
+
+    public static String sanitizeLogMessageStatic(String raw) {
+        if (raw == null) return "";
+        String sanitized = raw;
+        sanitized = sanitized.replaceAll("(?i)(apikey|token|secret|key|bearer|password|access_token|refresh_token)\\s*[=:]\\s*[^&\\s]+", "$1=[REDACTED]");
+        sanitized = sanitized.replaceAll("(?i)Authorization:\\s*Bearer\\s+[A-Za-z0-9._~+/-]+", "Authorization: Bearer [REDACTED]");
+        sanitized = sanitized.replaceAll("(?i)Bearer\\s+[A-Za-z0-9._~+/-]+", "Bearer [REDACTED]");
+        sanitized = sanitized.replaceAll("(?i)([?&](?:token|apikey|apiKey|key|secret|password|access_token|refresh_token)=)[^&\\s]+", "$1[REDACTED]");
         return sanitized;
     }
 }

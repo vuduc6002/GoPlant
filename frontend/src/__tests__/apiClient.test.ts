@@ -8,6 +8,7 @@ import {
   classifyApiUrl,
   resolveEffectiveBaseURL,
   isTrustedBaseURL,
+  cleanMultipartFormDataHeaders,
 } from '../services/api/apiClient';
 import * as tokenStorage from '../services/api/tokenStorage';
 import { StorageError } from '../services/api/tokenStorage';
@@ -983,6 +984,112 @@ describe('apiClient & Authentication Interceptors', () => {
       expect(unauthorizedSpy).toHaveBeenCalledTimes(1);
 
       unregister();
+    });
+  });
+
+  describe('FIX D: FormData Multipart Header Stripping & Boundary Safety', () => {
+    it('strips manual Content-Type: multipart/form-data when data is FormData, retaining Authorization header and session guards', async () => {
+      const testSession: AuthSession = {
+        accessToken: 'valid-jwt-token-formdata',
+        tokenType: 'Bearer',
+        user: { id: 'usr_formdata', email: 'formdata@example.com', fullName: 'Form Data User', roles: ['ROLE_USER'] },
+        savedAt: Date.now(),
+      };
+      await tokenStorage.saveSession(testSession);
+      const generation = tokenStorage.getSessionGeneration();
+
+      let capturedConfig: any = null;
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        capturedConfig = config;
+        return {
+          status: 200,
+          data: { success: true, data: { id: 'media-123' } },
+          headers: {},
+          config,
+        };
+      });
+
+      const fakeFormData = new FormData();
+      fakeFormData.append('file', 'test-content');
+
+      await apiClient.post('/media', fakeFormData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+        expectedUserId: 'usr_formdata',
+        expectedSessionGeneration: generation,
+      });
+
+      expect(capturedConfig).toBeDefined();
+      expect(capturedConfig.headers.Authorization).toBe('Bearer valid-jwt-token-formdata');
+      // Must NOT send raw 'multipart/form-data' without boundary parameter
+      const rawCt = typeof capturedConfig.headers.get === 'function'
+        ? capturedConfig.headers.get('Content-Type')
+        : capturedConfig.headers['Content-Type'];
+      expect(rawCt).not.toBe('multipart/form-data');
+    });
+
+    it('directly cleans headers with AxiosHeaders or plain object delete method', () => {
+      const plainHeaders: Record<string, string | undefined> = {
+        'Content-Type': 'multipart/form-data',
+      };
+      const plainConfig = {
+        data: new FormData(),
+        headers: plainHeaders,
+      };
+      cleanMultipartFormDataHeaders(plainConfig);
+      expect(plainConfig.headers['Content-Type']).toBeUndefined();
+
+      const mockHeaders: {
+        'Content-Type'?: string;
+        'content-type'?: string;
+        get: (key: string) => string | undefined;
+        delete: (key: string) => void;
+      } = {
+        'Content-Type': 'multipart/form-data',
+        'content-type': 'multipart/form-data',
+        get: vi.fn((key: string) => (key.toLowerCase() === 'content-type' ? 'multipart/form-data' : undefined)),
+        delete: vi.fn((key: string) => {
+          if (key === 'Content-Type') delete mockHeaders['Content-Type'];
+          if (key === 'content-type') delete mockHeaders['content-type'];
+        }),
+      };
+      const config = {
+        data: { append: () => {} },
+        headers: mockHeaders,
+      };
+
+      cleanMultipartFormDataHeaders(config);
+
+      expect(mockHeaders.delete).toHaveBeenCalledWith('Content-Type');
+      expect(mockHeaders.delete).toHaveBeenCalledWith('content-type');
+      expect(mockHeaders['Content-Type']).toBeUndefined();
+      expect(mockHeaders['content-type']).toBeUndefined();
+    });
+
+    it('rejects with SESSION_USER_MISMATCH before adapter if session user does not match', async () => {
+      const testSession: AuthSession = {
+        accessToken: 'valid-jwt-token-user-a',
+        tokenType: 'Bearer',
+        user: { id: 'usr_actual', email: 'actual@example.com', fullName: 'Actual User', roles: ['ROLE_USER'] },
+        savedAt: Date.now(),
+      };
+      await tokenStorage.saveSession(testSession);
+
+      const fakeFormData = new FormData();
+      fakeFormData.append('file', 'test');
+      const adapterSpy = vi.fn();
+      apiClient.defaults.adapter = adapterSpy;
+
+      await expect(
+        apiClient.post('/media', fakeFormData, {
+          expectedUserId: 'usr_different',
+        })
+      ).rejects.toMatchObject({
+        code: 'SESSION_USER_MISMATCH',
+      });
+
+      expect(adapterSpy).not.toHaveBeenCalled();
     });
   });
 });

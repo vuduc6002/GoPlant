@@ -105,10 +105,10 @@ class DatabaseSchemaIntegrationTest {
                 // When running with postgres profile (e.g. CI or local PostgreSQL)
                 assertEquals("PostgreSQL", dbProductName, "PostgreSQL profile must run against PostgreSQL database");
 
-                // 1. Verify flyway_schema_history exists and V1 + V2 migrations succeeded
+                // 1. Verify flyway_schema_history exists and V1 + V2 + V3 migrations succeeded
                 try (Statement stmt = conn.createStatement()) {
                     try (ResultSet rs = stmt.executeQuery(
-                        "SELECT version, description, success, installed_on FROM flyway_schema_history WHERE version IN ('1', '2') ORDER BY version")) {
+                        "SELECT version, description, success, installed_on FROM flyway_schema_history WHERE version IN ('1', '2', '3') ORDER BY version")) {
                         assertTrue(rs.next(), "flyway_schema_history must contain record for version 1");
                         assertEquals("initial schema", rs.getString("description").toLowerCase());
                         assertTrue(rs.getBoolean("success"), "Migration V1 must have success = true");
@@ -116,6 +116,10 @@ class DatabaseSchemaIntegrationTest {
                         assertTrue(rs.next(), "flyway_schema_history must contain record for version 2");
                         assertEquals("media objects", rs.getString("description").toLowerCase());
                         assertTrue(rs.getBoolean("success"), "Migration V2 must have success = true");
+
+                        assertTrue(rs.next(), "flyway_schema_history must contain record for version 3");
+                        assertEquals("media reconciliation leases", rs.getString("description").toLowerCase());
+                        assertTrue(rs.getBoolean("success"), "Migration V3 must have success = true");
                     }
                 }
 
@@ -320,7 +324,7 @@ class DatabaseSchemaIntegrationTest {
 
                 // 8.8. media_objects (2 CHECKs)
                 assertCheckConstraint(checksByTable, "media_objects", "media_objects_size_bytes_check", "size_bytes", "1", "5242880");
-                assertCheckConstraint(checksByTable, "media_objects", "media_objects_status_check", "status", "PENDING", "READY", "ATTACHED", "DELETING", "DELETED");
+                assertCheckConstraint(checksByTable, "media_objects", "media_objects_status_check", "status", "PENDING", "RECONCILING", "READY", "ATTACHED", "DELETING", "DELETED", "FAILED");
 
                 assertEquals(15, checksByTable.values().stream().mapToInt(Map::size).sum(),
                     "Total count of CHECK constraints across all business tables must be exactly 15");

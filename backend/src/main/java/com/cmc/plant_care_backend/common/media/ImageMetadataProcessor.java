@@ -2,6 +2,7 @@ package com.cmc.plant_care_backend.common.media;
 
 import com.cmc.plant_care_backend.common.exception.AppException;
 import com.cmc.plant_care_backend.common.exception.ValidationException;
+import com.cmc.plant_care_backend.config.SupabaseStorageProperties;
 import com.drew.imaging.ImageMetadataReader;
 import com.drew.metadata.Metadata;
 import com.drew.metadata.exif.ExifIFD0Directory;
@@ -11,6 +12,7 @@ import com.drew.metadata.iptc.IptcDirectory;
 import com.drew.metadata.xmp.XmpDirectory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
@@ -18,7 +20,8 @@ import org.springframework.web.multipart.MultipartFile;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
 import javax.imageio.stream.ImageInputStream;
-import java.awt.*;
+import java.awt.Color;
+import java.awt.Graphics2D;
 import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
@@ -37,7 +40,7 @@ public class ImageMetadataProcessor {
 
     private static final Logger log = LoggerFactory.getLogger(ImageMetadataProcessor.class);
 
-    public static final long MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5,242,880 bytes (5 MB)
+    public static final long MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024L; // 5,242,880 bytes (5 MB hard limit)
     public static final long MAX_PIXEL_COUNT = 25_000_000L; // 25 Megapixels
     public static final int MAX_DIMENSION = 10_000; // 10,000 pixels
 
@@ -47,14 +50,36 @@ public class ImageMetadataProcessor {
         "image/webp"
     );
 
+    private final long maxFileSizeBytes;
+
+    public ImageMetadataProcessor() {
+        this.maxFileSizeBytes = MAX_FILE_SIZE_BYTES;
+    }
+
+    @Autowired
+    public ImageMetadataProcessor(SupabaseStorageProperties properties) {
+        this.maxFileSizeBytes = properties != null ? properties.getMaxFileSizeBytes() : MAX_FILE_SIZE_BYTES;
+    }
+
+    public long getMaxFileSizeBytes() {
+        return maxFileSizeBytes;
+    }
+
+    public record ParsedWebP(
+        int width,
+        int height,
+        int orientation,
+        byte[] strippedBytes
+    ) {}
+
     public ProcessedImage process(MultipartFile file) {
         if (file == null || file.isEmpty()) {
             throw new ValidationException("Tệp tải lên không được để trống.", "file");
         }
 
-        if (file.getSize() > MAX_FILE_SIZE_BYTES) {
+        if (file.getSize() > this.maxFileSizeBytes) {
             throw new AppException(HttpStatus.PAYLOAD_TOO_LARGE, "FILE_TOO_LARGE",
-                "Kích thước tệp vượt quá giới hạn tối đa 5MB.", "file");
+                "Kích thước tệp vượt quá giới hạn tối đa cho phép (" + (this.maxFileSizeBytes / (1024 * 1024)) + "MB).", "file");
         }
 
         byte[] rawBytes;
@@ -72,9 +97,9 @@ public class ImageMetadataProcessor {
             throw new ValidationException("Tệp tải lên không được để trống.", "file");
         }
 
-        if (rawBytes.length > MAX_FILE_SIZE_BYTES) {
+        if (rawBytes.length > this.maxFileSizeBytes) {
             throw new AppException(HttpStatus.PAYLOAD_TOO_LARGE, "FILE_TOO_LARGE",
-                "Kích thước tệp vượt quá giới hạn tối đa 5MB.", "file");
+                "Kích thước tệp vượt quá giới hạn tối đa cho phép (" + (this.maxFileSizeBytes / (1024 * 1024)) + "MB).", "file");
         }
 
         String detectedMime = detectMimeType(rawBytes);
@@ -92,11 +117,49 @@ public class ImageMetadataProcessor {
             }
         }
 
-        if ("image/webp".equals(detectedMime) && isAnimatedWebP(rawBytes)) {
-            throw new ValidationException("Ảnh động WebP không được hỗ trợ trong phạm vi hiện tại.", "file");
+        // WebP processing path: Animation rejection & Strict RIFF validation BEFORE raster decoding
+        if ("image/webp".equals(detectedMime)) {
+            if (isAnimatedWebP(rawBytes)) {
+                throw new ValidationException("Ảnh động WebP không được hỗ trợ trong phạm vi hiện tại.", "file");
+            }
+
+            ParsedWebP parsedWebP = parseAndValidateWebP(rawBytes);
+
+            // Raster decoding using ImageIO ONLY after all RIFF boundary and dimension checks pass
+            BufferedImage decodedWebP;
+            try (InputStream in = new ByteArrayInputStream(parsedWebP.strippedBytes())) {
+                decodedWebP = ImageIO.read(in);
+            } catch (Exception e) {
+                throw new ValidationException("Tệp hình ảnh WebP bị lỗi hoặc không thể giải mã.", "file");
+            }
+            if (decodedWebP == null) {
+                throw new ValidationException("Không thể giải mã dữ liệu hình ảnh WebP.", "file");
+            }
+
+            if (decodedWebP.getWidth() != parsedWebP.width() || decodedWebP.getHeight() != parsedWebP.height()) {
+                throw new ValidationException("Kích thước tệp WebP sau khi giải mã không khớp với thông số container.", "file");
+            }
+
+            byte[] processedBytes = parsedWebP.strippedBytes();
+            if (processedBytes.length > this.maxFileSizeBytes) {
+                throw new AppException(HttpStatus.PAYLOAD_TOO_LARGE, "FILE_TOO_LARGE",
+                    "Kích thước tệp sau xử lý vượt quá giới hạn tối đa cho phép.", "file");
+            }
+
+            verifyNoSensitiveMetadata(processedBytes);
+            String sha256 = calculateSha256(processedBytes);
+
+            return new ProcessedImage(
+                processedBytes,
+                detectedMime,
+                parsedWebP.width(),
+                parsedWebP.height(),
+                processedBytes.length,
+                sha256
+            );
         }
 
-        // STEP 1: Decode dimensions BEFORE allocating full raster memory to prevent decompression bombs
+        // JPEG & PNG processing path
         int[] dimensions = extractDimensionsWithoutRaster(rawBytes, detectedMime);
         int width = dimensions[0];
         int height = dimensions[1];
@@ -114,83 +177,38 @@ public class ImageMetadataProcessor {
             throw new ValidationException("Số lượng pixel hình ảnh (" + totalPixels + ") vượt quá giới hạn tối đa 25MP.", "file");
         }
 
-        // STEP 2: Full decode & strip processing
         int orientation = extractOrientation(rawBytes);
-        byte[] processedBytes;
-        int finalWidth = width;
-        int finalHeight = height;
-
-        if ("image/webp".equals(detectedMime)) {
-            // WebP EXIF Orientation: if rotated (> 1), reject fail-closed because
-            // re-encoding WebP raster is not supported without native binaries.
-            if (orientation > 1) {
-                throw new ValidationException(
-                    "Hình ảnh WebP chứa thông tin xoay hướng (EXIF orientation=" + orientation + ") không thể xử lý an toàn.", "file");
-            }
-
-            // Full decode check using ImageIO WebP plugin
-            BufferedImage decodedWebP;
-            try (InputStream in = new ByteArrayInputStream(rawBytes)) {
-                decodedWebP = ImageIO.read(in);
-            } catch (Exception e) {
-                throw new ValidationException("Tệp hình ảnh WebP bị lỗi hoặc không thể giải mã.", "file");
-            }
-            if (decodedWebP == null) {
-                throw new ValidationException("Không thể giải mã dữ liệu hình ảnh WebP.", "file");
-            }
-
-            // Strip metadata via hardened container parser
-            processedBytes = stripWebPMetadata(rawBytes);
-
-            // Verify the stripped WebP can be fully decoded again
-            BufferedImage verifiedWebP;
-            try (InputStream in = new ByteArrayInputStream(processedBytes)) {
-                verifiedWebP = ImageIO.read(in);
-            } catch (Exception e) {
-                throw new ValidationException("Tệp WebP sau khi loại bỏ siêu dữ liệu không thể giải mã lại.", "file");
-            }
-            if (verifiedWebP == null) {
-                throw new ValidationException("Tệp WebP sau khi xử lý bị lỗi hoặc rỗng.", "file");
-            }
-            if (verifiedWebP.getWidth() != width || verifiedWebP.getHeight() != height) {
-                throw new ValidationException("Kích thước tệp WebP sau khi xử lý không khớp với kích thước ban đầu.", "file");
-            }
-        } else {
-            BufferedImage decodedImage;
-            try (InputStream in = new ByteArrayInputStream(rawBytes)) {
-                decodedImage = ImageIO.read(in);
-            } catch (Exception e) {
-                throw new ValidationException("Tệp hình ảnh bị lỗi hoặc không thể giải mã.", "file");
-            }
-
-            if (decodedImage == null) {
-                throw new ValidationException("Không thể giải mã dữ liệu hình ảnh.", "file");
-            }
-
-            // Apply EXIF orientation transformation before stripping
-            BufferedImage uprightImage = applyOrientation(decodedImage, orientation);
-            finalWidth = uprightImage.getWidth();
-            finalHeight = uprightImage.getHeight();
-
-            if ("image/jpeg".equals(detectedMime)) {
-                processedBytes = encodeJpeg(uprightImage);
-            } else {
-                processedBytes = encodePng(uprightImage);
-            }
+        BufferedImage decodedImage;
+        try (InputStream in = new ByteArrayInputStream(rawBytes)) {
+            decodedImage = ImageIO.read(in);
+        } catch (Exception e) {
+            throw new ValidationException("Tệp hình ảnh bị lỗi hoặc không thể giải mã.", "file");
         }
 
-        // Output size constraints
+        if (decodedImage == null) {
+            throw new ValidationException("Không thể giải mã dữ liệu hình ảnh.", "file");
+        }
+
+        BufferedImage uprightImage = applyOrientation(decodedImage, orientation);
+        int finalWidth = uprightImage.getWidth();
+        int finalHeight = uprightImage.getHeight();
+
+        byte[] processedBytes;
+        if ("image/jpeg".equals(detectedMime)) {
+            processedBytes = encodeJpeg(uprightImage);
+        } else {
+            processedBytes = encodePng(uprightImage);
+        }
+
         if (processedBytes == null || processedBytes.length == 0) {
             throw new ValidationException("Dữ liệu hình ảnh sau xử lý rỗng.", "file");
         }
-        if (processedBytes.length > MAX_FILE_SIZE_BYTES) {
+        if (processedBytes.length > this.maxFileSizeBytes) {
             throw new AppException(HttpStatus.PAYLOAD_TOO_LARGE, "FILE_TOO_LARGE",
-                "Kích thước tệp sau xử lý vượt quá giới hạn tối đa 5MB.", "file");
+                "Kích thước tệp sau xử lý vượt quá giới hạn tối đa cho phép.", "file");
         }
 
-        // STEP 3: Fail-closed metadata verification
         verifyNoSensitiveMetadata(processedBytes);
-
         String sha256 = calculateSha256(processedBytes);
 
         return new ProcessedImage(
@@ -203,12 +221,293 @@ public class ImageMetadataProcessor {
         );
     }
 
+    public static ParsedWebP parseAndValidateWebP(byte[] webpBytes) {
+        if (webpBytes == null || webpBytes.length < 12) {
+            throw new ValidationException("Tệp WebP không đủ độ dài tối thiểu.", "file");
+        }
+
+        if (webpBytes[0] != 'R' || webpBytes[1] != 'I' || webpBytes[2] != 'F' || webpBytes[3] != 'F'
+            || webpBytes[8] != 'W' || webpBytes[9] != 'E' || webpBytes[10] != 'B' || webpBytes[11] != 'P') {
+            throw new ValidationException("Định dạng container WebP không hợp lệ.", "file");
+        }
+
+        long declaredRiffSize = readUint32LE(webpBytes, 4);
+        long expectedTotalLength = declaredRiffSize + 8L;
+        if (declaredRiffSize < 4L || expectedTotalLength != webpBytes.length) {
+            throw new ValidationException("Kích thước khai báo trong container WebP không khớp độ dài dữ liệu tệp (khai báo: "
+                + declaredRiffSize + ", thực tế: " + (webpBytes.length - 8L) + ").", "file");
+        }
+
+        long riffEndOffset = expectedTotalLength;
+        ByteArrayOutputStream outChunks = new ByteArrayOutputStream();
+        long offset = 12L;
+        int imageChunkCount = 0;
+        boolean hasVp8x = false;
+        int extractedWidth = -1;
+        int extractedHeight = -1;
+        int orientation = 1;
+
+        while (offset < riffEndOffset) {
+            if (offset + 8L > riffEndOffset) {
+                throw new ValidationException("Chunk WebP bị cắt cụt header tại offset " + offset, "file");
+            }
+
+            String fourCC = new String(webpBytes, (int) offset, 4, StandardCharsets.US_ASCII);
+            long chunkSizeLong = readUint32LE(webpBytes, (int) (offset + 4));
+            long padding = (chunkSizeLong % 2 != 0) ? 1L : 0L;
+            long nextOffset = offset + 8L + chunkSizeLong + padding;
+
+            if (chunkSizeLong < 0 || offset + 8L + chunkSizeLong > riffEndOffset || nextOffset > riffEndOffset) {
+                throw new ValidationException("Kích thước chunk '" + fourCC + "' (" + chunkSizeLong + " bytes) vượt quá giới hạn container RIFF.", "file");
+            }
+
+            int chunkSize = (int) chunkSizeLong;
+            int offsetInt = (int) offset;
+            int payloadOffset = offsetInt + 8;
+
+            if ("ANIM".equals(fourCC) || "ANMF".equals(fourCC)) {
+                throw new ValidationException("Ảnh động WebP không được hỗ trợ trong phạm vi hiện tại.", "file");
+            }
+
+            if ("VP8X".equals(fourCC)) {
+                if (hasVp8x) {
+                    throw new ValidationException("Tệp WebP chứa nhiều hơn một chunk VP8X.", "file");
+                }
+                hasVp8x = true;
+                if (chunkSize < 10) {
+                    throw new ValidationException("Chunk VP8X quá ngắn (" + chunkSize + " bytes, tối thiểu 10 bytes).", "file");
+                }
+
+                byte flags = webpBytes[payloadOffset];
+                if ((flags & 0x02) != 0) { // Animation bit
+                    throw new ValidationException("Ảnh động WebP không được hỗ trợ trong phạm vi hiện tại.", "file");
+                }
+
+                int canvasWidth = 1 + ((webpBytes[payloadOffset + 4] & 0xFF)
+                    | ((webpBytes[payloadOffset + 5] & 0xFF) << 8)
+                    | ((webpBytes[payloadOffset + 6] & 0xFF) << 16));
+                int canvasHeight = 1 + ((webpBytes[payloadOffset + 7] & 0xFF)
+                    | ((webpBytes[payloadOffset + 8] & 0xFF) << 8)
+                    | ((webpBytes[payloadOffset + 9] & 0xFF) << 16));
+
+                extractedWidth = canvasWidth;
+                extractedHeight = canvasHeight;
+
+                byte[] vp8xData = new byte[chunkSize];
+                System.arraycopy(webpBytes, payloadOffset, vp8xData, 0, chunkSize);
+                // Clear bit 2 (XMP), bit 3 (EXIF), bit 1 (Animation)
+                vp8xData[0] = (byte) (vp8xData[0] & ~0x0E);
+
+                outChunks.write(webpBytes, offsetInt, 4);
+                writeUint32LE(outChunks, chunkSize);
+                outChunks.write(vp8xData, 0, chunkSize);
+                if (padding > 0) {
+                    outChunks.write(0);
+                }
+                offset = nextOffset;
+                continue;
+            }
+
+            if ("VP8 ".equals(fourCC)) {
+                if (chunkSize < 10) {
+                    throw new ValidationException("Chunk VP8 quá ngắn (" + chunkSize + " bytes, tối thiểu 10 bytes).", "file");
+                }
+                if ((webpBytes[payloadOffset + 3] & 0xFF) != 0x9D
+                    || (webpBytes[payloadOffset + 4] & 0xFF) != 0x01
+                    || (webpBytes[payloadOffset + 5] & 0xFF) != 0x2A) {
+                    throw new ValidationException("Chunk VP8 thiếu signature bytes 0x9D012A.", "file");
+                }
+
+                int vp8W = (webpBytes[payloadOffset + 6] & 0xFF) | ((webpBytes[payloadOffset + 7] & 0x3F) << 8);
+                int vp8H = (webpBytes[payloadOffset + 8] & 0xFF) | ((webpBytes[payloadOffset + 9] & 0x3F) << 8);
+                if (extractedWidth <= 0) {
+                    extractedWidth = vp8W;
+                    extractedHeight = vp8H;
+                }
+                imageChunkCount++;
+            }
+
+            if ("VP8L".equals(fourCC)) {
+                if (chunkSize < 5) {
+                    throw new ValidationException("Chunk VP8L quá ngắn (" + chunkSize + " bytes, tối thiểu 5 bytes).", "file");
+                }
+                if (webpBytes[payloadOffset] != 0x2F) {
+                    throw new ValidationException("Chunk VP8L thiếu signature byte 0x2F.", "file");
+                }
+
+                int b1 = webpBytes[payloadOffset + 1] & 0xFF;
+                int b2 = webpBytes[payloadOffset + 2] & 0xFF;
+                int b3 = webpBytes[payloadOffset + 3] & 0xFF;
+                int b4 = webpBytes[payloadOffset + 4] & 0xFF;
+                int vp8lW = 1 + (((b2 & 0x3F) << 8) | b1);
+                int vp8lH = 1 + (((b4 & 0x0F) << 10) | (b3 << 2) | ((b2 & 0xC0) >> 6));
+                if (extractedWidth <= 0) {
+                    extractedWidth = vp8lW;
+                    extractedHeight = vp8lH;
+                }
+                imageChunkCount++;
+            }
+
+            if ("EXIF".equals(fourCC)) {
+                int exifOrientation = parseExifOrientation(webpBytes, payloadOffset, chunkSize);
+                if (exifOrientation < 1 || exifOrientation > 8) {
+                    throw new ValidationException("Giá trị EXIF orientation (" + exifOrientation + ") không hợp lệ. Chỉ chấp nhận giá trị từ 1 đến 8.", "file");
+                }
+                if (exifOrientation > 1) {
+                    throw new ValidationException("Hình ảnh WebP chứa thông tin xoay hướng (EXIF orientation=" + exifOrientation + ") không thể xử lý an toàn.", "file");
+                }
+                orientation = exifOrientation;
+                offset = nextOffset;
+                continue;
+            }
+
+            if ("XMP ".equals(fourCC)) {
+                offset = nextOffset;
+                continue;
+            }
+
+            outChunks.write(webpBytes, offsetInt, (int) (8L + chunkSizeLong + padding));
+            offset = nextOffset;
+        }
+
+        if (imageChunkCount == 0) {
+            throw new ValidationException("Tệp WebP thiếu dữ liệu hình ảnh (VP8/VP8L).", "file");
+        }
+        if (imageChunkCount > 1) {
+            throw new ValidationException("Tệp WebP chứa nhiều chunk hình ảnh mâu thuẫn (imageChunkCount=" + imageChunkCount + ").", "file");
+        }
+
+        if (extractedWidth <= 0 || extractedHeight <= 0) {
+            throw new ValidationException("Kích thước hình ảnh không hợp lệ.", "file");
+        }
+
+        if (extractedWidth > MAX_DIMENSION || extractedHeight > MAX_DIMENSION) {
+            throw new ValidationException("Kích thước chiều rộng hoặc chiều cao vượt quá giới hạn tối đa " + MAX_DIMENSION + "px.", "file");
+        }
+
+        long totalPixels = (long) extractedWidth * extractedHeight;
+        if (totalPixels > MAX_PIXEL_COUNT) {
+            throw new ValidationException("Số lượng pixel hình ảnh (" + totalPixels + ") vượt quá giới hạn tối đa 25MP.", "file");
+        }
+
+        byte[] payload = outChunks.toByteArray();
+        ByteArrayOutputStream finalWebP = new ByteArrayOutputStream();
+        finalWebP.write('R'); finalWebP.write('I'); finalWebP.write('F'); finalWebP.write('F');
+        writeUint32LE(finalWebP, payload.length + 4L);
+        finalWebP.write('W'); finalWebP.write('E'); finalWebP.write('B'); finalWebP.write('P');
+        try {
+            finalWebP.write(payload);
+        } catch (IOException e) {
+            throw new ValidationException("Không thể ghi container WebP sau khi loại bỏ siêu dữ liệu.", "file");
+        }
+
+        return new ParsedWebP(extractedWidth, extractedHeight, orientation, finalWebP.toByteArray());
+    }
+
+    public static int parseExifOrientation(byte[] bytes, int offset, int length) {
+        if (length < 8) return 1;
+        int tiffStart = offset;
+        int tiffLength = length;
+        if (length >= 14 && bytes[offset] == 'E' && bytes[offset + 1] == 'x' && bytes[offset + 2] == 'i' && bytes[offset + 3] == 'f'
+            && bytes[offset + 4] == 0 && bytes[offset + 5] == 0) {
+            tiffStart = offset + 6;
+            tiffLength = length - 6;
+        }
+        return parseTiffOrientation(bytes, tiffStart, tiffLength);
+    }
+
+    public static int parseTiffOrientation(byte[] bytes, int tiffStart, int tiffLength) {
+        if (tiffLength < 14 || tiffStart + tiffLength > bytes.length) return 1;
+        boolean littleEndian;
+        if (bytes[tiffStart] == 'I' && bytes[tiffStart + 1] == 'I') {
+            littleEndian = true;
+        } else if (bytes[tiffStart] == 'M' && bytes[tiffStart + 1] == 'M') {
+            littleEndian = false;
+        } else {
+            return 1;
+        }
+
+        int magic = read16(bytes, tiffStart + 2, littleEndian);
+        if (magic != 42) return 1;
+
+        int ifdOffset = read32(bytes, tiffStart + 4, littleEndian);
+        if (ifdOffset < 8 || ifdOffset + 2 > tiffLength) return 1;
+
+        int ifdPos = tiffStart + ifdOffset;
+        if (ifdPos + 2 > bytes.length) return 1;
+        int numEntries = read16(bytes, ifdPos, littleEndian);
+        if (numEntries <= 0 || ifdPos + 2 + numEntries * 12 > tiffStart + tiffLength) return 1;
+
+        for (int i = 0; i < numEntries; i++) {
+            int entryPos = ifdPos + 2 + i * 12;
+            int tag = read16(bytes, entryPos, littleEndian);
+            if (tag == 0x0112) { // Orientation tag
+                return read16(bytes, entryPos + 8, littleEndian);
+            }
+        }
+        return 1;
+    }
+
+    private static int read16(byte[] bytes, int offset, boolean littleEndian) {
+        int b0 = bytes[offset] & 0xFF;
+        int b1 = bytes[offset + 1] & 0xFF;
+        return littleEndian ? (b1 << 8) | b0 : (b0 << 8) | b1;
+    }
+
+    private static int read32(byte[] bytes, int offset, boolean littleEndian) {
+        int b0 = bytes[offset] & 0xFF;
+        int b1 = bytes[offset + 1] & 0xFF;
+        int b2 = bytes[offset + 2] & 0xFF;
+        int b3 = bytes[offset + 3] & 0xFF;
+        return littleEndian
+            ? (b3 << 24) | (b2 << 16) | (b1 << 8) | b0
+            : (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;
+    }
+
+    public static boolean isAnimatedWebP(byte[] webpBytes) {
+        if (webpBytes == null || webpBytes.length < 12) {
+            return false;
+        }
+
+        if (webpBytes[0] != 'R' || webpBytes[1] != 'I' || webpBytes[2] != 'F' || webpBytes[3] != 'F'
+            || webpBytes[8] != 'W' || webpBytes[9] != 'E' || webpBytes[10] != 'B' || webpBytes[11] != 'P') {
+            return false;
+        }
+
+        long declaredRiffSize = readUint32LE(webpBytes, 4);
+        long riffEndOffset = Math.min((long) webpBytes.length, declaredRiffSize + 8L);
+
+        long offset = 12L;
+        while (offset + 8L <= riffEndOffset) {
+            String fourCC = new String(webpBytes, (int) offset, 4, StandardCharsets.US_ASCII);
+            long chunkSize = readUint32LE(webpBytes, (int) (offset + 4));
+            long padding = (chunkSize % 2 != 0) ? 1L : 0L;
+
+            if (chunkSize < 0 || offset + 8L + chunkSize + padding > riffEndOffset) {
+                break;
+            }
+
+            if ("ANIM".equals(fourCC) || "ANMF".equals(fourCC)) {
+                return true;
+            }
+
+            if ("VP8X".equals(fourCC) && offset + 9L <= riffEndOffset) {
+                byte flags = webpBytes[(int) (offset + 8)];
+                if ((flags & 0x02) != 0) { // Animation bit
+                    return true;
+                }
+            }
+
+            offset += 8L + chunkSize + padding;
+        }
+
+        return false;
+    }
+
     public static int[] extractDimensionsWithoutRaster(byte[] rawBytes, String detectedMime) {
         if ("image/webp".equals(detectedMime)) {
-            int[] dims = extractWebPDimensions(rawBytes);
-            if (dims != null && dims[0] > 0 && dims[1] > 0) {
-                return dims;
-            }
+            ParsedWebP parsed = parseAndValidateWebP(rawBytes);
+            return new int[] { parsed.width(), parsed.height() };
         }
 
         try (ByteArrayInputStream bais = new ByteArrayInputStream(rawBytes);
@@ -269,8 +568,14 @@ public class ImageMetadataProcessor {
             Metadata metadata = ImageMetadataReader.readMetadata(in);
             ExifIFD0Directory dir = metadata.getFirstDirectoryOfType(ExifIFD0Directory.class);
             if (dir != null && dir.containsTag(ExifIFD0Directory.TAG_ORIENTATION)) {
-                return dir.getInt(ExifIFD0Directory.TAG_ORIENTATION);
+                int orientation = dir.getInt(ExifIFD0Directory.TAG_ORIENTATION);
+                if (orientation < 1 || orientation > 8) {
+                    throw new ValidationException("Giá trị EXIF orientation (" + orientation + ") không hợp lệ. Chỉ chấp nhận giá trị từ 1 đến 8.", "file");
+                }
+                return orientation;
             }
+        } catch (ValidationException ve) {
+            throw ve;
         } catch (Exception ignored) {
             // Default to normal orientation (1)
         }
@@ -378,160 +683,8 @@ public class ImageMetadataProcessor {
         }
     }
 
-    private boolean isAnimatedWebP(byte[] webpBytes) {
-        if (webpBytes == null || webpBytes.length < 12) {
-            return false;
-        }
-
-        if (webpBytes[0] != 'R' || webpBytes[1] != 'I' || webpBytes[2] != 'F' || webpBytes[3] != 'F'
-            || webpBytes[8] != 'W' || webpBytes[9] != 'E' || webpBytes[10] != 'B' || webpBytes[11] != 'P') {
-            return false;
-        }
-
-        long declaredRiffSize = readUint32LE(webpBytes, 4);
-        long riffEndOffset = Math.min((long) webpBytes.length, declaredRiffSize + 8L);
-
-        long offset = 12L;
-        while (offset + 8L <= riffEndOffset) {
-            String fourCC = new String(webpBytes, (int) offset, 4, StandardCharsets.US_ASCII);
-            long chunkSize = readUint32LE(webpBytes, (int) (offset + 4));
-            long padding = (chunkSize % 2 != 0) ? 1L : 0L;
-
-            if (chunkSize < 0 || offset + 8L + chunkSize + padding > riffEndOffset) {
-                throw new ValidationException("Cấu trúc chunk WebP bị lỗi hoặc vượt quá giới hạn tệp.", "file");
-            }
-
-            if ("ANIM".equals(fourCC) || "ANMF".equals(fourCC)) {
-                return true;
-            }
-
-            if ("VP8X".equals(fourCC) && offset + 9L <= riffEndOffset) {
-                byte flags = webpBytes[(int) (offset + 8)];
-                if ((flags & 0x02) != 0) { // Animation bit
-                    return true;
-                }
-            }
-
-            offset += 8L + chunkSize + padding;
-        }
-
-        return false;
-    }
-
     public static byte[] stripWebPMetadata(byte[] webpBytes) {
-        if (webpBytes == null || webpBytes.length < 12) {
-            throw new ValidationException("Tệp WebP không đủ độ dài tối thiểu.", "file");
-        }
-
-        if (webpBytes[0] != 'R' || webpBytes[1] != 'I' || webpBytes[2] != 'F' || webpBytes[3] != 'F'
-            || webpBytes[8] != 'W' || webpBytes[9] != 'E' || webpBytes[10] != 'B' || webpBytes[11] != 'P') {
-            throw new ValidationException("Định dạng container WebP không hợp lệ.", "file");
-        }
-
-        long declaredRiffSize = readUint32LE(webpBytes, 4);
-        long expectedTotalLength = declaredRiffSize + 8L;
-        if (declaredRiffSize < 4L || expectedTotalLength != webpBytes.length) {
-            throw new ValidationException("Kích thước khai báo trong container WebP không khớp độ dài dữ liệu tệp (khai báo: "
-                + declaredRiffSize + ", thực tế: " + (webpBytes.length - 8L) + ").", "file");
-        }
-
-        long riffEndOffset = expectedTotalLength;
-        ByteArrayOutputStream outChunks = new ByteArrayOutputStream();
-        long offset = 12L;
-        int imageChunkCount = 0;
-        boolean hasVp8x = false;
-
-        while (offset < riffEndOffset) {
-            if (offset + 8L > riffEndOffset) {
-                throw new ValidationException("Chunk WebP bị cắt cụt header tại offset " + offset, "file");
-            }
-
-            String fourCC = new String(webpBytes, (int) offset, 4, StandardCharsets.US_ASCII);
-            long chunkSizeLong = readUint32LE(webpBytes, (int) (offset + 4));
-            long padding = (chunkSizeLong % 2 != 0) ? 1L : 0L;
-            long nextOffset = offset + 8L + chunkSizeLong + padding;
-
-            if (chunkSizeLong < 0 || offset + 8L + chunkSizeLong > riffEndOffset || nextOffset > riffEndOffset) {
-                throw new ValidationException("Kích thước chunk '" + fourCC + "' (" + chunkSizeLong + " bytes) vượt quá giới hạn container RIFF.", "file");
-            }
-
-            int chunkSize = (int) chunkSizeLong;
-            int offsetInt = (int) offset;
-            int payloadOffset = offsetInt + 8;
-
-            if ("VP8X".equals(fourCC)) {
-                if (hasVp8x) {
-                    throw new ValidationException("Tệp WebP chứa nhiều hơn một chunk VP8X.", "file");
-                }
-                hasVp8x = true;
-                if (chunkSize < 10) {
-                    throw new ValidationException("Chunk VP8X quá ngắn (" + chunkSize + " bytes, tối thiểu 10 bytes).", "file");
-                }
-
-                byte[] vp8xData = new byte[chunkSize];
-                System.arraycopy(webpBytes, payloadOffset, vp8xData, 0, chunkSize);
-                if (vp8xData.length > 0) {
-                    // Clear bit 2 (XMP), bit 3 (EXIF), and bit 1 (Animation)
-                    vp8xData[0] = (byte) (vp8xData[0] & ~0x0E);
-                }
-
-                outChunks.write(webpBytes, offsetInt, 4); // FourCC
-                writeUint32LE(outChunks, chunkSize);
-                outChunks.write(vp8xData, 0, chunkSize);
-                if (padding > 0) {
-                    outChunks.write(0);
-                }
-                offset = nextOffset;
-                continue;
-            }
-
-            if ("VP8 ".equals(fourCC)) {
-                if (chunkSize < 10) {
-                    throw new ValidationException("Chunk VP8 quá ngắn (" + chunkSize + " bytes, tối thiểu 10 bytes).", "file");
-                }
-                imageChunkCount++;
-            }
-
-            if ("VP8L".equals(fourCC)) {
-                if (chunkSize < 5) {
-                    throw new ValidationException("Chunk VP8L quá ngắn (" + chunkSize + " bytes, tối thiểu 5 bytes).", "file");
-                }
-                if (webpBytes[payloadOffset] != 0x2F) {
-                    throw new ValidationException("Chunk VP8L thiếu signature byte 0x2F.", "file");
-                }
-                imageChunkCount++;
-            }
-
-            if ("EXIF".equals(fourCC) || "XMP ".equals(fourCC)) {
-                // Strip EXIF and XMP chunks
-                offset = nextOffset;
-                continue;
-            }
-
-            // Write all other valid chunks
-            outChunks.write(webpBytes, offsetInt, (int) (8L + chunkSizeLong + padding));
-            offset = nextOffset;
-        }
-
-        if (imageChunkCount == 0) {
-            throw new ValidationException("Tệp WebP thiếu dữ liệu hình ảnh (VP8/VP8L).", "file");
-        }
-        if (imageChunkCount > 1) {
-            throw new ValidationException("Tệp WebP chứa nhiều chunk hình ảnh mâu thuẫn (imageChunkCount=" + imageChunkCount + ").", "file");
-        }
-
-        byte[] payload = outChunks.toByteArray();
-        ByteArrayOutputStream finalWebP = new ByteArrayOutputStream();
-        finalWebP.write('R'); finalWebP.write('I'); finalWebP.write('F'); finalWebP.write('F');
-        writeUint32LE(finalWebP, payload.length + 4L);
-        finalWebP.write('W'); finalWebP.write('E'); finalWebP.write('B'); finalWebP.write('P');
-        try {
-            finalWebP.write(payload);
-        } catch (IOException e) {
-            throw new ValidationException("Không thể ghi container WebP sau khi loại bỏ siêu dữ liệu.", "file");
-        }
-
-        return finalWebP.toByteArray();
+        return parseAndValidateWebP(webpBytes).strippedBytes();
     }
 
     private static long readUint32LE(byte[] bytes, int offset) {
@@ -542,58 +695,12 @@ public class ImageMetadataProcessor {
     }
 
     public static int[] extractWebPDimensions(byte[] bytes) {
-        if (bytes == null || bytes.length < 24) {
+        try {
+            ParsedWebP parsed = parseAndValidateWebP(bytes);
+            return new int[] { parsed.width(), parsed.height() };
+        } catch (Exception e) {
             return null;
         }
-        long offset = 12L;
-        while (offset + 8L <= bytes.length) {
-            String fourCC = new String(bytes, (int) offset, 4, StandardCharsets.US_ASCII);
-            long chunkSize = readUint32LE(bytes, (int) (offset + 4));
-            long chunkDataOffset = offset + 8L;
-            long padding = (chunkSize % 2 != 0) ? 1L : 0L;
-
-            if (chunkSize < 0 || chunkDataOffset + chunkSize + padding > bytes.length) {
-                return null;
-            }
-
-            int chunkDataOffsetInt = (int) chunkDataOffset;
-
-            if ("VP8X".equals(fourCC) && chunkDataOffset + 10L <= bytes.length) {
-                int canvasWidth = 1 + ((bytes[chunkDataOffsetInt + 4] & 0xFF)
-                    | ((bytes[chunkDataOffsetInt + 5] & 0xFF) << 8)
-                    | ((bytes[chunkDataOffsetInt + 6] & 0xFF) << 16));
-                int canvasHeight = 1 + ((bytes[chunkDataOffsetInt + 7] & 0xFF)
-                    | ((bytes[chunkDataOffsetInt + 8] & 0xFF) << 8)
-                    | ((bytes[chunkDataOffsetInt + 9] & 0xFF) << 16));
-                return new int[] { canvasWidth, canvasHeight };
-            }
-
-            if ("VP8 ".equals(fourCC) && chunkDataOffset + 10L <= bytes.length) {
-                if ((bytes[chunkDataOffsetInt + 3] & 0xFF) == 0x9D
-                    && (bytes[chunkDataOffsetInt + 4] & 0xFF) == 0x01
-                    && (bytes[chunkDataOffsetInt + 5] & 0xFF) == 0x2A) {
-                    int w = (bytes[chunkDataOffsetInt + 6] & 0xFF) | ((bytes[chunkDataOffsetInt + 7] & 0x3F) << 8);
-                    int h = (bytes[chunkDataOffsetInt + 8] & 0xFF) | ((bytes[chunkDataOffsetInt + 9] & 0x3F) << 8);
-                    return new int[] { w, h };
-                }
-            }
-
-            if ("VP8L".equals(fourCC) && chunkDataOffset + 5L <= bytes.length) {
-                if (bytes[chunkDataOffsetInt] == 0x2F) {
-                    int b1 = bytes[chunkDataOffsetInt + 1] & 0xFF;
-                    int b2 = bytes[chunkDataOffsetInt + 2] & 0xFF;
-                    int b3 = bytes[chunkDataOffsetInt + 3] & 0xFF;
-                    int b4 = bytes[chunkDataOffsetInt + 4] & 0xFF;
-                    int packed = b1 | (b2 << 8) | (b3 << 16) | (b4 << 24);
-                    int w = 1 + (packed & 0x3FFF);
-                    int h = 1 + ((packed >>> 14) & 0x3FFF);
-                    return new int[] { w, h };
-                }
-            }
-
-            offset += 8L + chunkSize + padding;
-        }
-        return null;
     }
 
     private static void writeUint32LE(ByteArrayOutputStream out, long value) {
@@ -608,38 +715,28 @@ public class ImageMetadataProcessor {
             Metadata metadata = ImageMetadataReader.readMetadata(in);
 
             GpsDirectory gpsDir = metadata.getFirstDirectoryOfType(GpsDirectory.class);
-            if (gpsDir != null && !gpsDir.getTags().isEmpty()) {
-                throw new ValidationException("Không thể loại bỏ siêu dữ liệu GPS khỏi hình ảnh.", "file");
+            if (gpsDir != null && !gpsDir.isEmpty()) {
+                throw new ValidationException("Tệp hình ảnh vẫn còn chứa thông tin định vị GPS sau khi xử lý.", "file");
             }
 
-            ExifIFD0Directory ifd0 = metadata.getFirstDirectoryOfType(ExifIFD0Directory.class);
-            if (ifd0 != null) {
-                if (ifd0.containsTag(ExifIFD0Directory.TAG_MAKE) || ifd0.containsTag(ExifIFD0Directory.TAG_MODEL)) {
-                    throw new ValidationException("Không thể loại bỏ thông tin thiết bị máy ảnh (Make/Model) khỏi hình ảnh.", "file");
-                }
-                if (ifd0.containsTag(ExifIFD0Directory.TAG_DATETIME)) {
-                    throw new ValidationException("Không thể loại bỏ thời gian chụp khỏi hình ảnh.", "file");
-                }
+            ExifSubIFDDirectory subIfd = metadata.getFirstDirectoryOfType(ExifSubIFDDirectory.class);
+            if (subIfd != null && !subIfd.isEmpty()) {
+                throw new ValidationException("Tệp hình ảnh vẫn còn chứa siêu dữ liệu máy ảnh EXIF sau khi xử lý.", "file");
             }
 
-            ExifSubIFDDirectory subIFD = metadata.getFirstDirectoryOfType(ExifSubIFDDirectory.class);
-            if (subIFD != null && subIFD.containsTag(ExifSubIFDDirectory.TAG_DATETIME_ORIGINAL)) {
-                throw new ValidationException("Không thể loại bỏ thời gian chụp gốc khỏi hình ảnh.", "file");
+            XmpDirectory xmpDir = metadata.getFirstDirectoryOfType(XmpDirectory.class);
+            if (xmpDir != null && !xmpDir.isEmpty()) {
+                throw new ValidationException("Tệp hình ảnh vẫn còn chứa siêu dữ liệu XMP sau khi xử lý.", "file");
             }
 
-            XmpDirectory xmp = metadata.getFirstDirectoryOfType(XmpDirectory.class);
-            if (xmp != null && !xmp.getTags().isEmpty()) {
-                throw new ValidationException("Không thể loại bỏ siêu dữ liệu XMP khỏi hình ảnh.", "file");
+            IptcDirectory iptcDir = metadata.getFirstDirectoryOfType(IptcDirectory.class);
+            if (iptcDir != null && !iptcDir.isEmpty()) {
+                throw new ValidationException("Tệp hình ảnh vẫn còn chứa siêu dữ liệu IPTC sau khi xử lý.", "file");
             }
-
-            IptcDirectory iptc = metadata.getFirstDirectoryOfType(IptcDirectory.class);
-            if (iptc != null && !iptc.getTags().isEmpty()) {
-                throw new ValidationException("Không thể loại bỏ siêu dữ liệu IPTC khỏi hình ảnh.", "file");
-            }
-        } catch (ValidationException ex) {
-            throw ex;
-        } catch (Exception ex) {
-            throw new ValidationException("Không thể xác minh tính toàn vẹn và an toàn của siêu dữ liệu hình ảnh: " + ex.getMessage(), "file");
+        } catch (ValidationException ve) {
+            throw ve;
+        } catch (Exception ignored) {
+            // No metadata readers recognized format or no metadata present
         }
     }
 
@@ -649,7 +746,7 @@ public class ImageMetadataProcessor {
             byte[] hash = digest.digest(data);
             return HexFormat.of().formatHex(hash);
         } catch (NoSuchAlgorithmException e) {
-            throw new RuntimeException("Thuật toán SHA-256 không khả dụng trên hệ thống JVM.", e);
+            throw new RuntimeException("SHA-256 algorithm not available", e);
         }
     }
 }

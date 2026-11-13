@@ -319,9 +319,42 @@ export const apiClient: AxiosInstance = axios.create({
   },
 });
 
+/**
+ * Strips manual 'Content-Type: multipart/form-data' so the browser / native networking layer
+ * can automatically append the proper boundary parameter (e.g. multipart/form-data; boundary=...).
+ * Works on AxiosHeaders instances and plain headers objects.
+ */
+export function cleanMultipartFormDataHeaders(config: { data?: unknown; headers?: any }): void {
+  if (
+    config.data &&
+    typeof config.data === 'object' &&
+    typeof (config.data as { append?: unknown }).append === 'function'
+  ) {
+    if (config.headers) {
+      const rawVal =
+        typeof config.headers.get === 'function'
+          ? config.headers.get('Content-Type') || config.headers.get('content-type')
+          : config.headers['Content-Type'] || config.headers['content-type'];
+      const ct = typeof rawVal === 'string' ? rawVal.trim().toLowerCase() : '';
+      if (ct === 'multipart/form-data' || ct.startsWith('multipart/form-data;')) {
+        if (typeof config.headers.delete === 'function') {
+          config.headers.delete('Content-Type');
+          config.headers.delete('content-type');
+        }
+        delete config.headers['Content-Type'];
+        delete config.headers['content-type'];
+      }
+    }
+  }
+}
+
 // Request Interceptor: Enforce trusted effective baseURL & API URL before reading storage or attaching JWT
 apiClient.interceptors.request.use(
   async (config: InternalAxiosRequestConfig) => {
+    // Ensure multipart boundary is properly handled by browser/native adapter whenever data is FormData,
+    // BEFORE any early returns (e.g. public endpoints, expectedUserId guarded routes).
+    cleanMultipartFormDataHeaders(config);
+
     const reqMeta = (config as unknown) as Record<string, unknown>;
     const rawRequestBaseUrl = Object.prototype.hasOwnProperty.call(reqMeta, 'baseURL')
       ? reqMeta.baseURL
@@ -482,16 +515,7 @@ apiClient.interceptors.request.use(
       config.headers.Authorization = `Bearer ${token}`;
     }
 
-    // Ensure multipart boundary is properly handled by browser/native adapter when data is FormData
-    if (config.data && typeof config.data === 'object' && typeof (config.data as any).append === 'function') {
-      if (config.headers) {
-        const ct = config.headers['Content-Type'] || config.headers['content-type'];
-        if (typeof ct === 'string' && ct.trim().toLowerCase() === 'multipart/form-data') {
-          delete config.headers['Content-Type'];
-          delete config.headers['content-type'];
-        }
-      }
-    }
+    cleanMultipartFormDataHeaders(config);
 
     return config;
   },

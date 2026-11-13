@@ -80,7 +80,7 @@ class MediaTransactionCoordinatorTest {
         media.setId(mediaId);
         media.setStatus(MediaStatus.PENDING);
 
-        when(mediaRepository.findById(mediaId)).thenReturn(Optional.of(media));
+        when(mediaRepository.findByIdForUpdate(mediaId)).thenReturn(Optional.of(media));
         when(mediaRepository.saveAndFlush(any(Media.class))).thenAnswer(i -> i.getArgument(0));
 
         Media result = coordinator.markReady(mediaId);
@@ -227,11 +227,12 @@ class MediaTransactionCoordinatorTest {
         pending.setStatus(MediaStatus.PENDING);
 
         when(mediaRepository.findByIdForUpdate(mediaId)).thenReturn(Optional.of(pending));
+        when(mediaRepository.saveAndFlush(any(Media.class))).thenAnswer(i -> i.getArgument(0));
 
         MediaTransactionCoordinator.ReconciliationCandidate candidate = coordinator.beginReconciliation(mediaId);
         assertNotNull(candidate);
         assertEquals(mediaId, candidate.mediaId());
-        assertEquals(MediaStatus.PENDING, candidate.status());
+        assertEquals(MediaStatus.RECONCILING, candidate.status());
     }
 
     @Test
@@ -261,7 +262,7 @@ class MediaTransactionCoordinatorTest {
         pending.setId(mediaId);
         pending.setStatus(MediaStatus.PENDING);
 
-        when(mediaRepository.findById(mediaId)).thenReturn(Optional.of(pending));
+        when(mediaRepository.findByIdForUpdate(mediaId)).thenReturn(Optional.of(pending));
         when(mediaRepository.saveAndFlush(any(Media.class))).thenAnswer(i -> i.getArgument(0));
 
         coordinator.completeReconciliation(mediaId);

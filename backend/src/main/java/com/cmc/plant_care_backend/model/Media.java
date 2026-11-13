@@ -48,6 +48,24 @@ public class Media {
     @Column(name = "status", nullable = false, length = 20)
     private MediaStatus status = MediaStatus.PENDING;
 
+    @Column(name = "lease_token", length = 64)
+    private String leaseToken;
+
+    @Column(name = "lease_expires_at")
+    private OffsetDateTime leaseExpiresAt;
+
+    @Column(name = "attempt_count", nullable = false)
+    private int attemptCount = 0;
+
+    @Column(name = "last_attempt_at")
+    private OffsetDateTime lastAttemptAt;
+
+    @Column(name = "next_retry_at")
+    private OffsetDateTime nextRetryAt;
+
+    @Column(name = "error_detail", length = 1000)
+    private String errorDetail;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;
 
@@ -62,8 +80,12 @@ public class Media {
         if (this.status == null) {
             this.status = MediaStatus.PENDING;
         }
-        this.createdAt = now;
-        this.updatedAt = now;
+        if (this.createdAt == null) {
+            this.createdAt = now;
+        }
+        if (this.updatedAt == null) {
+            this.updatedAt = now;
+        }
     }
 
     @PreUpdate
@@ -149,6 +171,54 @@ public class Media {
 
     public void setStatus(MediaStatus status) {
         this.status = status;
+    }
+
+    public String getLeaseToken() {
+        return leaseToken;
+    }
+
+    public void setLeaseToken(String leaseToken) {
+        this.leaseToken = leaseToken;
+    }
+
+    public OffsetDateTime getLeaseExpiresAt() {
+        return leaseExpiresAt;
+    }
+
+    public void setLeaseExpiresAt(OffsetDateTime leaseExpiresAt) {
+        this.leaseExpiresAt = leaseExpiresAt;
+    }
+
+    public int getAttemptCount() {
+        return attemptCount;
+    }
+
+    public void setAttemptCount(int attemptCount) {
+        this.attemptCount = attemptCount;
+    }
+
+    public OffsetDateTime getLastAttemptAt() {
+        return lastAttemptAt;
+    }
+
+    public void setLastAttemptAt(OffsetDateTime lastAttemptAt) {
+        this.lastAttemptAt = lastAttemptAt;
+    }
+
+    public OffsetDateTime getNextRetryAt() {
+        return nextRetryAt;
+    }
+
+    public void setNextRetryAt(OffsetDateTime nextRetryAt) {
+        this.nextRetryAt = nextRetryAt;
+    }
+
+    public String getErrorDetail() {
+        return errorDetail;
+    }
+
+    public void setErrorDetail(String errorDetail) {
+        this.errorDetail = errorDetail;
     }
 
     public OffsetDateTime getCreatedAt() {

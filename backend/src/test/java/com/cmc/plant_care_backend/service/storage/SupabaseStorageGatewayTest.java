@@ -432,4 +432,51 @@ class SupabaseStorageGatewayTest {
         assertFalse(sanitized.contains(VALID_SERVICE_ROLE_JWT));
         assertTrue(sanitized.contains("[REDACTED]"));
     }
+
+    @Test
+    @DisplayName("resolveFullSignedUrl rejects HTTP base URL")
+    void resolveFullSignedUrl_RejectsHttpBaseUrl() {
+        assertThrows(StorageUnavailableException.class, () ->
+            gateway.resolveFullSignedUrl("http://insecure.supabase.co", "/storage/v1/object/sign/b/k.jpg?token=abc"));
+    }
+
+    @Test
+    @DisplayName("sanitizeLogMessage redacts passwords, tokens, query params and secrets")
+    void sanitizeLogMessage_RedactsComprehensiveSecrets() {
+        String raw = "Error: password=MySecretPass123 access_token=tok_abc456 refresh_token=ref_789 secret=super_sec "
+            + "URL: https://xyzcompany.supabase.co/storage/v1/object/sign/b/k.jpg?token=query_secret_token_999&apikey=key_123";
+        String sanitized = gateway.sanitizeLogMessage(raw);
+
+        assertFalse(sanitized.contains("MySecretPass123"));
+        assertFalse(sanitized.contains("tok_abc456"));
+        assertFalse(sanitized.contains("ref_789"));
+        assertFalse(sanitized.contains("super_sec"));
+        assertFalse(sanitized.contains("query_secret_token_999"));
+        assertFalse(sanitized.contains("key_123"));
+        assertTrue(sanitized.contains("[REDACTED]"));
+    }
+
+    @Test
+    @DisplayName("JWT with malformed JSON payload is rejected by JWTParser")
+    void jwt_MalformedJsonPayload_Rejected() {
+        String malformedJwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+            + Base64.getUrlEncoder().withoutPadding().encodeToString("not-valid-json".getBytes(StandardCharsets.UTF_8))
+            + ".sig123";
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
+            new SupabaseStorageProperties("https://xyz.supabase.co", malformedJwt, "bucket", 5242880L, 300));
+        assertTrue(ex.getMessage().contains("không phải JSON") || ex.getMessage().contains("không hợp lệ") || ex.getMessage().contains("RFC 7519"));
+    }
+
+    @Test
+    @DisplayName("JWT with missing role claim is rejected")
+    void jwt_MissingRoleClaim_Rejected() {
+        String noRoleJwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+            + Base64.getUrlEncoder().withoutPadding().encodeToString("{\"iss\":\"supabase\",\"sub\":\"12345\"}".getBytes(StandardCharsets.UTF_8))
+            + ".sig123";
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
+            new SupabaseStorageProperties("https://xyz.supabase.co", noRoleJwt, "bucket", 5242880L, 300));
+        assertTrue(ex.getMessage().contains("thiếu claim 'role'"));
+    }
 }

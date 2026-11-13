@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Pageable;
 
 import java.time.Duration;
 import java.time.OffsetDateTime;
@@ -19,6 +20,8 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -41,8 +44,14 @@ class MediaReconciliationServiceTest {
         reconciliationService = new MediaReconciliationService(
             mediaRepository,
             coordinator,
-            storageGateway
+            storageGateway,
+            50,
+            300,
+            60,
+            5,
+            30
         );
+        lenient().when(storageGateway.sanitizeLogMessage(anyString())).thenAnswer(inv -> inv.getArgument(0));
     }
 
     @Test
@@ -63,21 +72,21 @@ class MediaReconciliationServiceTest {
         deletingMedia.setBucket("goplant-private-media");
         deletingMedia.setObjectKey("users/deleting.jpg");
 
-        when(mediaRepository.findStuckMediaForReconciliation(any(OffsetDateTime.class)))
+        when(mediaRepository.findStuckMediaForReconciliation(any(OffsetDateTime.class), any(OffsetDateTime.class), any(Pageable.class)))
             .thenReturn(List.of(pendingMedia, deletingMedia));
 
-        when(coordinator.beginReconciliation(pendingId))
-            .thenReturn(new MediaTransactionCoordinator.ReconciliationCandidate(pendingId, "goplant-private-media", "users/pending.jpg", MediaStatus.PENDING));
-        when(coordinator.beginReconciliation(deletingId))
-            .thenReturn(new MediaTransactionCoordinator.ReconciliationCandidate(deletingId, "goplant-private-media", "users/deleting.jpg", MediaStatus.DELETING));
+        when(coordinator.beginReconciliation(eq(pendingId), anyString(), any(Duration.class)))
+            .thenReturn(new MediaTransactionCoordinator.ReconciliationCandidate(pendingId, "goplant-private-media", "users/pending.jpg", MediaStatus.PENDING, "token1"));
+        when(coordinator.beginReconciliation(eq(deletingId), anyString(), any(Duration.class)))
+            .thenReturn(new MediaTransactionCoordinator.ReconciliationCandidate(deletingId, "goplant-private-media", "users/deleting.jpg", MediaStatus.DELETING, "token2"));
 
         int reconciled = reconciliationService.reconcileStuckMedia(Duration.ofMinutes(5));
 
         assertEquals(2, reconciled);
         verify(storageGateway).delete("goplant-private-media", "users/pending.jpg");
         verify(storageGateway).delete("goplant-private-media", "users/deleting.jpg");
-        verify(coordinator).completeReconciliation(pendingId);
-        verify(coordinator).completeReconciliation(deletingId);
+        verify(coordinator).completeReconciliationSuccess(eq(pendingId), anyString());
+        verify(coordinator).completeReconciliationSuccess(eq(deletingId), anyString());
     }
 
     @Test
@@ -87,31 +96,31 @@ class MediaReconciliationServiceTest {
         Media attachedSummary = new Media();
         attachedSummary.setId(attachedId);
 
-        when(mediaRepository.findStuckMediaForReconciliation(any(OffsetDateTime.class)))
+        when(mediaRepository.findStuckMediaForReconciliation(any(OffsetDateTime.class), any(OffsetDateTime.class), any(Pageable.class)))
             .thenReturn(List.of(attachedSummary));
 
         // Coordinator rejects because candidate transitioned to ATTACHED or READY
-        when(coordinator.beginReconciliation(attachedId)).thenReturn(null);
+        when(coordinator.beginReconciliation(eq(attachedId), anyString(), any(Duration.class))).thenReturn(null);
 
         int reconciled = reconciliationService.reconcileStuckMedia(Duration.ofMinutes(5));
 
         assertEquals(0, reconciled);
         verify(storageGateway, never()).delete(any(), any());
-        verify(coordinator, never()).completeReconciliation(any());
+        verify(coordinator, never()).completeReconciliationSuccess(any(), any());
     }
 
     @Test
-    @DisplayName("reconcileStuckMedia skips completion if storage delete fails, allowing retry on next run")
+    @DisplayName("reconcileStuckMedia records failure and retry backoff if storage delete fails")
     void reconcileStuckMedia_StorageDeleteFails_SkipsCompletionForRetry() {
         UUID mediaId = UUID.randomUUID();
         Media summary = new Media();
         summary.setId(mediaId);
 
-        when(mediaRepository.findStuckMediaForReconciliation(any(OffsetDateTime.class)))
+        when(mediaRepository.findStuckMediaForReconciliation(any(OffsetDateTime.class), any(OffsetDateTime.class), any(Pageable.class)))
             .thenReturn(List.of(summary));
 
-        when(coordinator.beginReconciliation(mediaId))
-            .thenReturn(new MediaTransactionCoordinator.ReconciliationCandidate(mediaId, "goplant-private-media", "users/file.jpg", MediaStatus.PENDING));
+        when(coordinator.beginReconciliation(eq(mediaId), anyString(), any(Duration.class)))
+            .thenReturn(new MediaTransactionCoordinator.ReconciliationCandidate(mediaId, "goplant-private-media", "users/file.jpg", MediaStatus.PENDING, "token1"));
 
         doThrow(new RuntimeException("Supabase Storage gateway timeout"))
             .when(storageGateway).delete("goplant-private-media", "users/file.jpg");
@@ -120,14 +129,14 @@ class MediaReconciliationServiceTest {
 
         assertEquals(0, reconciled);
         verify(storageGateway).delete("goplant-private-media", "users/file.jpg");
-        // Must NOT mark complete so it remains eligible for next retry run
-        verify(coordinator, never()).completeReconciliation(any());
+        verify(coordinator).recordReconciliationFailure(eq(mediaId), anyString(), anyString(), eq(5), any(Duration.class));
+        verify(coordinator, never()).completeReconciliationSuccess(any(), any());
     }
 
     @Test
     @DisplayName("reconcileStuckMedia returns 0 when no stuck media found")
     void reconcileStuckMedia_EmptyList() {
-        when(mediaRepository.findStuckMediaForReconciliation(any(OffsetDateTime.class)))
+        when(mediaRepository.findStuckMediaForReconciliation(any(OffsetDateTime.class), any(OffsetDateTime.class), any(Pageable.class)))
             .thenReturn(Collections.emptyList());
 
         int reconciled = reconciliationService.reconcileStuckMedia(Duration.ofMinutes(5));

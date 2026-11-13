@@ -1,12 +1,12 @@
 package com.cmc.plant_care_backend.config;
 
+import com.nimbusds.jwt.JWT;
+import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.JWTParser;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.text.ParseException;
 
 @Component
 public class SupabaseStorageProperties {
@@ -17,7 +17,7 @@ public class SupabaseStorageProperties {
         LEGACY_SERVICE_ROLE
     }
 
-    public static final long DEFAULT_MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024L; // 5 MB
+    public static final long DEFAULT_MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024L; // 5 MB hard limit
     public static final int DEFAULT_SIGNED_URL_TTL_SECONDS = 300; // 5 minutes
     public static final int MIN_SIGNED_URL_TTL_SECONDS = 60;
     public static final int MAX_SIGNED_URL_TTL_SECONDS = 900;
@@ -30,13 +30,11 @@ public class SupabaseStorageProperties {
     public static final int MIN_READ_TIMEOUT_MS = 1_000;
     public static final int MAX_READ_TIMEOUT_MS = 120_000;
 
-    private static final Pattern JWT_ROLE_PATTERN = Pattern.compile("\"role\"\\s*:\\s*\"([^\"]+)\"");
-
     private final String url;
     private final String apiKey;
-    private final String bucket;
     private final ApiKeyType configuredKeyType;
     private final ApiKeyType effectiveKeyType;
+    private final String bucket;
     private final long maxFileSizeBytes;
     private final int signedUrlTtlSeconds;
     private final int connectTimeoutMs;
@@ -46,7 +44,7 @@ public class SupabaseStorageProperties {
     public SupabaseStorageProperties(
         @Value("${supabase.url:${SUPABASE_URL:}}") String url,
         @Value("${supabase.storage.api-key:${SUPABASE_STORAGE_API_KEY:${SUPABASE_SERVICE_ROLE_KEY:}}}") String apiKey,
-        @Value("${supabase.storage.api-key-type:${SUPABASE_STORAGE_API_KEY_TYPE:AUTO}}") String apiKeyTypeStr,
+        @Value("${supabase.storage.api-key-type:${SUPABASE_STORAGE_API_KEY_TYPE:auto}}") String apiKeyTypeStr,
         @Value("${supabase.storage.bucket:${SUPABASE_STORAGE_BUCKET:goplant-private-media}}") String bucket,
         @Value("${media.max-file-size-bytes:${MEDIA_MAX_FILE_SIZE_BYTES:5242880}}") long maxFileSizeBytes,
         @Value("${media.signed-url-ttl-seconds:${MEDIA_SIGNED_URL_TTL_SECONDS:300}}") int signedUrlTtlSeconds,
@@ -69,7 +67,7 @@ public class SupabaseStorageProperties {
 
         this.effectiveKeyType = resolveEffectiveKeyType(this.apiKey, this.configuredKeyType);
 
-        // Clamp max file size: strictly at most 5MB
+        // Clamp max file size: strictly between 1 byte and 5MB hard limit
         if (maxFileSizeBytes <= 0 || maxFileSizeBytes > DEFAULT_MAX_FILE_SIZE_BYTES) {
             this.maxFileSizeBytes = DEFAULT_MAX_FILE_SIZE_BYTES;
         } else {
@@ -137,10 +135,10 @@ public class SupabaseStorageProperties {
             return ApiKeyType.SECRET;
         }
 
-        // Validate JWT format for legacy keys
+        // Validate genuine RFC 7519 3-part JWT format for legacy keys
         String[] parts = key.split("\\.");
         if (parts.length == 3) {
-            validateLegacyJwtRole(parts[1]);
+            validateLegacyJwtRole(key);
             if (configured == ApiKeyType.SECRET) {
                 throw new IllegalStateException("Cấu hình SECRET không tương thích với legacy JWT service_role key.");
             }
@@ -151,29 +149,41 @@ public class SupabaseStorageProperties {
         throw new IllegalStateException("Định dạng Supabase API key không hợp lệ hoặc không xác định.");
     }
 
-    private static void validateLegacyJwtRole(String base64Payload) {
-        byte[] payloadBytes;
+    private static void validateLegacyJwtRole(String jwtString) {
+        JWT jwt;
         try {
-            payloadBytes = Base64.getUrlDecoder().decode(base64Payload);
-        } catch (IllegalArgumentException ex) {
-            try {
-                payloadBytes = Base64.getDecoder().decode(base64Payload);
-            } catch (IllegalArgumentException ex2) {
-                throw new IllegalStateException("Legacy JWT payload không phải Base64/Base64URL hợp lệ.");
-            }
+            jwt = JWTParser.parse(jwtString);
+        } catch (ParseException ex) {
+            throw new IllegalStateException("Legacy JWT payload không phải JSON object hợp lệ hoặc định dạng JWT không đúng RFC 7519.");
         }
 
-        String payloadJson = new String(payloadBytes, StandardCharsets.UTF_8);
-        Matcher matcher = JWT_ROLE_PATTERN.matcher(payloadJson);
-        if (!matcher.find()) {
+        JWTClaimsSet claims;
+        try {
+            claims = jwt.getJWTClaimsSet();
+        } catch (ParseException ex) {
+            throw new IllegalStateException("Legacy JWT payload không phải JSON object hợp lệ: " + ex.getMessage());
+        }
+
+        if (claims == null) {
+            throw new IllegalStateException("Legacy JWT payload không phải JSON object hợp lệ.");
+        }
+
+        Object roleClaim;
+        try {
+            roleClaim = claims.getClaim("role");
+        } catch (Exception ex) {
+            throw new IllegalStateException("Lỗi truy xuất claim 'role' trong legacy JWT: " + ex.getMessage());
+        }
+
+        if (roleClaim == null || !(roleClaim instanceof String) || ((String) roleClaim).trim().isEmpty()) {
             throw new IllegalStateException("Legacy JWT key thiếu claim 'role' trong payload.");
         }
 
-        String role = matcher.group(1).trim();
+        String role = ((String) roleClaim).trim();
         if ("anon".equalsIgnoreCase(role)) {
             throw new IllegalStateException("Legacy JWT key có role=anon không được phép sử dụng cho Supabase Storage backend proxy.");
         }
-        if (!"service_role".equalsIgnoreCase(role)) {
+        if (!"service_role".equals(role)) {
             throw new IllegalStateException("Legacy JWT key không có quyền service_role (role=" + role + ").");
         }
     }
