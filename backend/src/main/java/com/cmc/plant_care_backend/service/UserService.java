@@ -2,6 +2,7 @@ package com.cmc.plant_care_backend.service;
 
 import com.cmc.plant_care_backend.common.exception.ResourceNotFoundException;
 import com.cmc.plant_care_backend.common.exception.ValidationException;
+import com.cmc.plant_care_backend.common.validation.MediaUrlValidator;
 import com.cmc.plant_care_backend.dto.user.ChangePasswordRequest;
 import com.cmc.plant_care_backend.dto.user.UpdateProfileRequest;
 import com.cmc.plant_care_backend.dto.user.UserProfileResponse;
@@ -20,10 +21,17 @@ public class UserService {
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
+    private final MediaUrlValidator mediaUrlValidator;
 
     public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder) {
+        this(userRepository, passwordEncoder, new MediaUrlValidator("https"));
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder, MediaUrlValidator mediaUrlValidator) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
+        this.mediaUrlValidator = mediaUrlValidator != null ? mediaUrlValidator : new MediaUrlValidator("https");
     }
 
     @Transactional(readOnly = true)
@@ -49,7 +57,8 @@ public class UserService {
             user.setPreferredDevice(req.getPreferredDevice());
         }
         if (req.getAvatarUrl() != null) {
-            user.setAvatarUrl(req.getAvatarUrl().trim());
+            mediaUrlValidator.validate(req.getAvatarUrl(), "avatarUrl");
+            user.setAvatarUrl(req.getAvatarUrl().trim().isEmpty() ? null : req.getAvatarUrl().trim());
         }
 
         User updated = userRepository.save(user);

@@ -3,6 +3,7 @@ package com.cmc.plant_care_backend.service;
 import com.cmc.plant_care_backend.common.exception.ConflictException;
 import com.cmc.plant_care_backend.common.exception.ForbiddenException;
 import com.cmc.plant_care_backend.common.exception.ResourceNotFoundException;
+import com.cmc.plant_care_backend.common.validation.MediaUrlValidator;
 import com.cmc.plant_care_backend.dto.garden.*;
 import com.cmc.plant_care_backend.model.Garden;
 import com.cmc.plant_care_backend.model.User;
@@ -22,10 +23,17 @@ public class GardenService {
 
     private final GardenRepository gardenRepository;
     private final UserRepository userRepository;
+    private final MediaUrlValidator mediaUrlValidator;
 
     public GardenService(GardenRepository gardenRepository, UserRepository userRepository) {
+        this(gardenRepository, userRepository, new MediaUrlValidator("https"));
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public GardenService(GardenRepository gardenRepository, UserRepository userRepository, MediaUrlValidator mediaUrlValidator) {
         this.gardenRepository = gardenRepository;
         this.userRepository = userRepository;
+        this.mediaUrlValidator = mediaUrlValidator != null ? mediaUrlValidator : new MediaUrlValidator("https");
     }
 
     @Transactional(readOnly = true)
@@ -66,7 +74,8 @@ public class GardenService {
             garden.setDescription(req.getDescription().trim());
         }
         if (req.getCoverImageUrl() != null) {
-            garden.setCoverImageUrl(req.getCoverImageUrl().trim());
+            mediaUrlValidator.validate(req.getCoverImageUrl(), "coverImageUrl");
+            garden.setCoverImageUrl(req.getCoverImageUrl().trim().isEmpty() ? null : req.getCoverImageUrl().trim());
         }
 
         Garden saved = gardenRepository.save(garden);
@@ -108,7 +117,8 @@ public class GardenService {
             garden.setDescription(req.getDescription().trim());
         }
         if (req.getCoverImageUrl() != null) {
-            garden.setCoverImageUrl(req.getCoverImageUrl().trim());
+            mediaUrlValidator.validate(req.getCoverImageUrl(), "coverImageUrl");
+            garden.setCoverImageUrl(req.getCoverImageUrl().trim().isEmpty() ? null : req.getCoverImageUrl().trim());
         }
 
         Garden updated = gardenRepository.save(garden);

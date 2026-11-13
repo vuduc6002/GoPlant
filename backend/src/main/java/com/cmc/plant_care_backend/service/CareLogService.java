@@ -26,15 +26,34 @@ public class CareLogService {
     private final CareLogRepository careLogRepository;
     private final UserPlantRepository userPlantRepository;
     private final UserRepository userRepository;
+    private final com.cmc.plant_care_backend.common.validation.MediaUrlValidator mediaUrlValidator;
 
     public CareLogService(
         CareLogRepository careLogRepository,
         UserPlantRepository userPlantRepository,
         UserRepository userRepository
     ) {
+        this(
+            careLogRepository,
+            userPlantRepository,
+            userRepository,
+            new com.cmc.plant_care_backend.common.validation.MediaUrlValidator("https")
+        );
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public CareLogService(
+        CareLogRepository careLogRepository,
+        UserPlantRepository userPlantRepository,
+        UserRepository userRepository,
+        com.cmc.plant_care_backend.common.validation.MediaUrlValidator mediaUrlValidator
+    ) {
         this.careLogRepository = careLogRepository;
         this.userPlantRepository = userPlantRepository;
         this.userRepository = userRepository;
+        this.mediaUrlValidator = mediaUrlValidator != null
+            ? mediaUrlValidator
+            : new com.cmc.plant_care_backend.common.validation.MediaUrlValidator("https");
     }
 
     public CareLogResponse createCareLog(UUID userId, CreateCareLogRequest request) {
@@ -56,6 +75,7 @@ public class CareLogService {
         log.setStatus(CareLogStatus.COMPLETED);
         log.setNote(request.getNote());
         if (request.getImageUrls() != null && !request.getImageUrls().isEmpty()) {
+            mediaUrlValidator.validateAll(request.getImageUrls(), "imageUrls");
             log.setImageUrls(request.getImageUrls().toArray(new String[0]));
         }
         log.setPerformedAt(request.getPerformedAt() != null ? request.getPerformedAt() : OffsetDateTime.now());

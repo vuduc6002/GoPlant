@@ -21,10 +21,23 @@ public class AdminSpeciesService {
 
     private final PlantSpeciesRepository speciesRepository;
     private final SpeciesService speciesService;
+    private final com.cmc.plant_care_backend.common.validation.MediaUrlValidator mediaUrlValidator;
 
     public AdminSpeciesService(PlantSpeciesRepository speciesRepository, SpeciesService speciesService) {
+        this(speciesRepository, speciesService, new com.cmc.plant_care_backend.common.validation.MediaUrlValidator("https"));
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public AdminSpeciesService(
+        PlantSpeciesRepository speciesRepository,
+        SpeciesService speciesService,
+        com.cmc.plant_care_backend.common.validation.MediaUrlValidator mediaUrlValidator
+    ) {
         this.speciesRepository = speciesRepository;
         this.speciesService = speciesService;
+        this.mediaUrlValidator = mediaUrlValidator != null
+            ? mediaUrlValidator
+            : new com.cmc.plant_care_backend.common.validation.MediaUrlValidator("https");
     }
 
     @Transactional(readOnly = true)
@@ -67,7 +80,12 @@ public class AdminSpeciesService {
         species.setGrowthRate(req.getGrowthRate());
         species.setWateringFrequency(req.getWateringFrequency());
         species.setNutrition(req.getNutrition());
-        species.setThumbnailUrl(req.getThumbnailUrl());
+        if (req.getThumbnailUrl() != null && !req.getThumbnailUrl().trim().isEmpty()) {
+            mediaUrlValidator.validate(req.getThumbnailUrl().trim(), "thumbnailUrl");
+            species.setThumbnailUrl(req.getThumbnailUrl().trim());
+        } else {
+            species.setThumbnailUrl(null);
+        }
         if (req.getIsActive() != null) {
             species.setIsActive(req.getIsActive());
         }
@@ -159,7 +177,13 @@ public class AdminSpeciesService {
             species.setNutrition(req.getNutrition());
         }
         if (req.getThumbnailUrl() != null) {
-            species.setThumbnailUrl(req.getThumbnailUrl());
+            String trimmed = req.getThumbnailUrl().trim();
+            if (trimmed.isEmpty()) {
+                species.setThumbnailUrl(null);
+            } else {
+                mediaUrlValidator.validate(trimmed, "thumbnailUrl");
+                species.setThumbnailUrl(trimmed);
+            }
         }
         if (req.getIsActive() != null) {
             species.setIsActive(req.getIsActive());

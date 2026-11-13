@@ -119,4 +119,9 @@ export const queryKeys = {
     plantDetail: (userId: string, plantId: string) =>
       ['monitoring', userId, 'plants', plantId] as const,
   },
+  media: {
+    all: (userId: string) => ['media', userId] as const,
+    readUrl: (userId: string, mediaId: string) =>
+      ['media', userId, 'read-url', mediaId] as const,
+  },
 } as const;

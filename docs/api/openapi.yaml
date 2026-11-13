@@ -1,11 +1,12 @@
 openapi: 3.0.3
 info:
   title: GoPlant REST API Contract
-  version: 1.2.0
+  version: 1.3.0
   description: >
     Tài liệu đặc tả RESTful API cho hệ thống Quản lý và Chăm sóc cây trồng GoPlant.
     Phục vụ giao tiếp chuẩn hóa giữa Frontend React Native + Expo và Backend Spring Boot,
-    đã bổ sung hai endpoint Monitoring G5.5.1 và 4 endpoint Camera Metadata CRUD (G5.5.2a Phase C1).
+    đã bổ sung hai endpoint Monitoring G5.5.1, 4 endpoint Camera Metadata CRUD (G5.5.2a Phase C1),
+    và 3 endpoint Private Media Storage & Secure Image Upload Pipeline (G5.5.2b).
 servers:
   - url: https://api.goplant.vn/api/v1
     description: Production Server (Dự kiến)
@@ -37,6 +38,8 @@ tags:
     description: Quản trị tài khoản người dùng (ROLE_ADMIN)
   - name: Cameras
     description: Quản lý metadata thiết bị camera giám sát theo khu vườn (G5.5.2a Phase C1; chưa hỗ trợ xem luồng video trực tiếp)
+  - name: Media
+    description: Quản lý tải lên, cấp phát signed URL đọc an toàn và xóa tệp tin đa phương tiện qua backend proxy (G5.5.2b Private Bucket)
 
 paths:
   /auth/register:
@@ -1515,6 +1518,154 @@ paths:
           $ref: '#/components/responses/403Forbidden'
         '404':
           $ref: '#/components/responses/404NotFound'
+
+  /media:
+    post:
+      tags:
+        - Media
+      summary: Tải lên tệp hình ảnh vào Private Storage qua Backend Proxy (G5.5.2b)
+      description: >
+        Nhận multipart/form-data với trường file (tối đa 5MB, JPEG, PNG, WebP).
+        Backend kiểm tra magic bytes, giải mã kích thước (giới hạn 10000px / 25MP),
+        loại bỏ metadata EXIF (GPS, thiết bị, camera), tự động xoay chuẩn theo orientation tag,
+        tính toán SHA-256 hash và tải lên Supabase Private Bucket.
+        Trả về 201 Created cùng metadata tệp (trạng thái READY). Không để lộ ownerId hay service role key.
+      operationId: uploadMedia
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Tệp hình ảnh hợp lệ (tối đa 5MB, JPEG/PNG/WebP)
+      responses:
+        '201':
+          description: Tải lên và xử lý tệp thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaResponseWrapper'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '413':
+          description: Kích thước tệp vượt quá 5MB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error:
+                  code: FILE_TOO_LARGE
+                  message: Kích thước tệp vượt quá giới hạn tối đa 5MB.
+                  field: file
+                timestamp: '2026-11-13T00:00:00Z'
+        '503':
+          description: Dịch vụ lưu trữ tạm thời không khả dụng
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error:
+                  code: STORAGE_UNAVAILABLE
+                  message: Không thể lưu trữ tệp tin vào kho lưu trữ
+                timestamp: '2026-11-13T00:00:00Z'
+
+  /media/{mediaId}/read-url:
+    get:
+      tags:
+        - Media
+      summary: Lấy signed URL đọc tạm thời cho tệp tin riêng tư (G5.5.2b)
+      description: >
+        Chỉ chủ sở hữu tệp tin mới có quyền lấy read URL (403 Forbidden nếu khác owner).
+        URL được ký điện tử bởi Supabase Storage qua Backend Gateway với thời gian sống (TTL)
+        cấu hình (mặc định 300 giây = 5 phút). Tệp tin phải ở trạng thái READY hoặc ATTACHED.
+      operationId: getMediaReadUrl
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: mediaId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Cấp signed read URL thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaReadUrlWrapper'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /media/{mediaId}:
+    delete:
+      tags:
+        - Media
+      summary: Xóa tệp tin đa phương tiện khỏi hệ thống (G5.5.2b)
+      description: >
+        Chỉ chủ sở hữu tệp tin mới có quyền xóa (403 Forbidden nếu khác owner).
+        Nếu tệp tin đang ở trạng thái ATTACHED (đang gắn kết với hồ sơ người dùng, vườn, cây trồng, lịch, nhật ký),
+        hệ thống chặn xóa và trả về 409 Conflict (MEDIA_ATTACHED).
+        Thao tác là idempotent (trả về 200 OK nếu tệp đã ở trạng thái DELETED).
+      operationId: deleteMedia
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: mediaId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Xóa tệp tin thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimpleMessageWrapper'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          description: Tệp tin đang được liên kết sử dụng, không thể xóa
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error:
+                  code: MEDIA_ATTACHED
+                  message: Không thể xóa tệp phương tiện đang được liên kết sử dụng.
+                  field: mediaId
+                timestamp: '2026-11-13T00:00:00Z'
 
 components:
   securitySchemes:
@@ -3095,3 +3246,89 @@ components:
         message:
           type: string
           example: "OK"
+
+    MediaResponse:
+      type: object
+      required:
+        - id
+        - mimeType
+        - sizeBytes
+        - status
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: '123e4567-e89b-12d3-a456-426614174000'
+        mimeType:
+          type: string
+          example: 'image/jpeg'
+        sizeBytes:
+          type: integer
+          format: int64
+          example: 1048576
+        width:
+          type: integer
+          nullable: true
+          example: 1920
+        height:
+          type: integer
+          nullable: true
+          example: 1080
+        status:
+          type: string
+          enum: [PENDING, READY, ATTACHED, DELETING, DELETED]
+          example: 'READY'
+        createdAt:
+          type: string
+          format: date-time
+          example: '2026-11-13T08:00:00Z'
+        updatedAt:
+          type: string
+          format: date-time
+          example: '2026-11-13T08:00:00Z'
+
+    MediaResponseWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/MediaResponse'
+        message:
+          type: string
+          example: 'Created'
+
+    MediaReadUrlResponse:
+      type: object
+      required:
+        - mediaId
+        - readUrl
+        - expiresAt
+      properties:
+        mediaId:
+          type: string
+          format: uuid
+          example: '123e4567-e89b-12d3-a456-426614174000'
+        readUrl:
+          type: string
+          format: uri
+          example: 'https://storage.goplant.vn/storage/v1/object/sign/goplant-private-media/users/123/456.jpg?token=abc'
+        expiresAt:
+          type: string
+          format: date-time
+          example: '2026-11-13T08:05:00Z'
+
+    MediaReadUrlWrapper:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/MediaReadUrlResponse'
+        message:
+          type: string
+          example: 'OK'

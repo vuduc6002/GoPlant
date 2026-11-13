@@ -40,6 +40,7 @@ public class ScheduleService {
     private final UserPlantRepository userPlantRepository;
     private final UserRepository userRepository;
     private final CareLogRepository careLogRepository;
+    private final com.cmc.plant_care_backend.common.validation.MediaUrlValidator mediaUrlValidator;
 
     public ScheduleService(
         CareScheduleRepository careScheduleRepository,
@@ -47,10 +48,30 @@ public class ScheduleService {
         UserRepository userRepository,
         CareLogRepository careLogRepository
     ) {
+        this(
+            careScheduleRepository,
+            userPlantRepository,
+            userRepository,
+            careLogRepository,
+            new com.cmc.plant_care_backend.common.validation.MediaUrlValidator("https")
+        );
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public ScheduleService(
+        CareScheduleRepository careScheduleRepository,
+        UserPlantRepository userPlantRepository,
+        UserRepository userRepository,
+        CareLogRepository careLogRepository,
+        com.cmc.plant_care_backend.common.validation.MediaUrlValidator mediaUrlValidator
+    ) {
         this.careScheduleRepository = careScheduleRepository;
         this.userPlantRepository = userPlantRepository;
         this.userRepository = userRepository;
         this.careLogRepository = careLogRepository;
+        this.mediaUrlValidator = mediaUrlValidator != null
+            ? mediaUrlValidator
+            : new com.cmc.plant_care_backend.common.validation.MediaUrlValidator("https");
     }
 
     public CareScheduleResponse createSchedule(UUID userId, CreateScheduleRequest request) {
@@ -266,6 +287,7 @@ public class ScheduleService {
         if (request != null) {
             log.setNote(request.getNote());
             if (request.getImageUrls() != null) {
+                mediaUrlValidator.validateAll(request.getImageUrls(), "imageUrls");
                 log.setImageUrls(request.getImageUrls().toArray(new String[0]));
             }
             if (request.getPerformedAt() != null) {

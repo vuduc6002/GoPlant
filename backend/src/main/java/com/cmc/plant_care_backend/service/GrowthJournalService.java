@@ -28,15 +28,34 @@ public class GrowthJournalService {
     private final GrowthJournalRepository growthJournalRepository;
     private final UserPlantRepository userPlantRepository;
     private final UserRepository userRepository;
+    private final com.cmc.plant_care_backend.common.validation.MediaUrlValidator mediaUrlValidator;
 
     public GrowthJournalService(
         GrowthJournalRepository growthJournalRepository,
         UserPlantRepository userPlantRepository,
         UserRepository userRepository
     ) {
+        this(
+            growthJournalRepository,
+            userPlantRepository,
+            userRepository,
+            new com.cmc.plant_care_backend.common.validation.MediaUrlValidator("https")
+        );
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public GrowthJournalService(
+        GrowthJournalRepository growthJournalRepository,
+        UserPlantRepository userPlantRepository,
+        UserRepository userRepository,
+        com.cmc.plant_care_backend.common.validation.MediaUrlValidator mediaUrlValidator
+    ) {
         this.growthJournalRepository = growthJournalRepository;
         this.userPlantRepository = userPlantRepository;
         this.userRepository = userRepository;
+        this.mediaUrlValidator = mediaUrlValidator != null
+            ? mediaUrlValidator
+            : new com.cmc.plant_care_backend.common.validation.MediaUrlValidator("https");
     }
 
     public GrowthJournalResponse createJournal(UUID userId, CreateGrowthJournalRequest request) {
@@ -57,6 +76,7 @@ public class GrowthJournalService {
         journal.setHealthStatus(request.getHealthStatus() != null ? request.getHealthStatus() : JournalHealthStatus.HEALTHY);
         journal.setNote(request.getNote());
         if (request.getImageUrls() != null && !request.getImageUrls().isEmpty()) {
+            mediaUrlValidator.validateAll(request.getImageUrls(), "imageUrls");
             journal.setImageUrls(request.getImageUrls().toArray(new String[0]));
         }
         journal.setRecordedAt(request.getRecordedAt() != null ? request.getRecordedAt() : OffsetDateTime.now());
@@ -83,6 +103,7 @@ public class GrowthJournalService {
             journal.setNote(request.getNote());
         }
         if (request.getImageUrls() != null) {
+            mediaUrlValidator.validateAll(request.getImageUrls(), "imageUrls");
             journal.setImageUrls(request.getImageUrls().toArray(new String[0]));
         }
         if (request.getRecordedAt() != null) {

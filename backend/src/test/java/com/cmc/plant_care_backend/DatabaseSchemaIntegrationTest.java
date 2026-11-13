@@ -57,7 +57,7 @@ class DatabaseSchemaIntegrationTest {
     @Autowired
     private GrowthJournalRepository growthJournalRepository;
 
-    private static final Set<String> ALL_11_TABLES = Set.of(
+    private static final Set<String> ALL_12_TABLES = Set.of(
         "roles",
         "users",
         "user_roles",
@@ -68,7 +68,8 @@ class DatabaseSchemaIntegrationTest {
         "care_schedules",
         "care_logs",
         "growth_journals",
-        "cameras"
+        "cameras",
+        "media_objects"
     );
 
     record ForeignKeyMapping(String sourceTable, String sourceColumns, String targetTable, String targetColumns) {}
@@ -104,17 +105,21 @@ class DatabaseSchemaIntegrationTest {
                 // When running with postgres profile (e.g. CI or local PostgreSQL)
                 assertEquals("PostgreSQL", dbProductName, "PostgreSQL profile must run against PostgreSQL database");
 
-                // 1. Verify flyway_schema_history exists and V1 migration succeeded
+                // 1. Verify flyway_schema_history exists and V1 + V2 migrations succeeded
                 try (Statement stmt = conn.createStatement()) {
                     try (ResultSet rs = stmt.executeQuery(
-                        "SELECT version, description, success, installed_on FROM flyway_schema_history WHERE version = '1'")) {
+                        "SELECT version, description, success, installed_on FROM flyway_schema_history WHERE version IN ('1', '2') ORDER BY version")) {
                         assertTrue(rs.next(), "flyway_schema_history must contain record for version 1");
                         assertEquals("initial schema", rs.getString("description").toLowerCase());
                         assertTrue(rs.getBoolean("success"), "Migration V1 must have success = true");
+
+                        assertTrue(rs.next(), "flyway_schema_history must contain record for version 2");
+                        assertEquals("media objects", rs.getString("description").toLowerCase());
+                        assertTrue(rs.getBoolean("success"), "Migration V2 must have success = true");
                     }
                 }
 
-                // 2. Verify exactly the 11 business tables exist in PostgreSQL (excluding flyway_schema_history)
+                // 2. Verify exactly the 12 business tables exist in PostgreSQL (excluding flyway_schema_history)
                 Set<String> actualBusinessTables = new HashSet<>();
                 try (ResultSet rs = metaData.getTables(null, "public", "%", new String[]{"TABLE"})) {
                     while (rs.next()) {
@@ -124,8 +129,8 @@ class DatabaseSchemaIntegrationTest {
                         }
                     }
                 }
-                assertEquals(ALL_11_TABLES, actualBusinessTables,
-                    "PostgreSQL public schema must contain exactly the 11 business tables declared in V1");
+                assertEquals(ALL_12_TABLES, actualBusinessTables,
+                    "PostgreSQL public schema must contain exactly the 12 business tables declared in V1 and V2");
 
                 // 3. Verify PostgreSQL extension pgcrypto and gen_random_uuid()
                 try (Statement stmt = conn.createStatement()) {
@@ -254,7 +259,10 @@ class DatabaseSchemaIntegrationTest {
 
                     // cameras (2 FKs)
                     new ForeignKeyMapping("cameras", "owner_id", "users", "id"),
-                    new ForeignKeyMapping("cameras", "garden_id,owner_id", "gardens", "id,owner_id")
+                    new ForeignKeyMapping("cameras", "garden_id,owner_id", "gardens", "id,owner_id"),
+
+                    // media_objects (1 FK)
+                    new ForeignKeyMapping("media_objects", "owner_id", "users", "id")
                 );
 
                 for (ForeignKeyMapping expected : expectedFks) {
@@ -264,7 +272,7 @@ class DatabaseSchemaIntegrationTest {
                         expected.targetTable() + "(" + expected.targetColumns() + ")");
                 }
                 assertEquals(expectedFks.size(), actualFks.size(),
-                    "Total foreign keys count in public schema must match expected 17 FKs");
+                    "Total foreign keys count in public schema must match expected 18 FKs");
 
                 // 8. Verify Table-Specific CHECK Constraints (all 13 constraints verified by exact table and name)
                 Map<String, Map<String, String>> checksByTable = new HashMap<>();
@@ -310,8 +318,12 @@ class DatabaseSchemaIntegrationTest {
                 // 8.7. cameras (1 CHECK)
                 assertCheckConstraint(checksByTable, "cameras", "cameras_status_check", "status", "ONLINE", "OFFLINE", "ERROR");
 
-                assertEquals(13, checksByTable.values().stream().mapToInt(Map::size).sum(),
-                    "Total count of CHECK constraints across all business tables must be exactly 13");
+                // 8.8. media_objects (2 CHECKs)
+                assertCheckConstraint(checksByTable, "media_objects", "media_objects_size_bytes_check", "size_bytes", "1", "5242880");
+                assertCheckConstraint(checksByTable, "media_objects", "media_objects_status_check", "status", "PENDING", "READY", "ATTACHED", "DELETING", "DELETED");
+
+                assertEquals(15, checksByTable.values().stream().mapToInt(Map::size).sum(),
+                    "Total count of CHECK constraints across all business tables must be exactly 15");
 
                 // 9. Verify Definitions of All 19 Declared Indexes via PostgreSQL Catalogs
                 Map<String, StrictIndexInfo> actualIndexes = new HashMap<>();
@@ -378,8 +390,8 @@ class DatabaseSchemaIntegrationTest {
                     }
                 }
 
-                assertEquals(19, actualIndexes.size(),
-                    "Total count of explicit non-constraint indexes across public schema business tables must be exactly 19");
+                assertEquals(21, actualIndexes.size(),
+                    "Total count of explicit non-constraint indexes across public schema business tables must be exactly 21");
 
                 // 9.1. Users (2 UNIQUE partial indexes)
                 assertIndexDefinition(actualIndexes, "idx_users_email_unique", "users", true, "btree",
@@ -435,6 +447,12 @@ class DatabaseSchemaIntegrationTest {
                 assertIndexDefinition(actualIndexes, "idx_cameras_garden_id", "cameras", false, "btree",
                     List.of(new ExpectedKey("garden_id", false)), null);
 
+                // 9.9. Media Objects (2 indexes, 1 compound with DESC)
+                assertIndexDefinition(actualIndexes, "idx_media_objects_owner_created", "media_objects", false, "btree",
+                    List.of(new ExpectedKey("owner_id", false), new ExpectedKey("created_at DESC", true)), null);
+                assertIndexDefinition(actualIndexes, "idx_media_objects_status", "media_objects", false, "btree",
+                    List.of(new ExpectedKey("status", false)), null);
+
                 // 10. Verify Camera table column lengths match V1 & Camera entity @Column definitions
                 try (Statement stmt = conn.createStatement();
                      ResultSet rs = stmt.executeQuery(
@@ -449,6 +467,24 @@ class DatabaseSchemaIntegrationTest {
                     assertEquals(200, camLengths.get("name"), "cameras.name must be VARCHAR(200)");
                     assertEquals(20, camLengths.get("status"), "cameras.status must be VARCHAR(20)");
                 }
+
+                // 11. Verify media_objects table column lengths match V2 & Media entity @Column definitions
+                try (Statement stmt = conn.createStatement();
+                     ResultSet rs = stmt.executeQuery(
+                         "SELECT column_name, character_maximum_length, is_nullable " +
+                         "FROM information_schema.columns " +
+                         "WHERE table_schema = 'public' AND table_name = 'media_objects' AND column_name IN ('bucket', 'object_key', 'mime_type', 'sha256', 'status')")) {
+                    Map<String, Integer> mediaLengths = new HashMap<>();
+                    while (rs.next()) {
+                        mediaLengths.put(rs.getString("column_name").toLowerCase(), rs.getInt("character_maximum_length"));
+                        assertEquals("NO", rs.getString("is_nullable"));
+                    }
+                    assertEquals(100, mediaLengths.get("bucket"), "media_objects.bucket must be VARCHAR(100)");
+                    assertEquals(500, mediaLengths.get("object_key"), "media_objects.object_key must be VARCHAR(500)");
+                    assertEquals(100, mediaLengths.get("mime_type"), "media_objects.mime_type must be VARCHAR(100)");
+                    assertEquals(64, mediaLengths.get("sha256"), "media_objects.sha256 must be CHAR(64)");
+                    assertEquals(20, mediaLengths.get("status"), "media_objects.status must be VARCHAR(20)");
+                }
             } else {
                 // When running with default local H2 profile
                 Set<String> actualTables = new HashSet<>();
@@ -459,7 +495,7 @@ class DatabaseSchemaIntegrationTest {
                 }
                 Set<String> coreJpaTables = Set.of(
                     "roles", "users", "user_roles", "plant_species", "user_favorite_species",
-                    "gardens", "user_plants", "care_schedules", "care_logs", "growth_journals", "cameras"
+                    "gardens", "user_plants", "care_schedules", "care_logs", "growth_journals", "cameras", "media_objects"
                 );
                 for (String expected : coreJpaTables) {
                     assertTrue(actualTables.contains(expected), "Missing expected table in H2: " + expected);
@@ -478,6 +514,42 @@ class DatabaseSchemaIntegrationTest {
             assertEquals("name", cameraNameCol.name());
             assertFalse(cameraNameCol.nullable());
             assertEquals(200, cameraNameCol.length(), "Camera.name @Column length must match V1 VARCHAR(200)");
+
+            // Always verify Media JPA @Column lengths stay synchronized with V2__media_objects.sql
+            Column mediaStatusCol = Media.class.getDeclaredField("status").getAnnotation(Column.class);
+            assertNotNull(mediaStatusCol);
+            assertEquals("status", mediaStatusCol.name());
+            assertFalse(mediaStatusCol.nullable());
+            assertEquals(20, mediaStatusCol.length(), "Media.status @Column length must match V2 VARCHAR(20)");
+
+            Column mediaBucketCol = Media.class.getDeclaredField("bucket").getAnnotation(Column.class);
+            assertNotNull(mediaBucketCol);
+            assertEquals("bucket", mediaBucketCol.name());
+            assertFalse(mediaBucketCol.nullable());
+            assertEquals(100, mediaBucketCol.length(), "Media.bucket @Column length must match V2 VARCHAR(100)");
+
+            Column mediaObjectKeyCol = Media.class.getDeclaredField("objectKey").getAnnotation(Column.class);
+            assertNotNull(mediaObjectKeyCol);
+            assertEquals("object_key", mediaObjectKeyCol.name());
+            assertFalse(mediaObjectKeyCol.nullable());
+            assertEquals(500, mediaObjectKeyCol.length(), "Media.objectKey @Column length must match V2 VARCHAR(500)");
+
+            Column mediaMimeCol = Media.class.getDeclaredField("mimeType").getAnnotation(Column.class);
+            assertNotNull(mediaMimeCol);
+            assertEquals("mime_type", mediaMimeCol.name());
+            assertFalse(mediaMimeCol.nullable());
+            assertEquals(100, mediaMimeCol.length(), "Media.mimeType @Column length must match V2 VARCHAR(100)");
+
+            Column mediaShaCol = Media.class.getDeclaredField("sha256").getAnnotation(Column.class);
+            assertNotNull(mediaShaCol);
+            assertEquals("sha256", mediaShaCol.name());
+            assertFalse(mediaShaCol.nullable());
+            assertEquals(64, mediaShaCol.length(), "Media.sha256 @Column length must match V2 CHAR(64)");
+
+            Column mediaSizeBytesCol = Media.class.getDeclaredField("sizeBytes").getAnnotation(Column.class);
+            assertNotNull(mediaSizeBytesCol);
+            assertEquals("size_bytes", mediaSizeBytesCol.name());
+            assertFalse(mediaSizeBytesCol.nullable());
         }
     }
 

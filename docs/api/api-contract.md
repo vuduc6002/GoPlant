@@ -1,9 +1,9 @@
 # Hợp Đồng REST API — GoPlant
 
-> **Phiên bản:** 1.2.0
-> **Giai đoạn:** 5 (G5.5.2a) — Camera Metadata CRUD (Phase C1)
+> **Phiên bản:** 1.3.0
+> **Giai đoạn:** 5 (G5.5.2b) — Private Media Storage & Secure Image Upload Pipeline
 > **Nhánh:** `feature/integrate-frontend-report`
-> **Ngày cập nhật:** 2026-11-12
+> **Ngày cập nhật:** 2026-11-13
 > **Base URL:** `https://<host>/api/v1`
 > **Xác thực:** Bearer JWT trong header `Authorization: Bearer <token>`
 
@@ -1274,27 +1274,118 @@ Xóa vĩnh viễn bản ghi camera. Chỉ xóa bản ghi trong `cameras`; **khô
 
 ---
 
-## 14. Tổng hợp 46 endpoints chuẩn hóa (40 Core MVP + 2 Monitoring G5.5.1 + 4 Cameras G5.5.2a)
+## 14. Nhóm chức năng Media & Tải tệp tin riêng tư (`/api/v1/media`) — G5.5.2b
 
-### 14.1. Bảng phân bổ theo nhóm chức năng và trạng thái triển khai
+### 14.1. `POST /api/v1/media`
 
-| Nhóm chức năng | Core MVP (G4/G5.4) | G5.5.1 Monitoring (Đã xong) | G5.5.2a Cameras (Đã xong) | Tổng số API |
-|---|:---:|:---:|:---:|:---:|
-| Authentication (`/api/v1/auth`) | **2** | 0 | 0 | 2 |
-| Users Profile (`/api/v1/users`) | **3** | 0 | 0 | 3 |
-| Species & Favorites (`/api/v1/species`) | **5** | 0 | 0 | 5 |
-| Gardens (`/api/v1/gardens`) | **5** | 0 | 0 | 5 |
-| Plants (`/api/v1/plants`) | **8** | 0 | 0 | 8 |
-| Schedules (`/api/v1/schedules`) | **6** | 0 | 0 | 6 |
-| Care Logs (`/api/v1/care-logs`) | **1** | 0 | 0 | 1 |
-| Growth Journals (`/api/v1/journals`) | **3** | 0 | 0 | 3 |
-| Monitoring (`/api/v1/monitoring`) | 0 | **2** | 0 | 2 |
-| Admin Species (`/api/v1/admin/species`) | **4** | 0 | 0 | 4 |
-| Admin Users (`/api/v1/admin/users`) | **3** | 0 | 0 | 3 |
-| Cameras (`/api/v1/cameras`) | 0 | 0 | **4** | 4 |
-| **Tổng cộng** | **40** | **2 (G5.5.1 Đã xong)** | **4 (G5.5.2a Đã xong)** | **46** |
+Tải lên tệp tin hình ảnh vào Private Storage qua Backend Proxy.
 
-### 14.2. Danh sách chi tiết endpoints (Đã hoàn thành 46/46 tính tới G5.5.2a)
+**Quy trình xử lý bảo mật trên Backend:**
+1. Kiểm tra kích thước tệp tin (tối đa 5MB = 5,242,880 bytes). Vượt quá trả về `413 FILE_TOO_LARGE`.
+2. Kiểm tra magic bytes thực tế của tệp (chỉ chấp nhận JPEG `0xFF, 0xD8, 0xFF`, PNG `0x89, 0x50, 0x4E, 0x47`, WebP `RIFF....WEBP`).
+3. Giải mã và giới hạn kích thước hình ảnh (tối đa 10,000px mỗi chiều, 25 Megapixels tổng diện tích). Chặn WebP animation (`ANIM` chunk) để ngăn DoS.
+4. Tự động xoay hình ảnh thẳng đứng (upright) theo EXIF orientation tag trước khi stripping.
+5. Loại bỏ toàn bộ siêu dữ liệu nhạy cảm (GPS coordinates, thiết bị chụp, camera model, lens serial).
+6. Tính toán mã băm SHA-256 trên nội dung tệp sau xử lý.
+7. Tạo bản ghi `media_objects` với trạng thái ban đầu `PENDING`.
+8. Tải nội dung tệp lên Supabase Private Bucket với cờ `x-upsert: false`. Nếu tải thất bại, rollback xóa bản ghi pending và trả về `503 STORAGE_UNAVAILABLE`.
+9. Cập nhật trạng thái bản ghi thành `READY` và trả về `201 Created`.
+
+**Request Content-Type:** `multipart/form-data`
+- `file`: binary file (JPEG, PNG, WebP)
+
+**Response `201 Created`:**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "c1a2b3c4-d5e6-7f8a-9b0c-1d2e3f4a5b6c",
+    "mimeType": "image/jpeg",
+    "sizeBytes": 1048576,
+    "width": 1920,
+    "height": 1080,
+    "status": "READY",
+    "createdAt": "2026-11-13T08:00:00Z",
+    "updatedAt": "2026-11-13T08:00:00Z"
+  },
+  "message": "Created"
+}
+```
+
+**Mã trạng thái HTTP:** `201 CREATED`, `400 VALIDATION_ERROR`, `401 UNAUTHORIZED`, `413 FILE_TOO_LARGE`, `503 STORAGE_UNAVAILABLE`.
+
+### 14.2. `GET /api/v1/media/{mediaId}/read-url`
+
+Lấy pre-signed URL đọc tạm thời cho tệp tin riêng tư.
+
+**Quy tắc:**
+- Chỉ chủ sở hữu tệp tin mới có quyền truy cập (nếu khác ownerId, trả về `403 FORBIDDEN`).
+- Tệp tin phải ở trạng thái `READY` hoặc `ATTACHED`. Nếu `PENDING`, `DELETING` hoặc `DELETED`, trả về `400 VALIDATION_ERROR`.
+- URL được tạo qua Backend Gateway tới Supabase Storage Sign Endpoint với TTL cấu hình (mặc định 300 giây).
+- Khách hàng không bao giờ nhận Supabase Service Role Key hay truy cập bucket trực tiếp.
+
+**Response `200 OK`:**
+```json
+{
+  "success": true,
+  "data": {
+    "mediaId": "c1a2b3c4-d5e6-7f8a-9b0c-1d2e3f4a5b6c",
+    "readUrl": "https://storage.goplant.vn/storage/v1/object/sign/goplant-private-media/users/123/456.jpg?token=eyJhbGciOiJIUzI1NiIsIn...",
+    "expiresAt": "2026-11-13T08:05:00Z"
+  },
+  "message": "OK"
+}
+```
+
+**Mã trạng thái HTTP:** `200 OK`, `400 VALIDATION_ERROR`, `401 UNAUTHORIZED`, `403 FORBIDDEN`, `404 RESOURCE_NOT_FOUND`.
+
+### 14.3. `DELETE /api/v1/media/{mediaId}`
+
+Xóa tệp tin đa phương tiện khỏi hệ thống.
+
+**Quy tắc:**
+- Chỉ chủ sở hữu tệp tin mới có quyền xóa (nếu khác ownerId, trả về `403 FORBIDDEN`).
+- Nếu trạng thái tệp là `ATTACHED` (đang được liên kết sử dụng), từ chối xóa với `409 Conflict` (`code: MEDIA_ATTACHED`).
+- Thao tác là idempotent: nếu tệp đã ở trạng thái `DELETED`, trả về `200 OK` mà không thực hiện lại thao tác lưu trữ.
+- Khi xóa: chuyển trạng thái sang `DELETING`, xóa object khỏi Supabase Storage qua gateway, sau đó chuyển trạng thái sang `DELETED`.
+
+**Response `200 OK`:**
+```json
+{
+  "success": true,
+  "data": {
+    "message": "Đã xóa tệp tin đa phương tiện thành công."
+  },
+  "message": "OK"
+}
+```
+
+**Mã trạng thái HTTP:** `200 OK`, `400 VALIDATION_ERROR`, `401 UNAUTHORIZED`, `403 FORBIDDEN`, `404 RESOURCE_NOT_FOUND`, `409 MEDIA_ATTACHED`.
+
+---
+
+## 15. Tổng hợp 49 endpoints chuẩn hóa (40 Core MVP + 2 Monitoring G5.5.1 + 4 Cameras G5.5.2a + 3 Media G5.5.2b)
+
+### 15.1. Bảng phân bổ theo nhóm chức năng và trạng thái triển khai
+
+| Nhóm chức năng | Core MVP (G4/G5.4) | G5.5.1 Monitoring | G5.5.2a Cameras | G5.5.2b Media | Tổng số API |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Authentication (`/api/v1/auth`) | **2** | 0 | 0 | 0 | 2 |
+| Users Profile (`/api/v1/users`) | **3** | 0 | 0 | 0 | 3 |
+| Species & Favorites (`/api/v1/species`) | **5** | 0 | 0 | 0 | 5 |
+| Gardens (`/api/v1/gardens`) | **5** | 0 | 0 | 0 | 5 |
+| Plants (`/api/v1/plants`) | **8** | 0 | 0 | 0 | 8 |
+| Schedules (`/api/v1/schedules`) | **6** | 0 | 0 | 0 | 6 |
+| Care Logs (`/api/v1/care-logs`) | **1** | 0 | 0 | 0 | 1 |
+| Growth Journals (`/api/v1/journals`) | **3** | 0 | 0 | 0 | 3 |
+| Monitoring (`/api/v1/monitoring`) | 0 | **2** | 0 | 0 | 2 |
+| Admin Species (`/api/v1/admin/species`) | **4** | 0 | 0 | 0 | 4 |
+| Admin Users (`/api/v1/admin/users`) | **3** | 0 | 0 | 0 | 3 |
+| Cameras (`/api/v1/cameras`) | 0 | 0 | **4** | 0 | 4 |
+| Media (`/api/v1/media`) | 0 | 0 | 0 | **3** | 3 |
+| **Tổng cộng** | **40** | **2 (G5.5.1)** | **4 (G5.5.2a)** | **3 (G5.5.2b)** | **49** |
+
+### 15.2. Danh sách chi tiết endpoints (Đã hoàn thành 49/49 tính tới G5.5.2b)
 
 #### Bảng quy ước định dạng quyền truy cập:
 - **`Public`**: Endpoint công khai, không yêu cầu xác thực JWT.
@@ -1350,9 +1441,12 @@ Xóa vĩnh viễn bản ghi camera. Chỉ xóa bản ghi trong `cameras`; **khô
 | 44 | DELETE | `/api/v1/cameras/{cameraId}` | Authenticated (owner) | G5.5.2a | ✅ Hoàn thành (Backend + Frontend G5.5.2a) |
 | 45 | GET | `/api/v1/monitoring/overview` | Authenticated | G5.5.1 | ✅ Hoàn thành (Backend + Frontend G5.5.1) |
 | 46 | GET | `/api/v1/monitoring/plants/{plantId}` | Authenticated (owner) | G5.5.1 | ✅ Hoàn thành (Backend + Frontend G5.5.1) |
+| 47 | POST | `/api/v1/media` | Authenticated | G5.5.2b | ✅ Hoàn thành (Backend + Frontend G5.5.2b) |
+| 48 | GET | `/api/v1/media/{mediaId}/read-url` | Authenticated (owner) | G5.5.2b | ✅ Hoàn thành (Backend + Frontend G5.5.2b) |
+| 49 | DELETE | `/api/v1/media/{mediaId}` | Authenticated (owner) | G5.5.2b | ✅ Hoàn thành (Backend + Frontend G5.5.2b) |
 
-> **Phạm vi mở rộng (ngoài 46 endpoints trên):** Các tính năng Camera Live Stream (`Phase C2`), Upload/Storage (`G5.5.2b`), Mã QR (`G5.5.3`), Growth Analytics nâng cao (`G5.5.4`), AI Diagnosis (`G5.5.5`), Push Notifications (`G5.5.6`), Quên mật khẩu (`POST /auth/forgot-password`), Refresh token (`POST /auth/refresh`) và Google/Zalo OAuth nằm ngoài phạm vi G5.5.2a.
+> **Phạm vi mở rộng (ngoài 49 endpoints trên):** Các tính năng Camera Live Stream (`Phase C2`), UI đính kèm ảnh hàng loạt trên màn hình (`G5.5.3`), Mã QR (`G5.5.3`), Growth Analytics nâng cao (`G5.5.4`), AI Diagnosis (`G5.5.5`), Push Notifications (`G5.5.6`), Quên mật khẩu (`POST /auth/forgot-password`), Refresh token (`POST /auth/refresh`) và Google/Zalo OAuth nằm ngoài phạm vi G5.5.2b.
 
 ---
 
-*Tài liệu này là hợp đồng API chính thức của dự án GoPlant, đã cập nhật đồng bộ tới G5.5.2a — Camera Metadata CRUD (Phase C1).*
+*Tài liệu này là hợp đồng API chính thức của dự án GoPlant, đã cập nhật đồng bộ tới G5.5.2b — Private Media Storage & Secure Image Upload Pipeline.*

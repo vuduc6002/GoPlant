@@ -40,6 +40,7 @@ public class PlantService {
     private final CareScheduleRepository careScheduleRepository;
     private final CareLogRepository careLogRepository;
     private final GrowthJournalRepository growthJournalRepository;
+    private final com.cmc.plant_care_backend.common.validation.MediaUrlValidator mediaUrlValidator;
 
     public PlantService(
         UserPlantRepository userPlantRepository,
@@ -50,6 +51,29 @@ public class PlantService {
         CareLogRepository careLogRepository,
         GrowthJournalRepository growthJournalRepository
     ) {
+        this(
+            userPlantRepository,
+            gardenRepository,
+            plantSpeciesRepository,
+            userRepository,
+            careScheduleRepository,
+            careLogRepository,
+            growthJournalRepository,
+            new com.cmc.plant_care_backend.common.validation.MediaUrlValidator("https")
+        );
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public PlantService(
+        UserPlantRepository userPlantRepository,
+        GardenRepository gardenRepository,
+        PlantSpeciesRepository plantSpeciesRepository,
+        UserRepository userRepository,
+        CareScheduleRepository careScheduleRepository,
+        CareLogRepository careLogRepository,
+        GrowthJournalRepository growthJournalRepository,
+        com.cmc.plant_care_backend.common.validation.MediaUrlValidator mediaUrlValidator
+    ) {
         this.userPlantRepository = userPlantRepository;
         this.gardenRepository = gardenRepository;
         this.plantSpeciesRepository = plantSpeciesRepository;
@@ -57,6 +81,9 @@ public class PlantService {
         this.careScheduleRepository = careScheduleRepository;
         this.careLogRepository = careLogRepository;
         this.growthJournalRepository = growthJournalRepository;
+        this.mediaUrlValidator = mediaUrlValidator != null
+            ? mediaUrlValidator
+            : new com.cmc.plant_care_backend.common.validation.MediaUrlValidator("https");
     }
 
     @Transactional
@@ -86,6 +113,7 @@ public class PlantService {
             plant.setNote(req.getNote().trim());
         }
         if (req.getImageUrl() != null && !req.getImageUrl().trim().isEmpty()) {
+            mediaUrlValidator.validate(req.getImageUrl().trim(), "imageUrl");
             plant.setImageUrl(req.getImageUrl().trim());
         }
         plant.setHealthStatus(HealthStatus.HEALTHY);
@@ -165,7 +193,13 @@ public class PlantService {
             plant.setHealthStatus(req.getHealthStatus());
         }
         if (req.getImageUrl() != null) {
-            plant.setImageUrl(req.getImageUrl().trim().isEmpty() ? null : req.getImageUrl().trim());
+            String trimmedUrl = req.getImageUrl().trim();
+            if (trimmedUrl.isEmpty()) {
+                plant.setImageUrl(null);
+            } else {
+                mediaUrlValidator.validate(trimmedUrl, "imageUrl");
+                plant.setImageUrl(trimmedUrl);
+            }
         }
 
         UserPlant updated = userPlantRepository.save(plant);

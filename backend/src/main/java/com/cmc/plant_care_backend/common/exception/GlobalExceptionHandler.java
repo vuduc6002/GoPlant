@@ -83,6 +83,13 @@ public class GlobalExceptionHandler {
         return new ResponseEntity<>(res, HttpStatus.FORBIDDEN);
     }
 
+    @ExceptionHandler(org.springframework.web.multipart.MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMaxUploadSizeExceeded(org.springframework.web.multipart.MaxUploadSizeExceededException ex) {
+        log.warn("Upload size exceeded: {}", ex.getMessage());
+        ApiResponse<Void> res = ApiResponse.failure("FILE_TOO_LARGE", "Kích thước tệp vượt quá giới hạn tối đa 5MB.", "file");
+        return new ResponseEntity<>(res, HttpStatus.PAYLOAD_TOO_LARGE);
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> handleGenericException(Exception ex) {
         log.error("Internal server error: ", ex);
