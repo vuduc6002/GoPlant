@@ -76,32 +76,28 @@ export function useMediaReadUrl(
       return response;
     },
     enabled: isEnabled,
-    staleTime: 4 * 60 * 1000, // 4 minutes (signed URLs expire in 5 minutes)
+    staleTime: 4 * 60 * 1000,
     gcTime: 5 * 60 * 1000,
   });
 }
 
 /**
  * Hook for securely uploading an image via the backend proxy.
- * Ensures session isolation and validates the file before sending.
+ * Enforces single session snapshot per mutation, verifies session before request and after response.
  */
 export function useUploadMediaMutation() {
   const { user, status } = useAuth();
   const queryClient = useQueryClient();
-  const isMountedRef = useRef(true);
   const latestAuthRef = useRef({
     status,
     userId: getAuthenticatedUserId(status, user),
   });
+  const pendingSnapshotsRef = useRef<{ ownerUserId: string; sessionGeneration: number }[]>([]);
 
   useEffect(() => {
-    isMountedRef.current = true;
     latestAuthRef.current = {
       status,
       userId: getAuthenticatedUserId(status, user),
-    };
-    return () => {
-      isMountedRef.current = false;
     };
   }, [status, user]);
 
@@ -112,16 +108,46 @@ export function useUploadMediaMutation() {
     { ownerUserId: string; sessionGeneration: number }
   >({
     onMutate: async () => {
-      return resolveMutationSessionOwner(latestAuthRef);
+      const snapshot = await resolveMutationSessionOwner(latestAuthRef);
+      pendingSnapshotsRef.current.push(snapshot);
+      return snapshot;
     },
     mutationFn: async (file: LocalImageFile) => {
-      const { ownerUserId, sessionGeneration } =
-        await resolveMutationSessionOwner(latestAuthRef);
+      const snapshot = pendingSnapshotsRef.current.shift() ?? (await resolveMutationSessionOwner(latestAuthRef));
 
-      return uploadMedia(file, {
-        expectedUserId: ownerUserId,
-        expectedSessionGeneration: sessionGeneration,
+      // Guard 1: Verify session before initiating outbound request
+      const currentUserId = latestAuthRef.current.userId;
+      const currentGeneration = getSessionGeneration();
+      if (
+        currentUserId !== snapshot.ownerUserId ||
+        currentGeneration !== snapshot.sessionGeneration
+      ) {
+        throw new AppApiError({
+          message: 'Phiên người dùng đã thay đổi trước khi tải lên hình ảnh.',
+          code: 'SESSION_USER_MISMATCH',
+        });
+      }
+
+      // Execute upload with expected scope
+      const response = await uploadMedia(file, {
+        expectedUserId: snapshot.ownerUserId,
+        expectedSessionGeneration: snapshot.sessionGeneration,
       });
+
+      // Guard 2: Verify session after response returns before delivering data to caller
+      const postUserId = latestAuthRef.current.userId;
+      const postGeneration = getSessionGeneration();
+      if (
+        postUserId !== snapshot.ownerUserId ||
+        postGeneration !== snapshot.sessionGeneration
+      ) {
+        throw new AppApiError({
+          message: 'Phiên người dùng đã thay đổi trong khi đang xử lý tải lên.',
+          code: 'SESSION_USER_MISMATCH',
+        });
+      }
+
+      return response;
     },
     onSuccess: (data, variables, context) => {
       const currentUserId = latestAuthRef.current.userId;
@@ -131,8 +157,6 @@ export function useUploadMediaMutation() {
         currentUserId !== context.ownerUserId ||
         currentGeneration !== context.sessionGeneration
       ) {
-        // User switched (A -> B) or logged out while upload was in flight.
-        // Discard result and prevent cache pollution for User B.
         return;
       }
       queryClient.invalidateQueries({
@@ -148,20 +172,16 @@ export function useUploadMediaMutation() {
 export function useDeleteMediaMutation() {
   const { user, status } = useAuth();
   const queryClient = useQueryClient();
-  const isMountedRef = useRef(true);
   const latestAuthRef = useRef({
     status,
     userId: getAuthenticatedUserId(status, user),
   });
+  const pendingSnapshotsRef = useRef<{ ownerUserId: string; sessionGeneration: number }[]>([]);
 
   useEffect(() => {
-    isMountedRef.current = true;
     latestAuthRef.current = {
       status,
       userId: getAuthenticatedUserId(status, user),
-    };
-    return () => {
-      isMountedRef.current = false;
     };
   }, [status, user]);
 
@@ -172,18 +192,48 @@ export function useDeleteMediaMutation() {
     { ownerUserId: string; sessionGeneration: number }
   >({
     onMutate: async () => {
-      return resolveMutationSessionOwner(latestAuthRef);
+      const snapshot = await resolveMutationSessionOwner(latestAuthRef);
+      pendingSnapshotsRef.current.push(snapshot);
+      return snapshot;
     },
     mutationFn: async (mediaId: string) => {
-      const { ownerUserId, sessionGeneration } =
-        await resolveMutationSessionOwner(latestAuthRef);
+      const snapshot = pendingSnapshotsRef.current.shift() ?? (await resolveMutationSessionOwner(latestAuthRef));
 
-      return deleteMedia(mediaId, {
-        expectedUserId: ownerUserId,
-        expectedSessionGeneration: sessionGeneration,
+      // Guard 1: Verify session before initiating outbound request
+      const currentUserId = latestAuthRef.current.userId;
+      const currentGeneration = getSessionGeneration();
+      if (
+        currentUserId !== snapshot.ownerUserId ||
+        currentGeneration !== snapshot.sessionGeneration
+      ) {
+        throw new AppApiError({
+          message: 'Phiên người dùng đã thay đổi trước khi xóa tệp tin.',
+          code: 'SESSION_USER_MISMATCH',
+        });
+      }
+
+      // Execute delete with expected scope
+      const response = await deleteMedia(mediaId, {
+        expectedUserId: snapshot.ownerUserId,
+        expectedSessionGeneration: snapshot.sessionGeneration,
       });
+
+      // Guard 2: Verify session after response returns before delivering to caller
+      const postUserId = latestAuthRef.current.userId;
+      const postGeneration = getSessionGeneration();
+      if (
+        postUserId !== snapshot.ownerUserId ||
+        postGeneration !== snapshot.sessionGeneration
+      ) {
+        throw new AppApiError({
+          message: 'Phiên người dùng đã thay đổi trong khi đang xóa tệp tin.',
+          code: 'SESSION_USER_MISMATCH',
+        });
+      }
+
+      return response;
     },
-    onSuccess: (_, mediaId, context) => {
+    onSuccess: (data, mediaId, context) => {
       const currentUserId = latestAuthRef.current.userId;
       const currentGeneration = getSessionGeneration();
       if (
@@ -191,8 +241,6 @@ export function useDeleteMediaMutation() {
         currentUserId !== context.ownerUserId ||
         currentGeneration !== context.sessionGeneration
       ) {
-        // User switched (A -> B) or logged out while delete was in flight.
-        // Discard result and prevent cache pollution for User B.
         return;
       }
       queryClient.removeQueries({

@@ -196,4 +196,77 @@ class MediaTransactionCoordinatorTest {
         assertEquals(MediaStatus.DELETED, media.getStatus());
         verify(mediaRepository).saveAndFlush(media);
     }
+
+    @Test
+    @DisplayName("getReadSnapshot returns snapshot for owner when READY or ATTACHED")
+    void getReadSnapshot_Success() {
+        Media media = new Media();
+        media.setId(mediaId);
+        media.setOwner(user);
+        media.setBucket("goplant-private-media");
+        media.setObjectKey("users/test.jpg");
+        media.setStatus(MediaStatus.READY);
+
+        when(mediaRepository.findById(mediaId)).thenReturn(Optional.of(media));
+
+        MediaTransactionCoordinator.MediaReadSnapshot snapshot = coordinator.getReadSnapshot(mediaId, userId);
+
+        assertNotNull(snapshot);
+        assertEquals(mediaId, snapshot.mediaId());
+        assertEquals("goplant-private-media", snapshot.bucket());
+        assertEquals("users/test.jpg", snapshot.objectKey());
+    }
+
+    @Test
+    @DisplayName("beginReconciliation returns candidate for PENDING and DELETING media")
+    void beginReconciliation_PendingAndDeleting() {
+        Media pending = new Media();
+        pending.setId(mediaId);
+        pending.setBucket("bucket");
+        pending.setObjectKey("pending.jpg");
+        pending.setStatus(MediaStatus.PENDING);
+
+        when(mediaRepository.findByIdForUpdate(mediaId)).thenReturn(Optional.of(pending));
+
+        MediaTransactionCoordinator.ReconciliationCandidate candidate = coordinator.beginReconciliation(mediaId);
+        assertNotNull(candidate);
+        assertEquals(mediaId, candidate.mediaId());
+        assertEquals(MediaStatus.PENDING, candidate.status());
+    }
+
+    @Test
+    @DisplayName("beginReconciliation returns null for ATTACHED or READY media to prevent false deletions")
+    void beginReconciliation_ProtectedMedia_ReturnsNull() {
+        Media ready = new Media();
+        ready.setId(mediaId);
+        ready.setStatus(MediaStatus.READY);
+
+        when(mediaRepository.findByIdForUpdate(mediaId)).thenReturn(Optional.of(ready));
+
+        assertNull(coordinator.beginReconciliation(mediaId));
+
+        Media attached = new Media();
+        attached.setId(mediaId);
+        attached.setStatus(MediaStatus.ATTACHED);
+
+        when(mediaRepository.findByIdForUpdate(mediaId)).thenReturn(Optional.of(attached));
+
+        assertNull(coordinator.beginReconciliation(mediaId));
+    }
+
+    @Test
+    @DisplayName("completeReconciliation transitions stuck media to DELETED")
+    void completeReconciliation_Success() {
+        Media pending = new Media();
+        pending.setId(mediaId);
+        pending.setStatus(MediaStatus.PENDING);
+
+        when(mediaRepository.findById(mediaId)).thenReturn(Optional.of(pending));
+        when(mediaRepository.saveAndFlush(any(Media.class))).thenAnswer(i -> i.getArgument(0));
+
+        coordinator.completeReconciliation(mediaId);
+
+        assertEquals(MediaStatus.DELETED, pending.getStatus());
+        verify(mediaRepository).saveAndFlush(pending);
+    }
 }

@@ -482,6 +482,17 @@ apiClient.interceptors.request.use(
       config.headers.Authorization = `Bearer ${token}`;
     }
 
+    // Ensure multipart boundary is properly handled by browser/native adapter when data is FormData
+    if (config.data && typeof config.data === 'object' && typeof (config.data as any).append === 'function') {
+      if (config.headers) {
+        const ct = config.headers['Content-Type'] || config.headers['content-type'];
+        if (typeof ct === 'string' && ct.trim().toLowerCase() === 'multipart/form-data') {
+          delete config.headers['Content-Type'];
+          delete config.headers['content-type'];
+        }
+      }
+    }
+
     return config;
   },
   (error) => Promise.reject(normalizeApiError(error))

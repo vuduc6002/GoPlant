@@ -3,6 +3,7 @@ package com.cmc.plant_care_backend.service;
 import com.cmc.plant_care_backend.common.exception.ForbiddenException;
 import com.cmc.plant_care_backend.common.exception.MediaAttachedException;
 import com.cmc.plant_care_backend.common.exception.ResourceNotFoundException;
+import com.cmc.plant_care_backend.common.exception.ValidationException;
 import com.cmc.plant_care_backend.common.media.ProcessedImage;
 import com.cmc.plant_care_backend.model.Media;
 import com.cmc.plant_care_backend.model.User;
@@ -27,6 +28,10 @@ public class MediaTransactionCoordinator {
             return new DeleteDecision(false, bucket, objectKey);
         }
     }
+
+    public record MediaReadSnapshot(UUID mediaId, String bucket, String objectKey) {}
+
+    public record ReconciliationCandidate(UUID mediaId, String bucket, String objectKey, MediaStatus status) {}
 
     private final MediaRepository mediaRepository;
     private final UserRepository userRepository;
@@ -100,6 +105,44 @@ public class MediaTransactionCoordinator {
         mediaRepository.findById(mediaId).ifPresent(media -> {
             media.setStatus(MediaStatus.DELETED);
             mediaRepository.saveAndFlush(media);
+        });
+    }
+
+    @Transactional(readOnly = true)
+    public MediaReadSnapshot getReadSnapshot(UUID mediaId, UUID userId) {
+        Media media = mediaRepository.findById(mediaId)
+            .orElseThrow(() -> new ResourceNotFoundException("Tệp tin đa phương tiện", mediaId));
+
+        if (!media.getOwner().getId().equals(userId)) {
+            throw new ForbiddenException("Bạn không có quyền truy cập tệp tin này.");
+        }
+
+        if (media.getStatus() != MediaStatus.READY && media.getStatus() != MediaStatus.ATTACHED) {
+            throw new ValidationException("Tệp tin chưa sẵn sàng hoặc đã bị xóa.", "mediaId");
+        }
+
+        return new MediaReadSnapshot(media.getId(), media.getBucket(), media.getObjectKey());
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public ReconciliationCandidate beginReconciliation(UUID mediaId) {
+        Media media = mediaRepository.findByIdForUpdate(mediaId).orElse(null);
+        if (media == null) {
+            return null;
+        }
+        if (media.getStatus() != MediaStatus.PENDING && media.getStatus() != MediaStatus.DELETING) {
+            return null; // Protected: READY, ATTACHED, or already DELETED
+        }
+        return new ReconciliationCandidate(media.getId(), media.getBucket(), media.getObjectKey(), media.getStatus());
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void completeReconciliation(UUID mediaId) {
+        mediaRepository.findById(mediaId).ifPresent(media -> {
+            if (media.getStatus() == MediaStatus.PENDING || media.getStatus() == MediaStatus.DELETING) {
+                media.setStatus(MediaStatus.DELETED);
+                mediaRepository.saveAndFlush(media);
+            }
         });
     }
 }

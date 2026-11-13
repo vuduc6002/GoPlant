@@ -5,12 +5,14 @@ import com.cmc.plant_care_backend.config.SupabaseStorageProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
+import java.net.URI;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -22,19 +24,48 @@ public class SupabaseStorageGateway {
 
     private final SupabaseStorageProperties properties;
     private final RestClient restClient;
+    private final int connectTimeoutMs;
+    private final int readTimeoutMs;
 
     public SupabaseStorageGateway(SupabaseStorageProperties properties) {
-        this(properties, RestClient.builder());
+        this(properties, RestClient.builder(), true);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
     public SupabaseStorageGateway(SupabaseStorageProperties properties, RestClient.Builder restClientBuilder) {
+        this(properties, restClientBuilder, true);
+    }
+
+    public SupabaseStorageGateway(SupabaseStorageProperties properties, RestClient.Builder restClientBuilder, boolean applyTimeoutFactory) {
         this.properties = properties;
+        this.connectTimeoutMs = properties.getConnectTimeoutMs();
+        this.readTimeoutMs = properties.getReadTimeoutMs();
+
+        if (applyTimeoutFactory) {
+            SimpleClientHttpRequestFactory requestFactory = createRequestFactory(this.connectTimeoutMs, this.readTimeoutMs);
+            restClientBuilder.requestFactory(requestFactory);
+        }
+
         this.restClient = restClientBuilder.build();
+    }
+
+    public static SimpleClientHttpRequestFactory createRequestFactory(int connectTimeoutMs, int readTimeoutMs) {
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(Duration.ofMillis(connectTimeoutMs));
+        requestFactory.setReadTimeout(Duration.ofMillis(readTimeoutMs));
+        return requestFactory;
     }
 
     public boolean isConfigured() {
         return properties.isConfigured();
+    }
+
+    public int getConnectTimeoutMs() {
+        return connectTimeoutMs;
+    }
+
+    public int getReadTimeoutMs() {
+        return readTimeoutMs;
     }
 
     public void upload(String bucket, String objectKey, byte[] data, String mimeType) {
@@ -62,14 +93,15 @@ public class SupabaseStorageGateway {
                 .onStatus(HttpStatusCode::isError, (req, res) -> {
                     int statusCode = res.getStatusCode().value();
                     log.warn("Supabase Storage upload returned HTTP status [{}] for bucket [{}]", statusCode, bucket);
-                    throw new StorageUnavailableException("Dịch vụ lưu trữ không thể lưu trữ tệp tin (mã lỗi: " + statusCode + ").");
+                    boolean indefinite = statusCode >= 500;
+                    throw new StorageUnavailableException("Dịch vụ lưu trữ không thể lưu trữ tệp tin (mã lỗi: " + statusCode + ").", indefinite);
                 })
                 .toBodilessEntity();
         } catch (StorageUnavailableException ex) {
             throw ex;
         } catch (Exception ex) {
-            log.error("Failed to upload object to Supabase Storage: {}", ex.getMessage());
-            throw new StorageUnavailableException("Lỗi kết nối tới dịch vụ lưu trữ hình ảnh.");
+            log.error("Failed to upload object to Supabase Storage: {}", sanitizeLogMessage(ex.getMessage()));
+            throw new StorageUnavailableException("Lỗi kết nối tới dịch vụ lưu trữ hình ảnh.", true);
         }
     }
 
@@ -119,7 +151,7 @@ public class SupabaseStorageGateway {
         } catch (StorageUnavailableException ex) {
             throw ex;
         } catch (Exception ex) {
-            log.error("Failed to generate signed URL from Supabase Storage: {}", ex.getMessage());
+            log.error("Failed to generate signed URL from Supabase Storage: {}", sanitizeLogMessage(ex.getMessage()));
             throw new StorageUnavailableException("Lỗi kết nối tới dịch vụ lưu trữ khi tạo URL truy cập.");
         }
     }
@@ -133,7 +165,7 @@ public class SupabaseStorageGateway {
         String url = baseUrl + "/storage/v1/object/" + bucket;
 
         try {
-            RestClient.RequestBodySpec requestSpec = restClient.method(org.springframework.http.HttpMethod.DELETE)
+            RestClient.RequestBodySpec requestSpec = restClient.method(HttpMethod.DELETE)
                 .uri(url)
                 .header("apikey", properties.getApiKey())
                 .contentType(MediaType.APPLICATION_JSON)
@@ -158,30 +190,85 @@ public class SupabaseStorageGateway {
         } catch (StorageUnavailableException ex) {
             throw ex;
         } catch (Exception ex) {
-            log.error("Failed to delete object from Supabase Storage: {}", ex.getMessage());
+            log.error("Failed to delete object from Supabase Storage: {}", sanitizeLogMessage(ex.getMessage()));
             throw new StorageUnavailableException("Lỗi kết nối tới dịch vụ lưu trữ khi xóa tệp tin.");
         }
     }
 
-    private String trimTrailingSlash(String url) {
-        if (url == null) return "";
-        String trimmed = url.trim();
-        while (trimmed.endsWith("/")) {
-            trimmed = trimmed.substring(0, trimmed.length() - 1);
+    public String resolveFullSignedUrl(String baseUrl, String rawSignedUrl) {
+        if (rawSignedUrl == null || rawSignedUrl.trim().isEmpty()) {
+            throw new StorageUnavailableException("URL truy cập tệp tin từ dịch vụ lưu trữ rỗng.");
         }
-        return trimmed;
+
+        String trimmed = rawSignedUrl.trim();
+        if (trimmed.startsWith("//") || trimmed.startsWith("http://")) {
+            throw new StorageUnavailableException("Dịch vụ lưu trữ trả về giao thức không an toàn hoặc không hợp lệ.");
+        }
+
+        URI baseUri;
+        try {
+            baseUri = URI.create(baseUrl);
+        } catch (Exception e) {
+            throw new StorageUnavailableException("Cấu hình URL dịch vụ lưu trữ không hợp lệ.");
+        }
+
+        if (trimmed.startsWith("https://")) {
+            URI signedUri;
+            try {
+                signedUri = URI.create(trimmed);
+            } catch (Exception e) {
+                throw new StorageUnavailableException("URL truy cập tệp tin không đúng định dạng URI.");
+            }
+
+            if (!"https".equalsIgnoreCase(signedUri.getScheme())) {
+                throw new StorageUnavailableException("Chỉ chấp nhận URL truy cập sử dụng giao thức HTTPS.");
+            }
+
+            if (signedUri.getUserInfo() != null || (signedUri.getRawAuthority() != null && signedUri.getRawAuthority().contains("@"))) {
+                throw new StorageUnavailableException("URL truy cập tệp tin chứa thông tin nhạy cảm userinfo.");
+            }
+
+            String signedHost = signedUri.getHost();
+            String baseHost = baseUri.getHost();
+            if (signedHost == null || !signedHost.equalsIgnoreCase(baseHost)) {
+                throw new StorageUnavailableException("URL truy cập tệp tin không thuộc máy chủ lưu trữ hợp lệ.");
+            }
+
+            int signedPort = signedUri.getPort() == -1 ? 443 : signedUri.getPort();
+            int basePort = baseUri.getPort() == -1 ? (baseUri.getScheme() != null && baseUri.getScheme().equalsIgnoreCase("https") ? 443 : 80) : baseUri.getPort();
+            if (signedPort != basePort) {
+                throw new StorageUnavailableException("Cổng kết nối trong URL truy cập tệp tin không khớp máy chủ lưu trữ.");
+            }
+
+            String path = signedUri.getPath();
+            if (path == null || !path.startsWith("/storage/v1/")) {
+                throw new StorageUnavailableException("Đường dẫn trong URL truy cập tệp tin không thuộc phân hệ Storage hợp lệ.");
+            }
+
+            return trimmed;
+        }
+
+        // Relative path
+        String relativePath = trimmed;
+        if (!relativePath.startsWith("/")) {
+            relativePath = "/" + relativePath;
+        }
+
+        if (!relativePath.startsWith("/storage/v1/")) {
+            relativePath = "/storage/v1" + relativePath;
+        }
+
+        return baseUrl + relativePath;
     }
 
-    private String resolveFullSignedUrl(String baseUrl, String signedUrl) {
-        if (signedUrl.startsWith("http://") || signedUrl.startsWith("https://")) {
-            return signedUrl;
+    public String sanitizeLogMessage(String raw) {
+        if (raw == null) return "";
+        String sanitized = raw;
+        if (properties != null && properties.getApiKey() != null && !properties.getApiKey().isEmpty()) {
+            sanitized = sanitized.replace(properties.getApiKey(), "[REDACTED]");
         }
-        if (signedUrl.startsWith("/storage/v1/")) {
-            return baseUrl + signedUrl;
-        }
-        if (signedUrl.startsWith("/")) {
-            return baseUrl + "/storage/v1" + signedUrl;
-        }
-        return baseUrl + "/storage/v1/" + signedUrl;
+        sanitized = sanitized.replaceAll("(?i)(apikey|token|secret|key|bearer)\\s*[=:]\\s*[^&\\s]+", "$1=[REDACTED]");
+        sanitized = sanitized.replaceAll("Bearer\\s+[A-Za-z0-9._~+/-]+", "Bearer [REDACTED]");
+        return sanitized;
     }
 }

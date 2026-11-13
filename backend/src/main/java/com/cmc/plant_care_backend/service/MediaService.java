@@ -67,6 +67,8 @@ public class MediaService {
             storageGateway.upload(bucket, objectKey, processed.getBytes(), processed.getMimeType());
         } catch (Exception uploadEx) {
             log.error("Storage upload failed for media [{}]", mediaId, uploadEx);
+            boolean indefinite = isIndefiniteUploadFailure(uploadEx);
+
             boolean compensationSucceeded = false;
             try {
                 storageGateway.delete(bucket, objectKey);
@@ -75,14 +77,17 @@ public class MediaService {
                 log.warn("Storage compensation delete failed for object [{}]: {}", objectKey, compEx.getMessage());
             }
 
-            if (compensationSucceeded) {
+            // Only immediately delete PENDING record if upload was definitely rejected and compensation succeeded.
+            // On indefinite failures (timeout/connection reset), retain PENDING record for background reconciliation.
+            if (!indefinite && compensationSucceeded) {
                 try {
                     transactionCoordinator.deletePendingMedia(mediaId);
                 } catch (Exception dbCleanupEx) {
-                    log.warn("Failed to cleanup pending media record [{}] after compensation: {}", mediaId, dbCleanupEx.getMessage());
+                    log.warn("Failed to cleanup pending media record [{}] after definite rejection: {}", mediaId, dbCleanupEx.getMessage());
                 }
             } else {
-                log.warn("Retaining PENDING media record [{}] for storage reconciliation", mediaId);
+                log.warn("Retaining PENDING media record [{}] for storage reconciliation (indefinite={}, compDeleted={})",
+                    mediaId, indefinite, compensationSucceeded);
             }
             throw new StorageUnavailableException("Không thể lưu trữ tệp tin vào kho lưu trữ.");
         }
@@ -93,47 +98,27 @@ public class MediaService {
             readyMedia = transactionCoordinator.markReady(mediaId);
         } catch (Exception commitEx) {
             log.error("Failed to commit READY status for media [{}] after storage upload, triggering compensation", mediaId, commitEx);
-            boolean compensationSucceeded = false;
             try {
                 storageGateway.delete(bucket, objectKey);
-                compensationSucceeded = true;
             } catch (Exception compEx) {
                 log.warn("Compensation delete failed for object [{}] after DB commit failure: {}", objectKey, compEx.getMessage());
             }
-
-            if (compensationSucceeded) {
-                try {
-                    transactionCoordinator.deletePendingMedia(mediaId);
-                } catch (Exception dbCleanupEx) {
-                    log.warn("Failed to cleanup pending media record [{}] after DB commit failure: {}", mediaId, dbCleanupEx.getMessage());
-                }
-            } else {
-                log.warn("Retaining PENDING media record [{}] for storage reconciliation after DB commit failure", mediaId);
-            }
+            // Retain PENDING record for background reconciliation
+            log.warn("Retaining PENDING media record [{}] for storage reconciliation after DB commit failure", mediaId);
             throw new StorageUnavailableException("Lỗi cập nhật trạng thái tệp tin sau khi lưu trữ.");
         }
 
         return MediaResponse.fromEntity(readyMedia);
     }
 
-    @Transactional(readOnly = true)
     public MediaReadUrlResponse getReadUrl(UUID mediaId, UUID userId) {
-        Media media = mediaRepository.findById(mediaId)
-            .orElseThrow(() -> new ResourceNotFoundException("Tệp tin đa phương tiện", mediaId));
-
-        if (!media.getOwner().getId().equals(userId)) {
-            throw new ForbiddenException("Bạn không có quyền truy cập tệp tin này.");
-        }
-
-        if (media.getStatus() != MediaStatus.READY && media.getStatus() != MediaStatus.ATTACHED) {
-            throw new ValidationException("Tệp tin chưa sẵn sàng hoặc đã bị xóa.", "mediaId");
-        }
+        MediaTransactionCoordinator.MediaReadSnapshot snapshot = transactionCoordinator.getReadSnapshot(mediaId, userId);
 
         int ttl = storageProperties.getSignedUrlTtlSeconds();
-        String signedUrl = storageGateway.createSignedUrl(media.getBucket(), media.getObjectKey(), ttl);
+        String signedUrl = storageGateway.createSignedUrl(snapshot.bucket(), snapshot.objectKey(), ttl);
         OffsetDateTime expiresAt = OffsetDateTime.now(ZoneOffset.UTC).plusSeconds(ttl);
 
-        return new MediaReadUrlResponse(media.getId(), signedUrl, expiresAt);
+        return new MediaReadUrlResponse(snapshot.mediaId(), signedUrl, expiresAt);
     }
 
     public void deleteMedia(UUID mediaId, UUID userId) {
@@ -165,5 +150,22 @@ public class MediaService {
             return "webp";
         }
         return "jpg";
+    }
+
+    private boolean isIndefiniteUploadFailure(Throwable ex) {
+        if (ex instanceof StorageUnavailableException sue && sue.isIndefinite()) {
+            return true;
+        }
+        if (ex instanceof org.springframework.web.client.ResourceAccessException) {
+            return true;
+        }
+        if (ex instanceof java.io.IOException) {
+            return true;
+        }
+        if (ex instanceof java.util.concurrent.TimeoutException) {
+            return true;
+        }
+        String msg = ex.getMessage() != null ? ex.getMessage().toLowerCase() : "";
+        return msg.contains("timeout") || msg.contains("timed out") || msg.contains("connection reset") || msg.contains("broken pipe");
     }
 }

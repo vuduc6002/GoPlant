@@ -19,6 +19,8 @@ const VALID_MEDIA_STATUSES = new Set<MediaStatus>([
   'DELETED',
 ]);
 
+export const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function normalizeMediaItem(raw: any): MediaItem {
   if (!raw || typeof raw !== 'object') {
     throw new AppApiError({
@@ -28,9 +30,9 @@ function normalizeMediaItem(raw: any): MediaItem {
   }
 
   const id = typeof raw.id === 'string' ? raw.id.trim() : '';
-  if (!id) {
+  if (!id || !UUID_REGEX.test(id)) {
     throw new AppApiError({
-      message: 'Dữ liệu phản hồi tệp tin thiếu ID hợp lệ.',
+      message: 'Dữ liệu phản hồi tệp tin thiếu ID định dạng UUID hợp lệ.',
       code: 'INVALID_RESPONSE',
     });
   }
@@ -43,10 +45,10 @@ function normalizeMediaItem(raw: any): MediaItem {
     });
   }
 
-  const sizeBytes = typeof raw.sizeBytes === 'number' ? raw.sizeBytes : -1;
-  if (sizeBytes <= 0 || sizeBytes > 5 * 1024 * 1024) {
+  const sizeBytes = typeof raw.sizeBytes === 'number' && Number.isFinite(raw.sizeBytes) ? raw.sizeBytes : -1;
+  if (!Number.isInteger(sizeBytes) || sizeBytes <= 0 || sizeBytes > 5 * 1024 * 1024) {
     throw new AppApiError({
-      message: 'Kích thước tệp tin phản hồi không hợp lệ.',
+      message: 'Kích thước tệp tin phản hồi không hợp lệ (phải từ 1 đến 5242880 bytes).',
       code: 'INVALID_RESPONSE',
     });
   }
@@ -93,8 +95,7 @@ export async function uploadMedia(
   const fileName = file.name || 'image.jpg';
   const fileType = file.type || 'image/jpeg';
 
-  // React Native FormData structure vs standard Web FormData
-  // In React Native: append('file', { uri, name, type } as any)
+  // React Native FormData vs Web FormData compatibility
   formData.append('file', {
     uri: file.uri,
     name: fileName,
@@ -132,26 +133,81 @@ export async function getMediaReadUrl(
     });
   }
 
+  const trimmedId = mediaId.trim();
+  if (!UUID_REGEX.test(trimmedId)) {
+    throw new AppApiError({
+      message: 'Mã tệp tin mediaId không đúng định dạng UUID.',
+      code: 'VALIDATION_ERROR',
+      field: 'mediaId',
+    });
+  }
+
   const response = await apiClient.get<ApiResponse<MediaReadUrlResponse>>(
-    `/media/${encodeURIComponent(mediaId.trim())}/read-url`,
+    `/media/${encodeURIComponent(trimmedId)}/read-url`,
     buildScopeConfig(scope)
   );
 
   const data = response.data?.data;
-  const readUrl = typeof data?.readUrl === 'string' ? data.readUrl.trim() : '';
-  const expiresAt = typeof data?.expiresAt === 'string' ? data.expiresAt.trim() : '';
-
-  if (!readUrl || !expiresAt || !readUrl.startsWith('https://')) {
+  if (!data || typeof data !== 'object') {
     throw new AppApiError({
-      message: 'Dữ liệu phản hồi URL đọc không hợp lệ hoặc không an toàn.',
+      message: 'Dữ liệu phản hồi URL đọc rỗng hoặc không đúng định dạng.',
+      code: 'INVALID_RESPONSE',
+    });
+  }
+
+  const respMediaId = typeof data.mediaId === 'string' ? data.mediaId.trim() : '';
+  if (!respMediaId || respMediaId.toLowerCase() !== trimmedId.toLowerCase()) {
+    throw new AppApiError({
+      message: 'Mã tệp tin trong phản hồi URL đọc không khớp với yêu cầu.',
+      code: 'INVALID_RESPONSE',
+    });
+  }
+
+  const rawReadUrl = typeof data.readUrl === 'string' ? data.readUrl.trim() : '';
+  if (!rawReadUrl) {
+    throw new AppApiError({
+      message: 'Phản hồi thiếu URL truy cập tệp tin.',
+      code: 'INVALID_RESPONSE',
+    });
+  }
+
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(rawReadUrl);
+  } catch {
+    throw new AppApiError({
+      message: 'URL truy cập tệp tin không đúng định dạng URI hợp lệ.',
+      code: 'INVALID_RESPONSE',
+    });
+  }
+
+  if (parsedUrl.protocol !== 'https:') {
+    throw new AppApiError({
+      message: 'URL truy cập tệp tin phải sử dụng giao thức bảo mật HTTPS.',
+      code: 'INVALID_RESPONSE',
+    });
+  }
+
+  const rawExpiresAt = typeof data.expiresAt === 'string' ? data.expiresAt.trim() : '';
+  if (!rawExpiresAt) {
+    throw new AppApiError({
+      message: 'Phản hồi thiếu thời hạn truy cập URL tệp tin.',
+      code: 'INVALID_RESPONSE',
+    });
+  }
+
+  const expiresTimestamp = Date.parse(rawExpiresAt);
+  if (isNaN(expiresTimestamp) || expiresTimestamp <= Date.now()) {
+    throw new AppApiError({
+      message: 'Thời hạn truy cập URL tệp tin không hợp lệ hoặc đã hết hạn.',
       code: 'INVALID_RESPONSE',
     });
   }
 
   return {
-    mediaId: String(data?.mediaId || mediaId).trim(),
-    readUrl,
-    expiresAt,
+    mediaId: respMediaId,
+    readUrl: rawReadUrl,
+    expiresAt: rawExpiresAt,
   };
 }
 
@@ -167,14 +223,22 @@ export async function deleteMedia(
     });
   }
 
+  const trimmedId = mediaId.trim();
+  if (!UUID_REGEX.test(trimmedId)) {
+    throw new AppApiError({
+      message: 'Mã tệp tin mediaId không đúng định dạng UUID.',
+      code: 'VALIDATION_ERROR',
+      field: 'mediaId',
+    });
+  }
+
   const response = await apiClient.delete<ApiResponse<SimpleMessageResponseDto>>(
-    `/media/${encodeURIComponent(mediaId.trim())}`,
+    `/media/${encodeURIComponent(trimmedId)}`,
     buildScopeConfig(scope)
   );
 
-  if (!response.data?.data) {
-    return { message: response.data?.message || 'Đã xóa tệp tin thành công.' };
-  }
-
-  return response.data.data;
+  const data = response.data?.data;
+  return {
+    message: typeof data?.message === 'string' ? data.message : 'Đã xóa tệp tin thành công.',
+  };
 }

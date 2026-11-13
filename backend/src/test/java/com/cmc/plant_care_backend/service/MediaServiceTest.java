@@ -58,7 +58,7 @@ class MediaServiceTest {
     void setUp() {
         properties = new SupabaseStorageProperties(
             "https://test.supabase.co",
-            "test-key",
+            "sb_secret_mock_test_key_12345678",
             "goplant-private-media",
             5242880L,
             300
@@ -122,8 +122,8 @@ class MediaServiceTest {
     }
 
     @Test
-    @DisplayName("uploadMedia triggers compensation delete and cleans up PENDING record if Supabase storage upload fails")
-    void uploadMedia_StorageFailure_TriggersCompensationAndDeletesPendingRecord() throws Exception {
+    @DisplayName("uploadMedia triggers compensation delete and cleans up PENDING record if Supabase storage upload definitely rejects")
+    void uploadMedia_StorageFailure_DefiniteRejection_TriggersCompensationAndDeletesPendingRecord() throws Exception {
         byte[] imageBytes = new byte[] { 1, 2, 3 };
         MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", imageBytes);
         ProcessedImage processed = new ProcessedImage(imageBytes, "image/jpeg", 100, 100, 3, "sha256hex");
@@ -140,7 +140,8 @@ class MediaServiceTest {
         when(transactionCoordinator.createPendingMedia(eq(ownerId), eq("goplant-private-media"), anyString(), eq(processed)))
             .thenReturn(pendingMedia);
 
-        doThrow(new StorageUnavailableException("Storage network timeout"))
+        // Definite failure (e.g. 4xx client rejection)
+        doThrow(new StorageUnavailableException("Storage client rejection (400)", false))
             .when(storageGateway).upload(anyString(), anyString(), any(), anyString());
 
         assertThrows(StorageUnavailableException.class, () -> mediaService.uploadMedia(ownerId, file));
@@ -148,6 +149,36 @@ class MediaServiceTest {
         verify(storageGateway).delete(eq("goplant-private-media"), anyString());
         verify(transactionCoordinator).deletePendingMedia(mediaId);
         verify(transactionCoordinator, never()).markReady(any());
+    }
+
+    @Test
+    @DisplayName("uploadMedia retains PENDING record for reconciliation when upload fails due to indefinite timeout")
+    void uploadMedia_StorageFailure_IndefiniteTimeout_RetainsPendingRecord() throws Exception {
+        byte[] imageBytes = new byte[] { 1, 2, 3 };
+        MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", imageBytes);
+        ProcessedImage processed = new ProcessedImage(imageBytes, "image/jpeg", 100, 100, 3, "sha256hex");
+
+        when(imageProcessor.process(any(MultipartFile.class))).thenReturn(processed);
+
+        Media pendingMedia = new Media();
+        pendingMedia.setId(mediaId);
+        pendingMedia.setOwner(owner);
+        pendingMedia.setStatus(MediaStatus.PENDING);
+        pendingMedia.setBucket("goplant-private-media");
+        pendingMedia.setObjectKey("users/" + ownerId + "/" + mediaId + ".jpg");
+
+        when(transactionCoordinator.createPendingMedia(eq(ownerId), eq("goplant-private-media"), anyString(), eq(processed)))
+            .thenReturn(pendingMedia);
+
+        // Indefinite failure (timeout/network drop)
+        doThrow(new StorageUnavailableException("Storage connection timeout", true))
+            .when(storageGateway).upload(anyString(), anyString(), any(), anyString());
+
+        assertThrows(StorageUnavailableException.class, () -> mediaService.uploadMedia(ownerId, file));
+
+        // Compensation delete attempted, but PENDING record is RETAINED for reconciliation
+        verify(storageGateway).delete(eq("goplant-private-media"), anyString());
+        verify(transactionCoordinator, never()).deletePendingMedia(any());
     }
 
     @Test
@@ -169,7 +200,7 @@ class MediaServiceTest {
         when(transactionCoordinator.createPendingMedia(eq(ownerId), eq("goplant-private-media"), anyString(), eq(processed)))
             .thenReturn(pendingMedia);
 
-        doThrow(new StorageUnavailableException("Upload timeout"))
+        doThrow(new StorageUnavailableException("Upload timeout", true))
             .when(storageGateway).upload(anyString(), anyString(), any(), anyString());
         doThrow(new RuntimeException("Storage compensation delete failed"))
             .when(storageGateway).delete(anyString(), anyString());
@@ -181,8 +212,8 @@ class MediaServiceTest {
     }
 
     @Test
-    @DisplayName("uploadMedia triggers compensation delete if DB markReady fails after storage upload")
-    void uploadMedia_DbCommitReadyFailure_TriggersCompensation() throws Exception {
+    @DisplayName("uploadMedia triggers compensation delete and retains PENDING record if DB markReady fails after storage upload")
+    void uploadMedia_DbCommitReadyFailure_TriggersCompensationAndRetainsPending() throws Exception {
         byte[] imageBytes = new byte[] { 1, 2, 3 };
         MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", imageBytes);
         ProcessedImage processed = new ProcessedImage(imageBytes, "image/jpeg", 100, 100, 3, "sha256hex");
@@ -202,23 +233,17 @@ class MediaServiceTest {
 
         assertThrows(StorageUnavailableException.class, () -> mediaService.uploadMedia(ownerId, file));
 
-        // Compensation delete triggered
+        // Compensation delete triggered and PENDING record retained for reconciliation
         verify(storageGateway).delete(eq("goplant-private-media"), anyString());
-        verify(transactionCoordinator).deletePendingMedia(mediaId);
+        verify(transactionCoordinator, never()).deletePendingMedia(any());
     }
 
     @Test
-    @DisplayName("getReadUrl succeeds for owner and returns signed URL with ISO-8601 expiry")
+    @DisplayName("getReadUrl succeeds for owner and returns signed URL with ISO-8601 expiry via snapshot")
     void getReadUrl_Owner_Success() {
-        Media media = new Media();
-        media.setId(mediaId);
-        media.setOwner(owner);
-        media.setStatus(MediaStatus.READY);
-        media.setBucket("goplant-private-media");
-        media.setObjectKey("users/" + ownerId + "/" + mediaId + ".jpg");
-
-        when(mediaRepository.findById(mediaId)).thenReturn(Optional.of(media));
-        when(storageGateway.createSignedUrl(eq("goplant-private-media"), eq(media.getObjectKey()), anyInt()))
+        when(transactionCoordinator.getReadSnapshot(mediaId, ownerId))
+            .thenReturn(new MediaTransactionCoordinator.MediaReadSnapshot(mediaId, "goplant-private-media", "users/" + ownerId + "/" + mediaId + ".jpg"));
+        when(storageGateway.createSignedUrl(eq("goplant-private-media"), eq("users/" + ownerId + "/" + mediaId + ".jpg"), anyInt()))
             .thenReturn("https://test.supabase.co/storage/v1/object/sign/url?token=abc");
 
         MediaReadUrlResponse response = mediaService.getReadUrl(mediaId, ownerId);
@@ -227,17 +252,14 @@ class MediaServiceTest {
         assertEquals(mediaId, response.getMediaId());
         assertEquals("https://test.supabase.co/storage/v1/object/sign/url?token=abc", response.getReadUrl());
         assertNotNull(response.getExpiresAt());
+        verify(transactionCoordinator).getReadSnapshot(mediaId, ownerId);
     }
 
     @Test
     @DisplayName("getReadUrl throws ForbiddenException when accessed by non-owner")
     void getReadUrl_NonOwner_ThrowsForbidden() {
-        Media media = new Media();
-        media.setId(mediaId);
-        media.setOwner(owner);
-        media.setStatus(MediaStatus.READY);
-
-        when(mediaRepository.findById(mediaId)).thenReturn(Optional.of(media));
+        when(transactionCoordinator.getReadSnapshot(mediaId, otherUserId))
+            .thenThrow(new ForbiddenException("Bạn không có quyền truy cập tệp tin này."));
 
         assertThrows(ForbiddenException.class, () -> mediaService.getReadUrl(mediaId, otherUserId));
         verify(storageGateway, never()).createSignedUrl(any(), any(), anyInt());
@@ -246,15 +268,12 @@ class MediaServiceTest {
     @Test
     @DisplayName("getReadUrl throws ValidationException when media is not READY or ATTACHED")
     void getReadUrl_NotReady_ThrowsValidation() {
-        Media media = new Media();
-        media.setId(mediaId);
-        media.setOwner(owner);
-        media.setStatus(MediaStatus.PENDING);
-
-        when(mediaRepository.findById(mediaId)).thenReturn(Optional.of(media));
+        when(transactionCoordinator.getReadSnapshot(mediaId, ownerId))
+            .thenThrow(new ValidationException("Tệp tin chưa sẵn sàng hoặc đã bị xóa.", "mediaId"));
 
         ValidationException ex = assertThrows(ValidationException.class, () -> mediaService.getReadUrl(mediaId, ownerId));
         assertTrue(ex.getMessage().contains("chưa sẵn sàng"));
+        verify(storageGateway, never()).createSignedUrl(any(), any(), anyInt());
     }
 
     @Test

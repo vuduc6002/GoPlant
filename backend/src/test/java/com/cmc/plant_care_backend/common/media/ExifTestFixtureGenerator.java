@@ -20,10 +20,17 @@ public class ExifTestFixtureGenerator {
     public static byte[] createJpegWithSensitiveExif(int width, int height, int orientation) throws IOException {
         BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = image.createGraphics();
+        int halfW = width / 2;
+        int halfH = height / 2;
+        // 4 distinct quadrants: Top-Left=RED, Top-Right=GREEN, Bottom-Left=BLUE, Bottom-Right=YELLOW
+        g.setColor(Color.RED);
+        g.fillRect(0, 0, halfW, halfH);
+        g.setColor(Color.GREEN);
+        g.fillRect(halfW, 0, width - halfW, halfH);
         g.setColor(Color.BLUE);
-        g.fillRect(0, 0, width, height);
-        g.setColor(Color.WHITE);
-        g.drawString("EXIF Test", 5, height / 2);
+        g.fillRect(0, halfH, halfW, height - halfH);
+        g.setColor(Color.YELLOW);
+        g.fillRect(halfW, halfH, width - halfW, height - halfH);
         g.dispose();
 
         ByteArrayOutputStream rawJpeg = new ByteArrayOutputStream();
@@ -48,7 +55,7 @@ public class ExifTestFixtureGenerator {
         return output.toByteArray();
     }
 
-    private static byte[] buildApp1Payload(int orientation) {
+    public static byte[] buildApp1Payload(int orientation) {
         ByteBuffer buf = ByteBuffer.allocate(1024).order(ByteOrder.LITTLE_ENDIAN);
 
         // Exif header: "Exif\0\0"

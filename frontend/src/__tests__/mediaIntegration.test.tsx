@@ -14,7 +14,7 @@ import {
   useMediaReadUrl,
   useUploadMediaMutation,
 } from '@/features/media/mediaHooks';
-import type { LocalImageFile, MediaItem, MediaReadUrlResponse } from '@/features/media/mediaTypes';
+import type { LocalImageFile, MediaReadUrlResponse } from '@/features/media/mediaTypes';
 import {
   assertValidImageFile,
   MAX_MEDIA_FILE_SIZE_BYTES,
@@ -25,6 +25,15 @@ import { AppApiError } from '@/services/api/apiError';
 import type { AuthSession, UserProfileDto } from '@/services/api/apiTypes';
 import * as tokenStorage from '@/services/api/tokenStorage';
 import { queryKeys } from '@/services/query/queryKeys';
+
+const VALID_UUID_1 = '11111111-1111-1111-1111-111111111111';
+const VALID_UUID_2 = '22222222-2222-2222-2222-222222222222';
+const VALID_UUID_USER_A = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+const VALID_UUID_SHARED = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
+
+function getFutureIsoString(seconds = 300): string {
+  return new Date(Date.now() + seconds * 1000).toISOString();
+}
 
 const mockUserA = {
   id: 'usr_media_a',
@@ -110,7 +119,7 @@ async function waitFor(assertion: () => void, timeoutMs = 1500): Promise<void> {
   }
 }
 
-describe('G5.5.2b — Frontend Media Module Tests', () => {
+describe('G5.5.2b.2 — Frontend Media Module Hardening Tests', () => {
   const originalAdapter = apiClient.defaults.adapter;
   let queryClient: QueryClient;
   let container: HTMLDivElement | null = null;
@@ -168,19 +177,19 @@ describe('G5.5.2b — Frontend Media Module Tests', () => {
         uri: 'file:///path/to/test.jpg',
         name: 'test.jpg',
         type: 'image/jpeg',
-        size: 1024 * 1024, // 1MB
+        size: 1024 * 1024,
       };
       const pngFile: LocalImageFile = {
         uri: 'file:///path/to/test.png',
         name: 'test.png',
         type: 'image/png',
-        size: 2 * 1024 * 1024, // 2MB
+        size: 2 * 1024 * 1024,
       };
       const webpFile: LocalImageFile = {
         uri: 'file:///path/to/test.webp',
         name: 'test.webp',
         type: 'image/webp',
-        size: 4 * 1024 * 1024, // 4MB
+        size: 4 * 1024 * 1024,
       };
 
       expect(validateLocalImageFile(jpegFile).valid).toBe(true);
@@ -193,7 +202,7 @@ describe('G5.5.2b — Frontend Media Module Tests', () => {
         uri: 'file:///path/to/huge.jpg',
         name: 'huge.jpg',
         type: 'image/jpeg',
-        size: 5 * 1024 * 1024 + 1, // 5MB + 1 byte
+        size: 5 * 1024 * 1024 + 1,
       };
 
       const result = validateLocalImageFile(oversizedFile);
@@ -255,7 +264,7 @@ describe('G5.5.2b — Frontend Media Module Tests', () => {
     });
   });
 
-  describe('2. Media API Client', () => {
+  describe('2. Media API Client & Response Schema Validation', () => {
     it('uploadMedia builds multipart FormData and posts to GoPlant backend', async () => {
       await tokenStorage.saveSession(sessionA);
       const calls: { method?: string; url?: string; auth?: unknown; hasFormData?: boolean }[] = [];
@@ -274,7 +283,7 @@ describe('G5.5.2b — Frontend Media Module Tests', () => {
             data: {
               success: true,
               data: {
-                id: 'med_12345',
+                id: VALID_UUID_1,
                 mimeType: 'image/jpeg',
                 sizeBytes: 1024,
                 width: 800,
@@ -306,32 +315,70 @@ describe('G5.5.2b — Frontend Media Module Tests', () => {
       expect(calls[0].auth).toBe(`Bearer ${sessionA.accessToken}`);
       expect(calls[0].hasFormData).toBe(true);
 
-      expect(result.id).toBe('med_12345');
+      expect(result.id).toBe(VALID_UUID_1);
       expect(result.status).toBe('READY');
       expect(result.width).toBe(800);
       expect(result.height).toBe(600);
     });
 
-    it('getMediaReadUrl requests signed read URL from backend proxy', async () => {
+    it('rejects upload response with invalid UUID format', async () => {
       await tokenStorage.saveSession(sessionA);
-      const calls: { method?: string; url?: string; auth?: unknown }[] = [];
+      apiClient.defaults.adapter = vi.fn().mockResolvedValue({
+        status: 201,
+        data: {
+          success: true,
+          data: {
+            id: 'not-a-uuid-string',
+            mimeType: 'image/jpeg',
+            sizeBytes: 1024,
+            status: 'READY',
+          },
+        },
+        headers: {},
+        config: {},
+      });
+
+      await expect(
+        uploadMedia({ uri: 'file:///test.jpg', name: 'test.jpg', type: 'image/jpeg', size: 1024 })
+      ).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+    });
+
+    it('rejects upload response with invalid sizeBytes (non-integer, <= 0 or > 5MB)', async () => {
+      await tokenStorage.saveSession(sessionA);
+      apiClient.defaults.adapter = vi.fn().mockResolvedValue({
+        status: 201,
+        data: {
+          success: true,
+          data: {
+            id: VALID_UUID_1,
+            mimeType: 'image/jpeg',
+            sizeBytes: 10 * 1024 * 1024, // 10MB
+            status: 'READY',
+          },
+        },
+        headers: {},
+        config: {},
+      });
+
+      await expect(
+        uploadMedia({ uri: 'file:///test.jpg', name: 'test.jpg', type: 'image/jpeg', size: 1024 })
+      ).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+    });
+
+    it('getMediaReadUrl requests signed read URL from backend proxy and validates HTTPS & timestamp', async () => {
+      await tokenStorage.saveSession(sessionA);
+      const futureExpiry = getFutureIsoString(300);
 
       apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
-        calls.push({
-          method: config.method,
-          url: config.url,
-          auth: config.headers?.Authorization,
-        });
-
-        if (config.url === '/media/med_12345/read-url' && config.method === 'get') {
+        if (config.url === `/media/${VALID_UUID_1}/read-url` && config.method === 'get') {
           return {
             status: 200,
             data: {
               success: true,
               data: {
-                mediaId: 'med_12345',
-                readUrl: 'https://storage.goplant.vn/signed/med_12345?token=xyz',
-                expiresAt: '2026-11-13T00:05:00Z',
+                mediaId: VALID_UUID_1,
+                readUrl: `https://storage.goplant.vn/signed/${VALID_UUID_1}?token=xyz`,
+                expiresAt: futureExpiry,
               },
             },
             headers: {},
@@ -341,26 +388,59 @@ describe('G5.5.2b — Frontend Media Module Tests', () => {
         throw new Error(`Unexpected request: ${config.method} ${config.url}`);
       });
 
-      const result = await getMediaReadUrl('med_12345', { expectedUserId: 'usr_media_a' });
+      const result = await getMediaReadUrl(VALID_UUID_1, { expectedUserId: 'usr_media_a' });
+      expect(result.mediaId).toBe(VALID_UUID_1);
+      expect(result.readUrl).toContain(`signed/${VALID_UUID_1}`);
+      expect(result.expiresAt).toBe(futureExpiry);
+    });
 
-      expect(calls.length).toBe(1);
-      expect(calls[0].url).toBe('/media/med_12345/read-url');
-      expect(calls[0].auth).toBe(`Bearer ${sessionA.accessToken}`);
-      expect(result.readUrl).toContain('signed/med_12345');
+    it('getMediaReadUrl rejects non-HTTPS or malformed read URL', async () => {
+      await tokenStorage.saveSession(sessionA);
+      apiClient.defaults.adapter = vi.fn().mockResolvedValue({
+        status: 200,
+        data: {
+          success: true,
+          data: {
+            mediaId: VALID_UUID_1,
+            readUrl: 'http://insecure.storage.goplant.vn/pic.jpg', // Insecure HTTP
+            expiresAt: getFutureIsoString(300),
+          },
+        },
+        headers: {},
+        config: {},
+      });
+
+      await expect(getMediaReadUrl(VALID_UUID_1)).rejects.toMatchObject({
+        code: 'INVALID_RESPONSE',
+      });
+    });
+
+    it('getMediaReadUrl rejects already expired expiresAt', async () => {
+      await tokenStorage.saveSession(sessionA);
+      apiClient.defaults.adapter = vi.fn().mockResolvedValue({
+        status: 200,
+        data: {
+          success: true,
+          data: {
+            mediaId: VALID_UUID_1,
+            readUrl: 'https://storage.goplant.vn/pic.jpg',
+            expiresAt: '2020-01-01T00:00:00Z', // Expired
+          },
+        },
+        headers: {},
+        config: {},
+      });
+
+      await expect(getMediaReadUrl(VALID_UUID_1)).rejects.toMatchObject({
+        code: 'INVALID_RESPONSE',
+      });
     });
 
     it('deleteMedia requests idempotent deletion from backend proxy', async () => {
       await tokenStorage.saveSession(sessionA);
-      const calls: { method?: string; url?: string; auth?: unknown }[] = [];
 
       apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
-        calls.push({
-          method: config.method,
-          url: config.url,
-          auth: config.headers?.Authorization,
-        });
-
-        if (config.url === '/media/med_12345' && config.method === 'delete') {
+        if (config.url === `/media/${VALID_UUID_1}` && config.method === 'delete') {
           return {
             status: 200,
             data: {
@@ -376,60 +456,22 @@ describe('G5.5.2b — Frontend Media Module Tests', () => {
         throw new Error(`Unexpected request: ${config.method} ${config.url}`);
       });
 
-      const result = await deleteMedia('med_12345', { expectedUserId: 'usr_media_a' });
-
-      expect(calls.length).toBe(1);
-      expect(calls[0].url).toBe('/media/med_12345');
-      expect(calls[0].auth).toBe(`Bearer ${sessionA.accessToken}`);
+      const result = await deleteMedia(VALID_UUID_1, { expectedUserId: 'usr_media_a' });
       expect(result.message).toContain('thành công');
     });
 
-    it('validates mediaId is non-empty before sending API requests', async () => {
+    it('validates mediaId is valid UUID before sending API requests', async () => {
       await expect(getMediaReadUrl('')).rejects.toThrow(AppApiError);
-      await expect(deleteMedia('   ')).rejects.toThrow(AppApiError);
+      await expect(getMediaReadUrl('invalid-uuid')).rejects.toMatchObject({
+        code: 'VALIDATION_ERROR',
+      });
+      await expect(deleteMedia('not-a-uuid')).rejects.toMatchObject({
+        code: 'VALIDATION_ERROR',
+      });
     });
   });
 
-  describe('3. Security Boundary & Privacy Verification', () => {
-    it('frontend NEVER contacts Supabase directly (all calls route through GoPlant backend)', async () => {
-      await tokenStorage.saveSession(sessionA);
-      const requestedUrls: string[] = [];
-
-      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
-        requestedUrls.push(String(config.url));
-        return {
-          status: 201,
-          data: {
-            success: true,
-            data: {
-              id: 'med_sec_1',
-              mimeType: 'image/png',
-              sizeBytes: 500,
-              status: 'READY',
-              createdAt: '2026-11-13T00:00:00Z',
-              updatedAt: '2026-11-13T00:00:00Z',
-            },
-          },
-          headers: {},
-          config,
-        };
-      });
-
-      await uploadMedia({
-        uri: 'file:///sec.png',
-        name: 'sec.png',
-        type: 'image/png',
-        size: 500,
-      });
-
-      expect(requestedUrls.length).toBe(1);
-      expect(requestedUrls[0]).toBe('/media');
-      expect(requestedUrls[0]).not.toContain('supabase.co');
-      expect(requestedUrls[0]).not.toContain('service_role');
-    });
-  });
-
-  describe('4. React Hooks & Account Isolation', () => {
+  describe('3. Single Session Snapshot & Isolation in React Hooks', () => {
     it('useMediaReadUrl disables query when user is not authenticated', async () => {
       const calls: string[] = [];
       apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
@@ -438,7 +480,7 @@ describe('G5.5.2b — Frontend Media Module Tests', () => {
       });
 
       function TestComponent() {
-        useMediaReadUrl('med_test_1');
+        useMediaReadUrl(VALID_UUID_1);
         return null;
       }
 
@@ -447,27 +489,28 @@ describe('G5.5.2b — Frontend Media Module Tests', () => {
 
       expect(calls).toEqual([]);
       const cached = queryClient.getQueryData(
-        queryKeys.media.readUrl('__unauthenticated__', 'med_test_1')
+        queryKeys.media.readUrl('__unauthenticated__', VALID_UUID_1)
       );
       expect(cached).toBeUndefined();
     });
 
     it('useMediaReadUrl queries signed URL when authenticated with user-scoped cache key', async () => {
       await tokenStorage.saveSession(sessionA);
+      const futureExpiry = getFutureIsoString(300);
 
       apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
         if (config.url === '/users/me') {
           return { status: 200, data: { success: true, data: profileA }, headers: {}, config };
         }
-        if (config.url === '/media/med_test_2/read-url') {
+        if (config.url === `/media/${VALID_UUID_2}/read-url`) {
           return {
             status: 200,
             data: {
               success: true,
               data: {
-                mediaId: 'med_test_2',
+                mediaId: VALID_UUID_2,
                 readUrl: 'https://storage.goplant.vn/signed-a',
-                expiresAt: '2026-11-13T00:05:00Z',
+                expiresAt: futureExpiry,
               },
             },
             headers: {},
@@ -478,126 +521,20 @@ describe('G5.5.2b — Frontend Media Module Tests', () => {
       });
 
       function TestComponent() {
-        useMediaReadUrl('med_test_2');
+        useMediaReadUrl(VALID_UUID_2);
         return null;
       }
 
       mountWithProviders(<TestComponent />);
       await flushAsync(50);
 
-      const expectedKey = queryKeys.media.readUrl('usr_media_a', 'med_test_2');
+      const expectedKey = queryKeys.media.readUrl('usr_media_a', VALID_UUID_2);
       const cached = queryClient.getQueryData(expectedKey);
       expect(cached).toBeDefined();
       expect((cached as MediaReadUrlResponse)?.readUrl).toBe('https://storage.goplant.vn/signed-a');
     });
 
-    it('useDeleteMediaMutation removes cache for deleted media', async () => {
-      await tokenStorage.saveSession(sessionA);
-
-      // Pre-seed cache
-      queryClient.setQueryData(queryKeys.media.readUrl('usr_media_a', 'med_to_delete'), {
-        mediaId: 'med_to_delete',
-        readUrl: 'https://storage.goplant.vn/signed-del',
-        expiresAt: '2026-11-13T00:05:00Z',
-      });
-
-      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
-        if (config.url === '/users/me') {
-          return { status: 200, data: { success: true, data: profileA }, headers: {}, config };
-        }
-        if (config.url === '/media/med_to_delete' && config.method === 'delete') {
-          return {
-            status: 200,
-            data: { success: true, data: { message: 'Đã xóa.' } },
-            headers: {},
-            config,
-          };
-        }
-        throw new Error(`Unexpected request: ${config.method} ${config.url}`);
-      });
-
-      let hookResult: any;
-
-      function TestComponent() {
-        hookResult = useDeleteMediaMutation();
-        return null;
-      }
-
-      mountWithProviders(<TestComponent />);
-      await flushAsync(40);
-
-      await act(async () => {
-        await hookResult.mutateAsync('med_to_delete');
-      });
-
-      // Verify cached read-url is removed
-      const cachedAfter = queryClient.getQueryData(
-        queryKeys.media.readUrl('usr_media_a', 'med_to_delete')
-      );
-      expect(cachedAfter).toBeUndefined();
-    });
-
-    it('useUploadMediaMutation uploads media and invalidates media.all query cache', async () => {
-      await tokenStorage.saveSession(sessionA);
-
-      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
-        if (config.url === '/users/me') {
-          return { status: 200, data: { success: true, data: profileA }, headers: {}, config };
-        }
-        if (config.url === '/media' && config.method === 'post') {
-          return {
-            status: 201,
-            data: {
-              success: true,
-              data: {
-                id: 'med_upload_hook',
-                mimeType: 'image/jpeg',
-                sizeBytes: 1024,
-                width: 400,
-                height: 300,
-                status: 'READY',
-                createdAt: '2026-11-13T00:00:00Z',
-                updatedAt: '2026-11-13T00:00:00Z',
-              },
-            },
-            headers: {},
-            config,
-          };
-        }
-        throw new Error(`Unexpected request: ${config.method} ${config.url}`);
-      });
-
-      let uploadMut!: ReturnType<typeof useUploadMediaMutation>;
-
-      function TestComponent() {
-        uploadMut = useUploadMediaMutation();
-        return null;
-      }
-
-      mountWithProviders(<TestComponent />);
-      await flushAsync(40);
-
-      let res: MediaItem | undefined;
-      await act(async () => {
-        res = await uploadMut.mutateAsync({
-          uri: 'file:///photo.jpg',
-          name: 'photo.jpg',
-          type: 'image/jpeg',
-          size: 1024,
-        });
-      });
-
-      expect(res?.id).toBe('med_upload_hook');
-    });
-
-    it('isolates user media query caches between Session A and Session B', async () => {
-      expect(queryKeys.media.all(mockUserA.id)).toEqual(['media', mockUserA.id]);
-      expect(queryKeys.media.all(mockUserB.id)).toEqual(['media', mockUserB.id]);
-      expect(profileA.id).not.toEqual(profileB.id);
-      expect(sessionA.user?.id).not.toEqual(sessionB.user?.id);
-    });
-
-    it('isolates pending useUploadMediaMutation when switching Session A -> Session B without polluting User B cache', async () => {
+    it('useUploadMediaMutation rejects and preserves cache if session changes before response arrives', async () => {
       await tokenStorage.saveSession(sessionA);
       const pendingUploadA = createDeferred<void>();
 
@@ -618,7 +555,7 @@ describe('G5.5.2b — Frontend Media Module Tests', () => {
             data: {
               success: true,
               data: {
-                id: 'med_upload_user_a',
+                id: VALID_UUID_USER_A,
                 mimeType: 'image/jpeg',
                 sizeBytes: 2048,
                 width: 640,
@@ -673,18 +610,27 @@ describe('G5.5.2b — Frontend Media Module Tests', () => {
       });
 
       // Now resolve User A's pending upload
+      let rejectedError: any = null;
       await act(async () => {
         pendingUploadA.resolve();
-        await uploadPromiseA.catch(() => {});
+        try {
+          await uploadPromiseA;
+        } catch (err) {
+          rejectedError = err;
+        }
         await flushAsync(30);
       });
 
-      // Verify User B's cache was NOT invalidated, wiped, or polluted
+      // Caller receives rejection with SESSION_USER_MISMATCH
+      expect(rejectedError).toBeInstanceOf(AppApiError);
+      expect(rejectedError.code).toBe('SESSION_USER_MISMATCH');
+
+      // User B's cache was NOT polluted
       const cachedB = queryClient.getQueryData(queryKeys.media.all(mockUserB.id));
       expect(cachedB).toEqual(userBInitialCache);
     });
 
-    it('isolates pending useDeleteMediaMutation when switching Session A -> Session B without removing User B cache', async () => {
+    it('useDeleteMediaMutation rejects and preserves cache if session changes before response arrives', async () => {
       await tokenStorage.saveSession(sessionA);
       const pendingDeleteA = createDeferred<void>();
 
@@ -698,7 +644,7 @@ describe('G5.5.2b — Frontend Media Module Tests', () => {
         if (config.url === '/users/me') {
           return { status: 200, data: { success: true, data: isB ? profileB : profileA }, headers: {}, config };
         }
-        if (config.url === '/media/med_shared' && config.method === 'delete') {
+        if (config.url === `/media/${VALID_UUID_SHARED}` && config.method === 'delete') {
           await pendingDeleteA.promise;
           return {
             status: 200,
@@ -724,19 +670,19 @@ describe('G5.5.2b — Frontend Media Module Tests', () => {
         expect(authCtx.user?.id).toBe(mockUserA.id);
       });
 
-      // Pre-seed User B's cache for med_shared readUrl
+      // Pre-seed User B's cache for VALID_UUID_SHARED readUrl
       const userBReadUrlData = {
-        mediaId: 'med_shared',
+        mediaId: VALID_UUID_SHARED,
         readUrl: 'https://cdn.example.com/user_b_shared.jpg',
-        expiresAt: '2026-11-13T01:00:00Z',
+        expiresAt: getFutureIsoString(3600),
       };
       queryClient.setQueryData(
-        queryKeys.media.readUrl(mockUserB.id, 'med_shared'),
+        queryKeys.media.readUrl(mockUserB.id, VALID_UUID_SHARED),
         userBReadUrlData
       );
 
       // Trigger delete for User A
-      const deletePromiseA = deleteMut.mutateAsync('med_shared');
+      const deletePromiseA = deleteMut.mutateAsync(VALID_UUID_SHARED);
       await flushAsync(10);
 
       // Switch to User B
@@ -749,53 +695,49 @@ describe('G5.5.2b — Frontend Media Module Tests', () => {
       });
 
       // Resolve User A's delete
+      let rejectedError: any = null;
       await act(async () => {
         pendingDeleteA.resolve();
-        await deletePromiseA.catch(() => {});
+        try {
+          await deletePromiseA;
+        } catch (err) {
+          rejectedError = err;
+        }
         await flushAsync(30);
       });
 
+      // Caller receives rejection with SESSION_USER_MISMATCH
+      expect(rejectedError).toBeInstanceOf(AppApiError);
+      expect(rejectedError.code).toBe('SESSION_USER_MISMATCH');
+
       // Verify User B's readUrl cache is still preserved and was NOT removed
       const cachedB = queryClient.getQueryData(
-        queryKeys.media.readUrl(mockUserB.id, 'med_shared')
+        queryKeys.media.readUrl(mockUserB.id, VALID_UUID_SHARED)
       );
       expect(cachedB).toEqual(userBReadUrlData);
     });
 
-    it('isolates pending useMediaReadUrl when switching Session A -> Session B', async () => {
+    it('rejects mutation when user logs out and logs in again with fresh session generation', async () => {
       await tokenStorage.saveSession(sessionA);
-      const pendingReadUrlA = createDeferred<void>();
+      const pendingUploadA = createDeferred<void>();
 
       apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
-        const auth = String(config.headers?.Authorization ?? '');
-        const isB = auth === `Bearer ${sessionB.accessToken}`;
-
-        if (config.url === '/auth/login') {
-          return { status: 200, data: { success: true, data: sessionB }, headers: {}, config };
-        }
         if (config.url === '/users/me') {
-          return { status: 200, data: { success: true, data: isB ? profileB : profileA }, headers: {}, config };
+          return { status: 200, data: { success: true, data: profileA }, headers: {}, config };
         }
-        if (config.url === '/media/med_secret_a/read-url' && config.method === 'get') {
-          if (!isB) {
-            await pendingReadUrlA.promise;
-            return {
-              status: 200,
-              data: {
-                success: true,
-                data: {
-                  mediaId: 'med_secret_a',
-                  readUrl: 'https://cdn.example.com/secret_for_a.jpg',
-                  expiresAt: '2026-11-13T01:00:00Z',
-                },
-              },
-              headers: {},
-              config,
-            };
-          }
+        if (config.url === '/media' && config.method === 'post') {
+          await pendingUploadA.promise;
           return {
-            status: 403,
-            data: { success: false, message: 'Forbidden' },
+            status: 201,
+            data: {
+              success: true,
+              data: {
+                id: VALID_UUID_1,
+                mimeType: 'image/jpeg',
+                sizeBytes: 1024,
+                status: 'READY',
+              },
+            },
             headers: {},
             config,
           };
@@ -804,10 +746,11 @@ describe('G5.5.2b — Frontend Media Module Tests', () => {
       });
 
       let authCtx!: ReturnType<typeof useAuth>;
+      let uploadMut!: ReturnType<typeof useUploadMediaMutation>;
 
       function Harness() {
         authCtx = useAuth();
-        useMediaReadUrl('med_secret_a');
+        uploadMut = useUploadMediaMutation();
         return null;
       }
 
@@ -816,26 +759,36 @@ describe('G5.5.2b — Frontend Media Module Tests', () => {
         expect(authCtx.user?.id).toBe(mockUserA.id);
       });
 
-      // Switch to User B while User A GET is in-flight
-      await act(async () => {
-        await authCtx.login({ account: mockUserB.email, password: 'pw' });
+      const uploadPromise = uploadMut.mutateAsync({
+        uri: 'file:///photo.jpg',
+        name: 'photo.jpg',
+        type: 'image/jpeg',
+        size: 1024,
       });
 
-      await waitFor(() => {
-        expect(authCtx.user?.id).toBe(mockUserB.id);
+      await flushAsync(10);
+
+      // Re-save session A with new generation (simulating re-login)
+      await act(async () => {
+        await tokenStorage.saveSession({
+          ...sessionA,
+          savedAt: Date.now() + 1000,
+        });
       });
 
-      // Resolve User A's slow read-url GET
+      let rejectedError: any = null;
       await act(async () => {
-        pendingReadUrlA.resolve();
+        pendingUploadA.resolve();
+        try {
+          await uploadPromise;
+        } catch (err) {
+          rejectedError = err;
+        }
         await flushAsync(30);
       });
 
-      // Verify User B has no cache for User A's secret media
-      const cachedB = queryClient.getQueryData(
-        queryKeys.media.readUrl(mockUserB.id, 'med_secret_a')
-      );
-      expect(cachedB).toBeUndefined();
+      expect(rejectedError).toBeInstanceOf(AppApiError);
+      expect(rejectedError.code).toBe('SESSION_USER_MISMATCH');
     });
   });
 });

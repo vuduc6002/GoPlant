@@ -116,6 +116,55 @@ class ImageMetadataProcessorTest {
         return baos.toByteArray();
     }
 
+    private byte[] createWebpWithExifOrientation(int orientation) throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        byte[] vp8lData = new byte[] {
+            0x2f, 0x00, 0x00, 0x00, 0x10, 0x07, 0x10, 0x11, 0x11, (byte) 0x88, (byte) 0x88, (byte) 0xfe, 0x07
+        };
+        byte[] exifChunkPayload = ExifTestFixtureGenerator.buildApp1Payload(orientation);
+        int exifPadding = (exifChunkPayload.length % 2 != 0) ? 1 : 0;
+        int vp8lPadding = (vp8lData.length % 2 != 0) ? 1 : 0;
+
+        int vp8xChunkLen = 10;
+        int exifChunkLen = 8 + exifChunkPayload.length + exifPadding;
+        int vp8lChunkLen = 8 + vp8lData.length + vp8lPadding;
+        int totalPayload = 4 + (8 + vp8xChunkLen) + exifChunkLen + vp8lChunkLen;
+
+        baos.write('R'); baos.write('I'); baos.write('F'); baos.write('F');
+        baos.write(totalPayload & 0xFF);
+        baos.write((totalPayload >> 8) & 0xFF);
+        baos.write((totalPayload >> 16) & 0xFF);
+        baos.write((totalPayload >> 24) & 0xFF);
+        baos.write('W'); baos.write('E'); baos.write('B'); baos.write('P');
+
+        // VP8X with EXIF bit
+        baos.write('V'); baos.write('P'); baos.write('8'); baos.write('X');
+        baos.write(10); baos.write(0); baos.write(0); baos.write(0);
+        baos.write(0x08); baos.write(0); baos.write(0); baos.write(0);
+        baos.write(0); baos.write(0); baos.write(0);
+        baos.write(0); baos.write(0); baos.write(0);
+
+        // EXIF chunk
+        baos.write('E'); baos.write('X'); baos.write('I'); baos.write('F');
+        baos.write(exifChunkPayload.length & 0xFF);
+        baos.write((exifChunkPayload.length >> 8) & 0xFF);
+        baos.write((exifChunkPayload.length >> 16) & 0xFF);
+        baos.write((exifChunkPayload.length >> 24) & 0xFF);
+        baos.write(exifChunkPayload);
+        if (exifPadding > 0) baos.write(0);
+
+        // VP8L chunk
+        baos.write('V'); baos.write('P'); baos.write('8'); baos.write('L');
+        baos.write(vp8lData.length & 0xFF);
+        baos.write((vp8lData.length >> 8) & 0xFF);
+        baos.write((vp8lData.length >> 16) & 0xFF);
+        baos.write((vp8lData.length >> 24) & 0xFF);
+        baos.write(vp8lData);
+        if (vp8lPadding > 0) baos.write(0);
+
+        return baos.toByteArray();
+    }
+
     @Test
     @DisplayName("Genuine JPEG with EXIF: parser confirms input has GPS, Make, Model, DateTime; processor strips all sensitive metadata")
     void processJpeg_WithGenuineExif_VerifiesInputAndStripsOutput() throws Exception {
@@ -195,6 +244,83 @@ class ImageMetadataProcessorTest {
         assertNotNull(outImage);
         assertEquals(result.getWidth(), outImage.getWidth());
         assertEquals(result.getHeight(), outImage.getHeight());
+
+        // Verify pixel mapping: sample corner colors to prove actual physical rotation
+        assertCornerPixelsUpright(outImage, orientation);
+    }
+
+    private void assertCornerPixelsUpright(BufferedImage img, int orientation) {
+        int w = img.getWidth();
+        int h = img.getHeight();
+
+        CornerColor tl = identifyColor(img.getRGB(5, 5));
+        CornerColor tr = identifyColor(img.getRGB(w - 6, 5));
+        CornerColor bl = identifyColor(img.getRGB(5, h - 6));
+        CornerColor br = identifyColor(img.getRGB(w - 6, h - 6));
+
+        switch (orientation) {
+            case 1:
+                assertEquals(CornerColor.RED, tl, "Orientation 1 TL must be RED");
+                assertEquals(CornerColor.GREEN, tr, "Orientation 1 TR must be GREEN");
+                assertEquals(CornerColor.BLUE, bl, "Orientation 1 BL must be BLUE");
+                assertEquals(CornerColor.YELLOW, br, "Orientation 1 BR must be YELLOW");
+                break;
+            case 2: // Flip X
+                assertEquals(CornerColor.GREEN, tl, "Orientation 2 TL must be GREEN");
+                assertEquals(CornerColor.RED, tr, "Orientation 2 TR must be RED");
+                assertEquals(CornerColor.YELLOW, bl, "Orientation 2 BL must be YELLOW");
+                assertEquals(CornerColor.BLUE, br, "Orientation 2 BR must be BLUE");
+                break;
+            case 3: // 180 deg
+                assertEquals(CornerColor.YELLOW, tl, "Orientation 3 TL must be YELLOW");
+                assertEquals(CornerColor.BLUE, tr, "Orientation 3 TR must be BLUE");
+                assertEquals(CornerColor.GREEN, bl, "Orientation 3 BL must be GREEN");
+                assertEquals(CornerColor.RED, br, "Orientation 3 BR must be RED");
+                break;
+            case 4: // Flip Y
+                assertEquals(CornerColor.BLUE, tl, "Orientation 4 TL must be BLUE");
+                assertEquals(CornerColor.YELLOW, tr, "Orientation 4 TR must be YELLOW");
+                assertEquals(CornerColor.RED, bl, "Orientation 4 BL must be RED");
+                assertEquals(CornerColor.GREEN, br, "Orientation 4 BR must be GREEN");
+                break;
+            case 5: // -90 deg and Flip X
+                assertEquals(CornerColor.RED, tl, "Orientation 5 TL must be RED");
+                assertEquals(CornerColor.BLUE, tr, "Orientation 5 TR must be BLUE");
+                assertEquals(CornerColor.GREEN, bl, "Orientation 5 BL must be GREEN");
+                assertEquals(CornerColor.YELLOW, br, "Orientation 5 BR must be YELLOW");
+                break;
+            case 6: // 90 deg CW
+                assertEquals(CornerColor.BLUE, tl, "Orientation 6 TL must be BLUE");
+                assertEquals(CornerColor.RED, tr, "Orientation 6 TR must be RED");
+                assertEquals(CornerColor.YELLOW, bl, "Orientation 6 BL must be YELLOW");
+                assertEquals(CornerColor.GREEN, br, "Orientation 6 BR must be GREEN");
+                break;
+            case 7: // 90 deg and Flip
+                assertEquals(CornerColor.YELLOW, tl, "Orientation 7 TL must be YELLOW");
+                assertEquals(CornerColor.GREEN, tr, "Orientation 7 TR must be GREEN");
+                assertEquals(CornerColor.BLUE, bl, "Orientation 7 BL must be BLUE");
+                assertEquals(CornerColor.RED, br, "Orientation 7 BR must be RED");
+                break;
+            case 8: // 270 deg CW
+                assertEquals(CornerColor.GREEN, tl, "Orientation 8 TL must be GREEN");
+                assertEquals(CornerColor.YELLOW, tr, "Orientation 8 TR must be YELLOW");
+                assertEquals(CornerColor.RED, bl, "Orientation 8 BL must be RED");
+                assertEquals(CornerColor.BLUE, br, "Orientation 8 BR must be BLUE");
+                break;
+        }
+    }
+
+    private enum CornerColor { RED, GREEN, BLUE, YELLOW }
+
+    private CornerColor identifyColor(int rgb) {
+        int r = (rgb >> 16) & 0xFF;
+        int g = (rgb >> 8) & 0xFF;
+        int b = rgb & 0xFF;
+        if (r > 150 && g > 150 && b < 100) return CornerColor.YELLOW;
+        if (r > 150 && g < 100 && b < 100) return CornerColor.RED;
+        if (g > 150 && r < 100 && b < 100) return CornerColor.GREEN;
+        if (b > 150 && r < 100 && g < 100) return CornerColor.BLUE;
+        throw new IllegalStateException("Unknown color: r=" + r + ", g=" + g + ", b=" + b);
     }
 
     @Test
@@ -366,5 +492,130 @@ class ImageMetadataProcessorTest {
             0x01, 0x02
         };
         assertThrows(ValidationException.class, () -> processor.process(noPayload, "image/webp"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = { 2, 3, 4, 5, 6, 7, 8 })
+    @DisplayName("WebP images with EXIF orientation > 1 are rejected fail-closed")
+    void rejectWebp_WithOrientationGreaterThan1(int orientation) throws Exception {
+        byte[] input = createWebpWithExifOrientation(orientation);
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> processor.process(input, "image/webp"));
+        assertTrue(ex.getMessage().contains("xoay hướng"));
+    }
+
+    @Test
+    @DisplayName("Reject WebP with VP8X chunk shorter than 10 bytes")
+    void rejectWebp_Vp8xChunkTooShort() {
+        byte[] malformed = new byte[] {
+            'R', 'I', 'F', 'F',
+            0x14, 0x00, 0x00, 0x00,
+            'W', 'E', 'B', 'P',
+            'V', 'P', '8', 'X',
+            0x04, 0x00, 0x00, 0x00, // length 4 instead of >= 10
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00
+        };
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.stripWebPMetadata(malformed));
+        assertTrue(ex.getMessage().contains("VP8X quá ngắn") || ex.getMessage().contains("không khớp"));
+    }
+
+    @Test
+    @DisplayName("Reject WebP with VP8L chunk shorter than 5 bytes")
+    void rejectWebp_Vp8lPayloadTooShort() {
+        byte[] malformed = new byte[] {
+            'R', 'I', 'F', 'F',
+            0x14, 0x00, 0x00, 0x00,
+            'W', 'E', 'B', 'P',
+            'V', 'P', '8', 'L',
+            0x04, 0x00, 0x00, 0x00, // length 4 instead of >= 5
+            0x2f, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00
+        };
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.stripWebPMetadata(malformed));
+        assertTrue(ex.getMessage().contains("VP8L quá ngắn") || ex.getMessage().contains("không khớp"));
+    }
+
+    @Test
+    @DisplayName("Reject WebP where chunk size exceeds RIFF boundary")
+    void rejectWebp_ChunkSizeExceedsRiffBoundary() {
+        byte[] malformed = new byte[] {
+            'R', 'I', 'F', 'F',
+            0x14, 0x00, 0x00, 0x00,
+            'W', 'E', 'B', 'P',
+            'V', 'P', '8', 'L',
+            0x20, 0x00, 0x00, 0x00, // chunk size 32 exceeds remaining 12 bytes
+            0x2f, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00
+        };
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.stripWebPMetadata(malformed));
+        assertTrue(ex.getMessage().contains("vượt quá giới hạn") || ex.getMessage().contains("không khớp"));
+    }
+
+    @Test
+    @DisplayName("Reject WebP where declared RIFF size does not match actual length")
+    void rejectWebp_RiffDeclaredSizeMismatch() {
+        byte[] valid = createMinimalValidWebp();
+        // Modify declared size to be smaller
+        byte[] modified = valid.clone();
+        modified[4] = 0x04; // small declared size
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.stripWebPMetadata(modified));
+        assertTrue(ex.getMessage().contains("không khớp"));
+    }
+
+    @Test
+    @DisplayName("Reject WebP with trailing invalid bytes after declared RIFF size")
+    void rejectWebp_TrailingBytesAfterRiff() {
+        byte[] valid = createMinimalValidWebp();
+        byte[] withTrailing = new byte[valid.length + 10];
+        System.arraycopy(valid, 0, withTrailing, 0, valid.length);
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.stripWebPMetadata(withTrailing));
+        assertTrue(ex.getMessage().contains("không khớp"));
+    }
+
+    @Test
+    @DisplayName("Reject WebP with multiple conflicting image chunks (e.g. VP8 + VP8L)")
+    void rejectWebp_ConflictingMultipleImageChunks() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        byte[] vp8lData = new byte[] {
+            0x2f, 0x00, 0x00, 0x00, 0x10, 0x07, 0x10, 0x11, 0x11, (byte) 0x88, (byte) 0x88, (byte) 0xfe, 0x07
+        };
+        int vp8lLen = 8 + vp8lData.length + 1;
+        int totalPayload = 4 + (vp8lLen * 2);
+
+        baos.write('R'); baos.write('I'); baos.write('F'); baos.write('F');
+        baos.write(totalPayload & 0xFF);
+        baos.write((totalPayload >> 8) & 0xFF);
+        baos.write((totalPayload >> 16) & 0xFF);
+        baos.write((totalPayload >> 24) & 0xFF);
+        baos.write('W'); baos.write('E'); baos.write('B'); baos.write('P');
+
+        // First VP8L chunk
+        baos.write('V'); baos.write('P'); baos.write('8'); baos.write('L');
+        baos.write(vp8lData.length & 0xFF);
+        baos.write((vp8lData.length >> 8) & 0xFF);
+        baos.write((vp8lData.length >> 16) & 0xFF);
+        baos.write((vp8lData.length >> 24) & 0xFF);
+        baos.write(vp8lData);
+        baos.write(0);
+
+        // Second VP8L chunk (conflicting!)
+        baos.write('V'); baos.write('P'); baos.write('8'); baos.write('L');
+        baos.write(vp8lData.length & 0xFF);
+        baos.write((vp8lData.length >> 8) & 0xFF);
+        baos.write((vp8lData.length >> 16) & 0xFF);
+        baos.write((vp8lData.length >> 24) & 0xFF);
+        baos.write(vp8lData);
+        baos.write(0);
+
+        byte[] conflicting = baos.toByteArray();
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.stripWebPMetadata(conflicting));
+        assertTrue(ex.getMessage().contains("nhiều chunk hình ảnh mâu thuẫn"));
     }
 }

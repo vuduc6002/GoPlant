@@ -24,4 +24,7 @@ public interface MediaRepository extends JpaRepository<Media, UUID> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT m FROM Media m WHERE m.id = :id")
     Optional<Media> findByIdForUpdate(@Param("id") UUID id);
+
+    @Query("SELECT m FROM Media m WHERE (m.status = com.cmc.plant_care_backend.model.enums.MediaStatus.PENDING OR m.status = com.cmc.plant_care_backend.model.enums.MediaStatus.DELETING) AND m.updatedAt < :cutoff")
+    List<Media> findStuckMediaForReconciliation(@Param("cutoff") java.time.OffsetDateTime cutoff);
 }
