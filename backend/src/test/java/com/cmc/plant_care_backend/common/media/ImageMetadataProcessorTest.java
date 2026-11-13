@@ -985,4 +985,200 @@ class ImageMetadataProcessorTest {
             () -> ImageMetadataProcessor.parseTiffOrientation(badValue, 0, badValue.length));
         assertTrue(ex.getMessage().contains("không hợp lệ"));
     }
+
+    // =========================================================================
+    // MANDATORY FIX C: WEBP METADATA VERIFIER FAIL-CLOSED TESTS
+    // =========================================================================
+
+    private byte[] buildWebpContainer(byte[] chunksPayload) {
+        int riffSize = 4 + chunksPayload.length;
+        byte[] webp = new byte[8 + riffSize];
+        webp[0] = 'R'; webp[1] = 'I'; webp[2] = 'F'; webp[3] = 'F';
+        webp[4] = (byte) (riffSize & 0xFF);
+        webp[5] = (byte) ((riffSize >> 8) & 0xFF);
+        webp[6] = (byte) ((riffSize >> 16) & 0xFF);
+        webp[7] = (byte) ((riffSize >> 24) & 0xFF);
+        webp[8] = 'W'; webp[9] = 'E'; webp[10] = 'B'; webp[11] = 'P';
+        System.arraycopy(chunksPayload, 0, webp, 12, chunksPayload.length);
+        return webp;
+    }
+
+    @Test
+    @DisplayName("FIX C: Clean valid WebP passes verifyNoSensitiveWebPMetadata")
+    void webpVerifier_CleanWebp_Passes() {
+        byte[] vp8Chunk = new byte[] {
+            'V', 'P', '8', ' ',
+            0x04, 0x00, 0x00, 0x00, // 4 bytes payload
+            0x01, 0x02, 0x03, 0x04
+        };
+        byte[] validWebp = buildWebpContainer(vp8Chunk);
+        assertDoesNotThrow(() -> ImageMetadataProcessor.verifyNoSensitiveWebPMetadata(validWebp));
+    }
+
+    @Test
+    @DisplayName("FIX C: WebP with declared RIFF size smaller than data (trailing bytes) is rejected")
+    void webpVerifier_RiffSizeLessThanData_Rejected() {
+        byte[] vp8Chunk = new byte[] {
+            'V', 'P', '8', ' ',
+            0x04, 0x00, 0x00, 0x00,
+            0x01, 0x02, 0x03, 0x04
+        };
+        byte[] validWebp = buildWebpContainer(vp8Chunk);
+        // Append 4 trailing bytes outside declared RIFF size
+        byte[] modified = new byte[validWebp.length + 4];
+        System.arraycopy(validWebp, 0, modified, 0, validWebp.length);
+        modified[validWebp.length] = 'T';
+        modified[validWebp.length + 1] = 'E';
+        modified[validWebp.length + 2] = 'S';
+        modified[validWebp.length + 3] = 'T';
+
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.verifyNoSensitiveWebPMetadata(modified));
+        assertTrue(ex.getMessage().contains("không khớp"));
+    }
+
+    @Test
+    @DisplayName("FIX C: WebP with declared RIFF size larger than data is rejected")
+    void webpVerifier_RiffSizeGreaterThanData_Rejected() {
+        byte[] vp8Chunk = new byte[] {
+            'V', 'P', '8', ' ',
+            0x04, 0x00, 0x00, 0x00,
+            0x01, 0x02, 0x03, 0x04
+        };
+        byte[] webp = buildWebpContainer(vp8Chunk);
+        // Artificially increase declared RIFF size
+        webp[4] = (byte) (webp[4] + 10);
+
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.verifyNoSensitiveWebPMetadata(webp));
+        assertTrue(ex.getMessage().contains("không khớp"));
+    }
+
+    @Test
+    @DisplayName("FIX C: WebP with truncated chunk header is rejected")
+    void webpVerifier_TruncatedChunkHeader_Rejected() {
+        byte[] badChunk = new byte[] {
+            'V', 'P', '8' // only 3 bytes, truncated header
+        };
+        byte[] webp = buildWebpContainer(badChunk);
+
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.verifyNoSensitiveWebPMetadata(webp));
+        assertTrue(ex.getMessage().contains("cắt cụt"));
+    }
+
+    @Test
+    @DisplayName("FIX C: WebP with chunk size exceeding container boundary is rejected")
+    void webpVerifier_ChunkSizeExceedsBoundary_Rejected() {
+        byte[] badChunk = new byte[] {
+            'V', 'P', '8', ' ',
+            0x50, 0x00, 0x00, 0x00, // 80 bytes declared, but only 4 provided
+            0x01, 0x02, 0x03, 0x04
+        };
+        // Build container with declared RIFF matching actual byte length
+        int riffSize = 4 + badChunk.length;
+        byte[] webp = new byte[8 + riffSize];
+        webp[0] = 'R'; webp[1] = 'I'; webp[2] = 'F'; webp[3] = 'F';
+        webp[4] = (byte) (riffSize & 0xFF);
+        webp[8] = 'W'; webp[9] = 'E'; webp[10] = 'B'; webp[11] = 'P';
+        System.arraycopy(badChunk, 0, webp, 12, badChunk.length);
+
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.verifyNoSensitiveWebPMetadata(webp));
+        assertTrue(ex.getMessage().contains("vượt quá"));
+    }
+
+    @Test
+    @DisplayName("FIX C: WebP with odd chunk size missing padding byte is rejected")
+    void webpVerifier_OddChunkMissingPadding_Rejected() {
+        byte[] oddChunkWithoutPad = new byte[] {
+            'V', 'P', '8', ' ',
+            0x03, 0x00, 0x00, 0x00, // 3 bytes payload (odd)
+            0x01, 0x02, 0x03         // no padding byte
+        };
+        byte[] webp = buildWebpContainer(oddChunkWithoutPad);
+
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.verifyNoSensitiveWebPMetadata(webp));
+        assertTrue(ex.getMessage().contains("vượt quá"));
+    }
+
+    @Test
+    @DisplayName("FIX C: WebP with odd chunk size with valid padding byte passes")
+    void webpVerifier_OddChunkWithPadding_Passes() {
+        byte[] oddChunkWithPad = new byte[] {
+            'V', 'P', '8', ' ',
+            0x03, 0x00, 0x00, 0x00, // 3 bytes payload (odd)
+            0x01, 0x02, 0x03,
+            0x00                     // 1 byte padding
+        };
+        byte[] webp = buildWebpContainer(oddChunkWithPad);
+        assertDoesNotThrow(() -> ImageMetadataProcessor.verifyNoSensitiveWebPMetadata(webp));
+    }
+
+    @Test
+    @DisplayName("FIX C: WebP containing EXIF chunk is rejected")
+    void webpVerifier_ExifChunk_Rejected() {
+        byte[] exifChunk = new byte[] {
+            'E', 'X', 'I', 'F',
+            0x04, 0x00, 0x00, 0x00,
+            0x01, 0x02, 0x03, 0x04
+        };
+        byte[] webp = buildWebpContainer(exifChunk);
+
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.verifyNoSensitiveWebPMetadata(webp));
+        assertTrue(ex.getMessage().contains("EXIF"));
+    }
+
+    @Test
+    @DisplayName("FIX C: WebP containing XMP chunk is rejected")
+    void webpVerifier_XmpChunk_Rejected() {
+        byte[] xmpChunk = new byte[] {
+            'X', 'M', 'P', ' ',
+            0x04, 0x00, 0x00, 0x00,
+            0x01, 0x02, 0x03, 0x04
+        };
+        byte[] webp = buildWebpContainer(xmpChunk);
+
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.verifyNoSensitiveWebPMetadata(webp));
+        assertTrue(ex.getMessage().contains("XMP"));
+    }
+
+    @Test
+    @DisplayName("FIX C: WebP with VP8X EXIF flag bit set is rejected")
+    void webpVerifier_Vp8xExifFlagSet_Rejected() {
+        byte[] vp8xChunk = new byte[] {
+            'V', 'P', '8', 'X',
+            0x0A, 0x00, 0x00, 0x00, // 10 bytes payload
+            0x08,                   // Flags: bit 3 = EXIF flag
+            0x00, 0x00, 0x00,
+            0x63, 0x00, 0x00,       // Canvas width: 100
+            0x63, 0x00, 0x00        // Canvas height: 100
+        };
+        byte[] webp = buildWebpContainer(vp8xChunk);
+
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.verifyNoSensitiveWebPMetadata(webp));
+        assertTrue(ex.getMessage().contains("Cờ EXIF"));
+    }
+
+    @Test
+    @DisplayName("FIX C: WebP with VP8X XMP flag bit set is rejected")
+    void webpVerifier_Vp8xXmpFlagSet_Rejected() {
+        byte[] vp8xChunk = new byte[] {
+            'V', 'P', '8', 'X',
+            0x0A, 0x00, 0x00, 0x00,
+            0x04,                   // Flags: bit 2 = XMP flag
+            0x00, 0x00, 0x00,
+            0x63, 0x00, 0x00,
+            0x63, 0x00, 0x00
+        };
+        byte[] webp = buildWebpContainer(vp8xChunk);
+
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.verifyNoSensitiveWebPMetadata(webp));
+        assertTrue(ex.getMessage().contains("Cờ XMP"));
+    }
 }

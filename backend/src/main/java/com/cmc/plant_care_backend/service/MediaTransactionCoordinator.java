@@ -35,19 +35,11 @@ public class MediaTransactionCoordinator {
         public static DeleteDecision ofProceed(String bucket, String objectKey, String deleteToken) {
             return new DeleteDecision(false, bucket, objectKey, deleteToken);
         }
-
-        public static DeleteDecision ofProceed(String bucket, String objectKey) {
-            return new DeleteDecision(false, bucket, objectKey, null);
-        }
     }
 
     public record MediaReadSnapshot(UUID mediaId, String bucket, String objectKey) {}
 
-    public record ReconciliationCandidate(UUID mediaId, String bucket, String objectKey, MediaStatus status, String leaseToken) {
-        public ReconciliationCandidate(UUID mediaId, String bucket, String objectKey, MediaStatus status) {
-            this(mediaId, bucket, objectKey, status, null);
-        }
-    }
+    public record ReconciliationCandidate(UUID mediaId, String bucket, String objectKey, MediaStatus status, String leaseToken) {}
 
     private final MediaRepository mediaRepository;
     private final UserRepository userRepository;
@@ -175,17 +167,6 @@ public class MediaTransactionCoordinator {
         media.setNextRetryAt(null);
         media.setErrorDetail(null);
         mediaRepository.saveAndFlush(media);
-    }
-
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void completeDelete(UUID mediaId) {
-        Media media = mediaRepository.findByIdForUpdate(mediaId).orElse(null);
-        if (media != null && media.getStatus() == MediaStatus.DELETING) {
-            media.setStatus(MediaStatus.DELETED);
-            media.setLeaseToken(null);
-            media.setLeaseExpiresAt(null);
-            mediaRepository.saveAndFlush(media);
-        }
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -320,19 +301,6 @@ public class MediaTransactionCoordinator {
         media.setNextRetryAt(null);
         media.setErrorDetail(null);
         mediaRepository.saveAndFlush(media);
-    }
-
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void completeReconciliation(UUID mediaId) {
-        Media media = mediaRepository.findByIdForUpdate(mediaId).orElse(null);
-        if (media != null && (media.getStatus() == MediaStatus.RECONCILING || media.getStatus() == MediaStatus.DELETING)) {
-            media.setStatus(MediaStatus.DELETED);
-            media.setLeaseToken(null);
-            media.setLeaseExpiresAt(null);
-            media.setNextRetryAt(null);
-            media.setErrorDetail(null);
-            mediaRepository.saveAndFlush(media);
-        }
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)

@@ -453,13 +453,37 @@ public class ImageMetadataProcessor {
         if (webpBytes == null || webpBytes.length < 12) {
             throw new ValidationException("Tệp WebP không đủ độ dài tối thiểu.", "file");
         }
+        if (webpBytes[0] != 'R' || webpBytes[1] != 'I' || webpBytes[2] != 'F' || webpBytes[3] != 'F'
+            || webpBytes[8] != 'W' || webpBytes[9] != 'E' || webpBytes[10] != 'B' || webpBytes[11] != 'P') {
+            throw new ValidationException("Định dạng container WebP không hợp lệ.", "file");
+        }
+
         long declaredRiffSize = readUint32LE(webpBytes, 4);
-        long riffEndOffset = Math.min((long) webpBytes.length, declaredRiffSize + 8L);
+        long expectedTotalLength = declaredRiffSize + 8L;
+        if (declaredRiffSize < 4L || expectedTotalLength != (long) webpBytes.length) {
+            throw new ValidationException("Kích thước khai báo trong container WebP không khớp độ dài dữ liệu tệp (khai báo: "
+                + declaredRiffSize + ", thực tế: " + (webpBytes.length - 8L) + ").", "file");
+        }
+
+        long riffEndOffset = (long) webpBytes.length;
         long offset = 12L;
-        while (offset + 8L <= riffEndOffset) {
+        while (offset < riffEndOffset) {
+            if (offset + 8L > riffEndOffset) {
+                throw new ValidationException("Chunk WebP bị cắt cụt header tại offset " + offset, "file");
+            }
+
             String fourCC = new String(webpBytes, (int) offset, 4, StandardCharsets.US_ASCII);
             long chunkSize = readUint32LE(webpBytes, (int) (offset + 4));
+            if (chunkSize < 0) {
+                throw new ValidationException("Kích thước chunk '" + fourCC + "' không hợp lệ.", "file");
+            }
             long padding = (chunkSize % 2 != 0) ? 1L : 0L;
+            long payloadEnd = offset + 8L + chunkSize;
+            long nextOffset = payloadEnd + padding;
+
+            if (payloadEnd > riffEndOffset || nextOffset > riffEndOffset) {
+                throw new ValidationException("Kích thước chunk '" + fourCC + "' (" + chunkSize + " bytes) vượt quá giới hạn container RIFF.", "file");
+            }
 
             if ("EXIF".equals(fourCC)) {
                 throw new ValidationException("Tệp WebP vẫn còn chứa chunk siêu dữ liệu EXIF sau khi xử lý.", "file");
@@ -467,7 +491,10 @@ public class ImageMetadataProcessor {
             if ("XMP ".equals(fourCC)) {
                 throw new ValidationException("Tệp WebP vẫn còn chứa chunk siêu dữ liệu XMP sau khi xử lý.", "file");
             }
-            if ("VP8X".equals(fourCC) && offset + 9L <= riffEndOffset) {
+            if ("VP8X".equals(fourCC)) {
+                if (chunkSize < 10) {
+                    throw new ValidationException("Chunk VP8X có kích thước không hợp lệ.", "file");
+                }
                 byte flags = webpBytes[(int) (offset + 8)];
                 if ((flags & 0x08) != 0) { // EXIF flag bit
                     throw new ValidationException("Cờ EXIF trong chunk VP8X của WebP chưa được gỡ bỏ.", "file");
@@ -476,7 +503,12 @@ public class ImageMetadataProcessor {
                     throw new ValidationException("Cờ XMP trong chunk VP8X của WebP chưa được gỡ bỏ.", "file");
                 }
             }
-            offset += 8L + chunkSize + padding;
+
+            offset = nextOffset;
+        }
+
+        if (offset != riffEndOffset) {
+            throw new ValidationException("Cấu trúc chunk WebP không kết thúc chính xác tại cuối container RIFF.", "file");
         }
     }
 

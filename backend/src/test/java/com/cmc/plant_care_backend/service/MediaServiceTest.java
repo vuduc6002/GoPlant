@@ -306,7 +306,7 @@ class MediaServiceTest {
 
         assertDoesNotThrow(() -> mediaService.deleteMedia(mediaId, ownerId));
         verify(storageGateway, never()).delete(any(), any());
-        verify(transactionCoordinator, never()).completeDelete(any());
+        verify(transactionCoordinator, never()).completeDelete(any(), any());
     }
 
     @Test

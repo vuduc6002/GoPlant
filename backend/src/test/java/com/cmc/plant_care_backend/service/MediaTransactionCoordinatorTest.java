@@ -272,4 +272,162 @@ class MediaTransactionCoordinatorTest {
         assertEquals(MediaStatus.DELETED, reconciling.getStatus());
         verify(mediaRepository).saveAndFlush(reconciling);
     }
+
+    // =========================================================================
+    // MANDATORY FIX A: STRICT TOKEN OWNERSHIP & STALE CALLBACK REJECTION TESTS
+    // =========================================================================
+
+    @Test
+    @DisplayName("completeDelete rejects null, empty, whitespace, or mismatched tokens without modifying entity")
+    void completeDelete_InvalidTokens_Rejected() {
+        Media media = new Media();
+        media.setId(mediaId);
+        media.setStatus(MediaStatus.DELETING);
+        media.setLeaseToken("valid-token");
+
+        // Null token: early return without DB query
+        coordinator.completeDelete(mediaId, null);
+        verify(mediaRepository, never()).findByIdForUpdate(any());
+
+        // Empty and blank tokens: early return without DB query
+        coordinator.completeDelete(mediaId, "");
+        coordinator.completeDelete(mediaId, "   ");
+        verify(mediaRepository, never()).findByIdForUpdate(any());
+
+        // Mismatched token
+        when(mediaRepository.findByIdForUpdate(mediaId)).thenReturn(Optional.of(media));
+        coordinator.completeDelete(mediaId, "wrong-token");
+        assertEquals(MediaStatus.DELETING, media.getStatus());
+        assertEquals("valid-token", media.getLeaseToken());
+        verify(mediaRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("completeDelete rejects execution when status is not DELETING")
+    void completeDelete_StatusNotDeleting_Rejected() {
+        for (MediaStatus status : new MediaStatus[]{MediaStatus.PENDING, MediaStatus.READY, MediaStatus.ATTACHED, MediaStatus.DELETED, MediaStatus.FAILED}) {
+            Media media = new Media();
+            media.setId(mediaId);
+            media.setStatus(status);
+            media.setLeaseToken("token-123");
+
+            when(mediaRepository.findByIdForUpdate(mediaId)).thenReturn(Optional.of(media));
+            coordinator.completeDelete(mediaId, "token-123");
+
+            assertEquals(status, media.getStatus());
+            verify(mediaRepository, never()).saveAndFlush(media);
+        }
+    }
+
+    @Test
+    @DisplayName("recordDeleteFailure rejects null, blank, mismatched tokens or invalid state")
+    void recordDeleteFailure_InvalidTokensAndState_Rejected() {
+        Media media = new Media();
+        media.setId(mediaId);
+        media.setStatus(MediaStatus.DELETING);
+        media.setLeaseToken("valid-token");
+        media.setErrorDetail(null);
+
+        // Null / blank tokens: early exit
+        coordinator.recordDeleteFailure(mediaId, null, "error");
+        coordinator.recordDeleteFailure(mediaId, "", "error");
+        coordinator.recordDeleteFailure(mediaId, "   ", "error");
+        verify(mediaRepository, never()).findByIdForUpdate(any());
+
+        // Mismatched token
+        when(mediaRepository.findByIdForUpdate(mediaId)).thenReturn(Optional.of(media));
+        coordinator.recordDeleteFailure(mediaId, "wrong-token", "error");
+        assertNull(media.getErrorDetail());
+        assertEquals(MediaStatus.DELETING, media.getStatus());
+        assertEquals("valid-token", media.getLeaseToken());
+        verify(mediaRepository, never()).saveAndFlush(any());
+
+        // Protected / Non-DELETING states
+        for (MediaStatus status : new MediaStatus[]{MediaStatus.PENDING, MediaStatus.READY, MediaStatus.ATTACHED, MediaStatus.DELETED, MediaStatus.FAILED}) {
+            Media m = new Media();
+            m.setId(mediaId);
+            m.setStatus(status);
+            m.setLeaseToken("valid-token");
+
+            when(mediaRepository.findByIdForUpdate(mediaId)).thenReturn(Optional.of(m));
+            coordinator.recordDeleteFailure(mediaId, "valid-token", "error");
+            assertEquals(status, m.getStatus());
+            verify(mediaRepository, never()).saveAndFlush(m);
+        }
+    }
+
+    @Test
+    @DisplayName("completeReconciliationSuccess rejects null, blank, mismatched, stale tokens, and protected states")
+    void completeReconciliationSuccess_StrictValidation() {
+        Media media = new Media();
+        media.setId(mediaId);
+        media.setStatus(MediaStatus.RECONCILING);
+        media.setLeaseToken("worker-b-token");
+
+        // Null / blank tokens
+        coordinator.completeReconciliationSuccess(mediaId, null);
+        coordinator.completeReconciliationSuccess(mediaId, "");
+        coordinator.completeReconciliationSuccess(mediaId, "   ");
+        verify(mediaRepository, never()).findByIdForUpdate(any());
+
+        // Stale token of Worker A after Worker B took over
+        when(mediaRepository.findByIdForUpdate(mediaId)).thenReturn(Optional.of(media));
+        coordinator.completeReconciliationSuccess(mediaId, "worker-a-stale-token");
+        assertEquals(MediaStatus.RECONCILING, media.getStatus());
+        assertEquals("worker-b-token", media.getLeaseToken());
+        verify(mediaRepository, never()).saveAndFlush(any());
+
+        // Protected and final states
+        for (MediaStatus protectedStatus : new MediaStatus[]{MediaStatus.READY, MediaStatus.ATTACHED, MediaStatus.DELETED, MediaStatus.FAILED}) {
+            Media pm = new Media();
+            pm.setId(mediaId);
+            pm.setStatus(protectedStatus);
+            pm.setLeaseToken("matching-token");
+
+            when(mediaRepository.findByIdForUpdate(mediaId)).thenReturn(Optional.of(pm));
+            coordinator.completeReconciliationSuccess(mediaId, "matching-token");
+            assertEquals(protectedStatus, pm.getStatus());
+            verify(mediaRepository, never()).saveAndFlush(pm);
+        }
+    }
+
+    @Test
+    @DisplayName("recordReconciliationFailure rejects null, blank, mismatched, stale tokens, and protected states")
+    void recordReconciliationFailure_StrictValidation() {
+        Media media = new Media();
+        media.setId(mediaId);
+        media.setStatus(MediaStatus.RECONCILING);
+        media.setLeaseToken("worker-b-token");
+        media.setAttemptCount(1);
+
+        // Null / blank tokens
+        coordinator.recordReconciliationFailure(mediaId, null, "error", 5, java.time.Duration.ofSeconds(30));
+        coordinator.recordReconciliationFailure(mediaId, "", "error", 5, java.time.Duration.ofSeconds(30));
+        coordinator.recordReconciliationFailure(mediaId, "   ", "error", 5, java.time.Duration.ofSeconds(30));
+        verify(mediaRepository, never()).findByIdForUpdate(any());
+
+        // Stale token of Worker A after Worker B took over
+        when(mediaRepository.findByIdForUpdate(mediaId)).thenReturn(Optional.of(media));
+        coordinator.recordReconciliationFailure(mediaId, "worker-a-stale-token", "error", 5, java.time.Duration.ofSeconds(30));
+        assertEquals(MediaStatus.RECONCILING, media.getStatus());
+        assertEquals("worker-b-token", media.getLeaseToken());
+        assertEquals(1, media.getAttemptCount());
+        verify(mediaRepository, never()).saveAndFlush(any());
+
+        // Protected and final states (READY, ATTACHED, DELETED, FAILED)
+        for (MediaStatus protectedStatus : new MediaStatus[]{MediaStatus.READY, MediaStatus.ATTACHED, MediaStatus.DELETED, MediaStatus.FAILED}) {
+            Media pm = new Media();
+            pm.setId(mediaId);
+            pm.setStatus(protectedStatus);
+            pm.setLeaseToken("matching-token");
+            pm.setAttemptCount(1);
+
+            when(mediaRepository.findByIdForUpdate(mediaId)).thenReturn(Optional.of(pm));
+            coordinator.recordReconciliationFailure(mediaId, "matching-token", "error", 5, java.time.Duration.ofSeconds(30));
+            assertEquals(protectedStatus, pm.getStatus());
+            assertEquals(1, pm.getAttemptCount());
+            assertNull(pm.getErrorDetail());
+            verify(mediaRepository, never()).saveAndFlush(pm);
+        }
+    }
 }

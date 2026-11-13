@@ -3,13 +3,21 @@ package com.cmc.plant_care_backend.service.storage;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class InMemoryStorageSimulator {
 
+    @FunctionalInterface
+    public interface StorageDeleteHook {
+        void beforeDelete(String bucket, String key);
+    }
+
     private final Map<String, byte[]> storage = new ConcurrentHashMap<>();
     private final Set<String> deferredUploads = ConcurrentHashMap.newKeySet();
+    private final AtomicInteger deleteCallCount = new AtomicInteger(0);
     private volatile boolean failDeletes = false;
     private volatile boolean failUploads = false;
+    private volatile StorageDeleteHook deleteHook = null;
 
     private String buildPath(String bucket, String key) {
         return bucket + "/" + key;
@@ -40,6 +48,10 @@ public class InMemoryStorageSimulator {
     }
 
     public boolean delete(String bucket, String key) {
+        deleteCallCount.incrementAndGet();
+        if (deleteHook != null) {
+            deleteHook.beforeDelete(bucket, key);
+        }
         if (failDeletes) {
             throw new RuntimeException("Simulated storage delete outage (503 Service Unavailable)");
         }
@@ -47,6 +59,14 @@ public class InMemoryStorageSimulator {
         byte[] removed = storage.remove(path);
         // Idempotent: returns true if object existed and was removed, false if 404 (absent)
         return removed != null;
+    }
+
+    public void setDeleteHook(StorageDeleteHook deleteHook) {
+        this.deleteHook = deleteHook;
+    }
+
+    public int getDeleteCallCount() {
+        return deleteCallCount.get();
     }
 
     public void setFailDeletes(boolean failDeletes) {
@@ -60,7 +80,9 @@ public class InMemoryStorageSimulator {
     public void clear() {
         storage.clear();
         deferredUploads.clear();
+        deleteCallCount.set(0);
         failDeletes = false;
         failUploads = false;
+        deleteHook = null;
     }
 }
