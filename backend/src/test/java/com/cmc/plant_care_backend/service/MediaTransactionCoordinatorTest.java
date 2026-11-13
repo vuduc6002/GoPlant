@@ -187,11 +187,12 @@ class MediaTransactionCoordinatorTest {
         Media media = new Media();
         media.setId(mediaId);
         media.setStatus(MediaStatus.DELETING);
+        media.setLeaseToken("test-delete-token");
 
-        when(mediaRepository.findById(mediaId)).thenReturn(Optional.of(media));
+        when(mediaRepository.findByIdForUpdate(mediaId)).thenReturn(Optional.of(media));
         when(mediaRepository.saveAndFlush(any(Media.class))).thenAnswer(i -> i.getArgument(0));
 
-        coordinator.completeDelete(mediaId);
+        coordinator.completeDelete(mediaId, "test-delete-token");
 
         assertEquals(MediaStatus.DELETED, media.getStatus());
         verify(mediaRepository).saveAndFlush(media);
@@ -258,16 +259,17 @@ class MediaTransactionCoordinatorTest {
     @Test
     @DisplayName("completeReconciliation transitions stuck media to DELETED")
     void completeReconciliation_Success() {
-        Media pending = new Media();
-        pending.setId(mediaId);
-        pending.setStatus(MediaStatus.PENDING);
+        Media reconciling = new Media();
+        reconciling.setId(mediaId);
+        reconciling.setStatus(MediaStatus.RECONCILING);
+        reconciling.setLeaseToken("lease-token-123");
 
-        when(mediaRepository.findByIdForUpdate(mediaId)).thenReturn(Optional.of(pending));
+        when(mediaRepository.findByIdForUpdate(mediaId)).thenReturn(Optional.of(reconciling));
         when(mediaRepository.saveAndFlush(any(Media.class))).thenAnswer(i -> i.getArgument(0));
 
-        coordinator.completeReconciliation(mediaId);
+        coordinator.completeReconciliationSuccess(mediaId, "lease-token-123");
 
-        assertEquals(MediaStatus.DELETED, pending.getStatus());
-        verify(mediaRepository).saveAndFlush(pending);
+        assertEquals(MediaStatus.DELETED, reconciling.getStatus());
+        verify(mediaRepository).saveAndFlush(reconciling);
     }
 }

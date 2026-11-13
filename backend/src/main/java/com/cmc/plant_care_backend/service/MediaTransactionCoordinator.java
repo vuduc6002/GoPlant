@@ -27,13 +27,17 @@ public class MediaTransactionCoordinator {
 
     private static final Logger log = LoggerFactory.getLogger(MediaTransactionCoordinator.class);
 
-    public record DeleteDecision(boolean alreadyDeleted, String bucket, String objectKey) {
+    public record DeleteDecision(boolean alreadyDeleted, String bucket, String objectKey, String deleteToken) {
         public static DeleteDecision ofAlreadyDeleted() {
-            return new DeleteDecision(true, null, null);
+            return new DeleteDecision(true, null, null, null);
+        }
+
+        public static DeleteDecision ofProceed(String bucket, String objectKey, String deleteToken) {
+            return new DeleteDecision(false, bucket, objectKey, deleteToken);
         }
 
         public static DeleteDecision ofProceed(String bucket, String objectKey) {
-            return new DeleteDecision(false, bucket, objectKey);
+            return new DeleteDecision(false, bucket, objectKey, null);
         }
     }
 
@@ -123,21 +127,94 @@ public class MediaTransactionCoordinator {
             return DeleteDecision.ofAlreadyDeleted();
         }
 
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        boolean hasActiveLease = media.getLeaseExpiresAt() != null && media.getLeaseExpiresAt().isAfter(now);
+
+        // If another operation (worker reconciliation or concurrent user delete) is actively processing this media,
+        // handle idempotently so we do not spawn duplicate competing storage operations or overwrite active leases.
+        if (hasActiveLease && (media.getStatus() == MediaStatus.RECONCILING || media.getStatus() == MediaStatus.DELETING)) {
+            log.info("Media [{}] is actively undergoing deletion/reconciliation with lease until {}. Treating request idempotently.",
+                mediaId, media.getLeaseExpiresAt());
+            return DeleteDecision.ofAlreadyDeleted();
+        }
+
+        String deleteToken = UUID.randomUUID().toString();
         media.setStatus(MediaStatus.DELETING);
+        media.setLeaseToken(deleteToken);
+        media.setLeaseExpiresAt(now.plusSeconds(60));
+        mediaRepository.saveAndFlush(media);
+        return DeleteDecision.ofProceed(media.getBucket(), media.getObjectKey(), deleteToken);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void completeDelete(UUID mediaId, String deleteToken) {
+        if (deleteToken == null || deleteToken.isBlank()) {
+            log.warn("Cannot complete delete for media [{}] without delete token", mediaId);
+            return;
+        }
+
+        Media media = mediaRepository.findByIdForUpdate(mediaId).orElse(null);
+        if (media == null) {
+            return;
+        }
+
+        if (media.getStatus() != MediaStatus.DELETING) {
+            log.warn("Media [{}] is in status [{}], not DELETING. Aborting completeDelete.", mediaId, media.getStatus());
+            return;
+        }
+
+        if (media.getLeaseToken() == null || !deleteToken.equals(media.getLeaseToken())) {
+            log.warn("Delete token mismatch or lease lost for media [{}]. Expected [{}] but DB has [{}]",
+                mediaId, deleteToken, media.getLeaseToken());
+            return;
+        }
+
+        media.setStatus(MediaStatus.DELETED);
         media.setLeaseToken(null);
         media.setLeaseExpiresAt(null);
+        media.setNextRetryAt(null);
+        media.setErrorDetail(null);
         mediaRepository.saveAndFlush(media);
-        return DeleteDecision.ofProceed(media.getBucket(), media.getObjectKey());
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void completeDelete(UUID mediaId) {
-        mediaRepository.findById(mediaId).ifPresent(media -> {
+        Media media = mediaRepository.findByIdForUpdate(mediaId).orElse(null);
+        if (media != null && media.getStatus() == MediaStatus.DELETING) {
             media.setStatus(MediaStatus.DELETED);
             media.setLeaseToken(null);
             media.setLeaseExpiresAt(null);
             mediaRepository.saveAndFlush(media);
-        });
+        }
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void recordDeleteFailure(UUID mediaId, String deleteToken, String errorMessage) {
+        if (deleteToken == null || deleteToken.isBlank()) {
+            return;
+        }
+
+        Media media = mediaRepository.findByIdForUpdate(mediaId).orElse(null);
+        if (media == null) {
+            return;
+        }
+
+        if (media.getStatus() != MediaStatus.DELETING) {
+            return;
+        }
+
+        if (media.getLeaseToken() == null || !deleteToken.equals(media.getLeaseToken())) {
+            return;
+        }
+
+        String sanitized = SupabaseStorageGateway.sanitizeLogMessageStatic(errorMessage);
+        if (sanitized != null && sanitized.length() > 950) {
+            sanitized = sanitized.substring(0, 950);
+        }
+        media.setErrorDetail(sanitized);
+        media.setLeaseToken(null);
+        media.setLeaseExpiresAt(null);
+        mediaRepository.saveAndFlush(media);
     }
 
     @Transactional(readOnly = true)
@@ -208,19 +285,32 @@ public class MediaTransactionCoordinator {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void completeReconciliationSuccess(UUID mediaId, String leaseToken) {
+        if (leaseToken == null || leaseToken.isBlank()) {
+            log.warn("Cannot complete reconciliation for media [{}] without lease token", mediaId);
+            return;
+        }
+
         Media media = mediaRepository.findByIdForUpdate(mediaId).orElse(null);
         if (media == null) {
             return;
         }
 
-        // Invariant protection: NEVER overwrite READY or ATTACHED
-        if (media.getStatus() == MediaStatus.READY || media.getStatus() == MediaStatus.ATTACHED) {
-            log.warn("Reconciliation attempt on protected media [{}], aborting completion", mediaId);
+        // Invariant protection: NEVER overwrite READY, ATTACHED, DELETED, or FAILED
+        if (media.getStatus() == MediaStatus.READY || media.getStatus() == MediaStatus.ATTACHED
+            || media.getStatus() == MediaStatus.DELETED || media.getStatus() == MediaStatus.FAILED) {
+            log.warn("Reconciliation attempt on protected/final media [{}] with status [{}], aborting completion", mediaId, media.getStatus());
             return;
         }
 
-        if (leaseToken != null && media.getLeaseToken() != null && !leaseToken.equals(media.getLeaseToken())) {
-            log.warn("Lease token mismatch on completing reconciliation for media [{}]", mediaId);
+        // Only allow active cleanup states
+        if (media.getStatus() != MediaStatus.RECONCILING && media.getStatus() != MediaStatus.DELETING) {
+            log.warn("Media [{}] in invalid state [{}] for reconciliation completion", mediaId, media.getStatus());
+            return;
+        }
+
+        if (media.getLeaseToken() == null || !leaseToken.equals(media.getLeaseToken())) {
+            log.warn("Lease token mismatch on completing reconciliation for media [{}] (db: {}, provided: {})",
+                mediaId, media.getLeaseToken(), leaseToken);
             return;
         }
 
@@ -234,17 +324,45 @@ public class MediaTransactionCoordinator {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void completeReconciliation(UUID mediaId) {
-        completeReconciliationSuccess(mediaId, null);
+        Media media = mediaRepository.findByIdForUpdate(mediaId).orElse(null);
+        if (media != null && (media.getStatus() == MediaStatus.RECONCILING || media.getStatus() == MediaStatus.DELETING)) {
+            media.setStatus(MediaStatus.DELETED);
+            media.setLeaseToken(null);
+            media.setLeaseExpiresAt(null);
+            media.setNextRetryAt(null);
+            media.setErrorDetail(null);
+            mediaRepository.saveAndFlush(media);
+        }
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordReconciliationFailure(UUID mediaId, String leaseToken, String errorMessage, int maxAttempts, Duration baseBackoff) {
+        if (leaseToken == null || leaseToken.isBlank()) {
+            log.warn("Cannot record reconciliation failure for media [{}] without lease token", mediaId);
+            return;
+        }
+
         Media media = mediaRepository.findByIdForUpdate(mediaId).orElse(null);
         if (media == null) {
             return;
         }
 
-        if (media.getStatus() == MediaStatus.READY || media.getStatus() == MediaStatus.ATTACHED) {
+        // Invariant protection: NEVER modify READY, ATTACHED, DELETED, or FAILED
+        if (media.getStatus() == MediaStatus.READY || media.getStatus() == MediaStatus.ATTACHED
+            || media.getStatus() == MediaStatus.DELETED || media.getStatus() == MediaStatus.FAILED) {
+            log.warn("Cannot record reconciliation failure on media [{}] with state [{}]", mediaId, media.getStatus());
+            return;
+        }
+
+        // Only allow active cleanup states: RECONCILING or DELETING
+        if (media.getStatus() != MediaStatus.RECONCILING && media.getStatus() != MediaStatus.DELETING) {
+            return;
+        }
+
+        // Token must match exactly
+        if (media.getLeaseToken() == null || !leaseToken.equals(media.getLeaseToken())) {
+            log.warn("Lease token mismatch on recording reconciliation failure for media [{}] (db: {}, provided: {})",
+                mediaId, media.getLeaseToken(), leaseToken);
             return;
         }
 

@@ -78,17 +78,17 @@ public class MediaReconciliationService {
         }
 
         log.info("Found {} stuck media records eligible for reconciliation", stuckList.size());
-        String leaseToken = UUID.randomUUID().toString();
 
         int reconciledCount = 0;
         int retriedCount = 0;
         int errorCount = 0;
 
         for (Media summary : stuckList) {
+            String candidateLeaseToken = UUID.randomUUID().toString();
             try {
-                // Short transaction #1: Atomically claim reconciliation lease
+                // Short transaction #1: Atomically claim reconciliation lease with candidate-unique token
                 MediaTransactionCoordinator.ReconciliationCandidate candidate =
-                    coordinator.beginReconciliation(summary.getId(), leaseToken, leaseDuration);
+                    coordinator.beginReconciliation(summary.getId(), candidateLeaseToken, leaseDuration);
                 if (candidate == null) {
                     continue; // Skip if candidate is protected (READY/ATTACHED/already DELETED) or leased by another worker
                 }
@@ -99,13 +99,13 @@ public class MediaReconciliationService {
                 } catch (Exception storageEx) {
                     log.warn("Storage delete failed for candidate [{}/{}] during reconciliation: {}",
                         candidate.bucket(), candidate.objectKey(), storageGateway.sanitizeLogMessage(storageEx.getMessage()));
-                    coordinator.recordReconciliationFailure(candidate.mediaId(), leaseToken, storageEx.getMessage(), maxAttempts, baseBackoff);
+                    coordinator.recordReconciliationFailure(candidate.mediaId(), candidateLeaseToken, storageEx.getMessage(), maxAttempts, baseBackoff);
                     retriedCount++;
                     continue; // Skip completing, next item
                 }
 
                 // Short transaction #2: Mark DELETED tombstone and clear lease
-                coordinator.completeReconciliationSuccess(candidate.mediaId(), leaseToken);
+                coordinator.completeReconciliationSuccess(candidate.mediaId(), candidateLeaseToken);
                 reconciledCount++;
                 log.info("Successfully reconciled stuck media [{}] (former status: {})", candidate.mediaId(), candidate.status());
             } catch (Exception ex) {

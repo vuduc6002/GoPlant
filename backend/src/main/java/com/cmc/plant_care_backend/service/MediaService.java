@@ -133,13 +133,13 @@ public class MediaService {
             storageGateway.delete(decision.bucket(), decision.objectKey());
         } catch (Exception ex) {
             log.error("Failed to delete object [{}] from storage: {}", decision.objectKey(), ex.getMessage());
-            // DELETING state was already committed in transaction #1 and is NOT rolled back,
-            // allowing subsequent retries.
+            // Record failure details and clear lease so background reconciliation can pick it up
+            transactionCoordinator.recordDeleteFailure(mediaId, decision.deleteToken(), ex.getMessage());
             throw new StorageUnavailableException("Không thể xóa tệp tin khỏi dịch vụ lưu trữ.");
         }
 
         // Step 3: Commit DELETED status in dedicated transaction
-        transactionCoordinator.completeDelete(mediaId);
+        transactionCoordinator.completeDelete(mediaId, decision.deleteToken());
     }
 
     private String resolveExtension(String mimeType) {

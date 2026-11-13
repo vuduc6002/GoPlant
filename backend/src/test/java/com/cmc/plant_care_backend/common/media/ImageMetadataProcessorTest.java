@@ -696,4 +696,293 @@ class ImageMetadataProcessorTest {
             () -> ImageMetadataProcessor.parseAndValidateWebP(malformed));
         assertTrue(ex.getMessage().contains("VP8 quá ngắn"));
     }
+
+    private byte[] buildWebpWithChunks(java.util.List<byte[]> chunks) throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        int totalPayload = 4;
+        for (byte[] c : chunks) {
+            totalPayload += c.length;
+        }
+        baos.write('R'); baos.write('I'); baos.write('F'); baos.write('F');
+        baos.write(totalPayload & 0xFF);
+        baos.write((totalPayload >> 8) & 0xFF);
+        baos.write((totalPayload >> 16) & 0xFF);
+        baos.write((totalPayload >> 24) & 0xFF);
+        baos.write('W'); baos.write('E'); baos.write('B'); baos.write('P');
+        for (byte[] c : chunks) {
+            baos.write(c);
+        }
+        return baos.toByteArray();
+    }
+
+    private byte[] createVp8xChunk(int width, int height) throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        baos.write('V'); baos.write('P'); baos.write('8'); baos.write('X');
+        baos.write(10); baos.write(0); baos.write(0); baos.write(0);
+        baos.write(0); baos.write(0); baos.write(0); baos.write(0); // flags
+        int wMinus1 = width - 1;
+        int hMinus1 = height - 1;
+        baos.write(wMinus1 & 0xFF);
+        baos.write((wMinus1 >> 8) & 0xFF);
+        baos.write((wMinus1 >> 16) & 0xFF);
+        baos.write(hMinus1 & 0xFF);
+        baos.write((hMinus1 >> 8) & 0xFF);
+        baos.write((hMinus1 >> 16) & 0xFF);
+        return baos.toByteArray();
+    }
+
+    private byte[] createVp8lChunk(int width, int height) throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        int wMinus1 = width - 1;
+        int hMinus1 = height - 1;
+        byte b1 = (byte) (wMinus1 & 0xFF);
+        byte b2 = (byte) (((wMinus1 >> 8) & 0x3F) | ((hMinus1 & 0x03) << 6));
+        byte b3 = (byte) ((hMinus1 >> 2) & 0xFF);
+        byte b4 = (byte) ((hMinus1 >> 10) & 0x0F);
+        byte[] payload = new byte[] { 0x2F, b1, b2, b3, b4, 0x00, 0x00 };
+        int padding = (payload.length % 2 != 0) ? 1 : 0;
+
+        baos.write('V'); baos.write('P'); baos.write('8'); baos.write('L');
+        baos.write(payload.length & 0xFF);
+        baos.write((payload.length >> 8) & 0xFF);
+        baos.write((payload.length >> 16) & 0xFF);
+        baos.write((payload.length >> 24) & 0xFF);
+        baos.write(payload);
+        if (padding > 0) baos.write(0);
+        return baos.toByteArray();
+    }
+
+    private byte[] createVp8Chunk(int width, int height) throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        byte[] payload = new byte[] {
+            0x00, 0x00, 0x00,
+            (byte) 0x9D, 0x01, 0x2A,
+            (byte) (width & 0xFF), (byte) ((width >> 8) & 0x3F),
+            (byte) (height & 0xFF), (byte) ((height >> 8) & 0x3F)
+        };
+        int padding = (payload.length % 2 != 0) ? 1 : 0;
+
+        baos.write('V'); baos.write('P'); baos.write('8'); baos.write(' ');
+        baos.write(payload.length & 0xFF);
+        baos.write((payload.length >> 8) & 0xFF);
+        baos.write((payload.length >> 16) & 0xFF);
+        baos.write((payload.length >> 24) & 0xFF);
+        baos.write(payload);
+        if (padding > 0) baos.write(0);
+        return baos.toByteArray();
+    }
+
+    @Test
+    @DisplayName("FIX D: Reject WebP when VP8X canvas is 1x1 but VP8L bitstream frame has larger dimensions")
+    void rejectWebp_Vp8xCanvas1x1_Vp8lBitstreamLarge() throws IOException {
+        byte[] vp8x = createVp8xChunk(1, 1);
+        byte[] vp8l = createVp8lChunk(2000, 2000);
+        byte[] webp = buildWebpWithChunks(java.util.List.of(vp8x, vp8l));
+
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.parseAndValidateWebP(webp));
+        assertTrue(ex.getMessage().contains("không khớp"));
+    }
+
+    @Test
+    @DisplayName("FIX D: Reject WebP when VP8X canvas is 1x1 but VP8 bitstream frame has larger dimensions")
+    void rejectWebp_Vp8xCanvas1x1_Vp8BitstreamLarge() throws IOException {
+        byte[] vp8x = createVp8xChunk(1, 1);
+        byte[] vp8 = createVp8Chunk(2000, 2000);
+        byte[] webp = buildWebpWithChunks(java.util.List.of(vp8x, vp8));
+
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.parseAndValidateWebP(webp));
+        assertTrue(ex.getMessage().contains("không khớp"));
+    }
+
+    @Test
+    @DisplayName("FIX D: Reject WebP when VP8X canvas and bitstream frame dimensions mismatch")
+    void rejectWebp_Vp8xCanvasAndFrameMismatch() throws IOException {
+        byte[] vp8x = createVp8xChunk(100, 100);
+        byte[] vp8l = createVp8lChunk(200, 200);
+        byte[] webp = buildWebpWithChunks(java.util.List.of(vp8x, vp8l));
+
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.parseAndValidateWebP(webp));
+        assertTrue(ex.getMessage().contains("không khớp"));
+    }
+
+    @Test
+    @DisplayName("FIX D: Accept WebP when VP8X canvas and VP8L bitstream dimensions match perfectly")
+    void acceptWebp_Vp8xMatchesVp8l() throws IOException {
+        byte[] vp8x = createVp8xChunk(150, 120);
+        byte[] vp8l = createVp8lChunk(150, 120);
+        byte[] webp = buildWebpWithChunks(java.util.List.of(vp8x, vp8l));
+
+        ImageMetadataProcessor.ParsedWebP parsed = ImageMetadataProcessor.parseAndValidateWebP(webp);
+        assertNotNull(parsed);
+        assertEquals(150, parsed.width());
+        assertEquals(120, parsed.height());
+    }
+
+    @Test
+    @DisplayName("FIX D: Accept valid WebP without VP8X (pure VP8L)")
+    void acceptWebp_WithoutVp8x() throws IOException {
+        byte[] vp8l = createVp8lChunk(250, 180);
+        byte[] webp = buildWebpWithChunks(java.util.List.of(vp8l));
+
+        ImageMetadataProcessor.ParsedWebP parsed = ImageMetadataProcessor.parseAndValidateWebP(webp);
+        assertNotNull(parsed);
+        assertEquals(250, parsed.width());
+        assertEquals(180, parsed.height());
+    }
+
+    @Test
+    @DisplayName("FIX D: WebP exactly at 25MP boundary (5000 x 5000 = 25,000,000 px) is accepted")
+    void acceptWebp_At25MpBoundary() throws IOException {
+        byte[] vp8l = createVp8lChunk(5000, 5000);
+        byte[] webp = buildWebpWithChunks(java.util.List.of(vp8l));
+
+        ImageMetadataProcessor.ParsedWebP parsed = ImageMetadataProcessor.parseAndValidateWebP(webp);
+        assertNotNull(parsed);
+        assertEquals(5000, parsed.width());
+        assertEquals(5000, parsed.height());
+    }
+
+    @Test
+    @DisplayName("FIX D: WebP exceeding 25MP boundary (5001 x 5000 = 25,005,000 px) is rejected before raster decode")
+    void rejectWebp_Exceeds25MpBoundary() throws IOException {
+        byte[] vp8l = createVp8lChunk(5001, 5000);
+        byte[] webp = buildWebpWithChunks(java.util.List.of(vp8l));
+
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.parseAndValidateWebP(webp));
+        assertTrue(ex.getMessage().contains("25MP"));
+    }
+
+    @Test
+    @DisplayName("FIX D: WebP at 10,000 px dimension boundary is accepted")
+    void acceptWebp_At10000PxBoundary() throws IOException {
+        byte[] vp8l = createVp8lChunk(10000, 1);
+        byte[] webp = buildWebpWithChunks(java.util.List.of(vp8l));
+
+        ImageMetadataProcessor.ParsedWebP parsed = ImageMetadataProcessor.parseAndValidateWebP(webp);
+        assertNotNull(parsed);
+        assertEquals(10000, parsed.width());
+        assertEquals(1, parsed.height());
+    }
+
+    @Test
+    @DisplayName("FIX D: WebP exceeding 10,000 px dimension boundary (10,001 px) is rejected before raster decode")
+    void rejectWebp_Exceeds10000PxBoundary() throws IOException {
+        byte[] vp8l = createVp8lChunk(10001, 1);
+        byte[] webp = buildWebpWithChunks(java.util.List.of(vp8l));
+
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.parseAndValidateWebP(webp));
+        assertTrue(ex.getMessage().contains("10000px"));
+    }
+
+    @Test
+    @DisplayName("FIX E: TIFF header shorter than 8 bytes is rejected with ValidationException")
+    void rejectTiff_TruncatedHeader() {
+        byte[] truncated = new byte[] { 'I', 'I', 42, 0 };
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.parseTiffOrientation(truncated, 0, truncated.length));
+        assertTrue(ex.getMessage().contains("cắt cụt"));
+    }
+
+    @Test
+    @DisplayName("FIX E: TIFF with invalid endianness markers is rejected with ValidationException")
+    void rejectTiff_InvalidEndianness() {
+        byte[] invalidEndian = new byte[] { 'X', 'Y', 42, 0, 8, 0, 0, 0 };
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.parseTiffOrientation(invalidEndian, 0, invalidEndian.length));
+        assertTrue(ex.getMessage().contains("endianness"));
+    }
+
+    @Test
+    @DisplayName("FIX E: TIFF with invalid magic number (not 42) is rejected with ValidationException")
+    void rejectTiff_InvalidMagicNumber() {
+        byte[] invalidMagic = new byte[] { 'I', 'I', 99, 0, 8, 0, 0, 0 };
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.parseTiffOrientation(invalidMagic, 0, invalidMagic.length));
+        assertTrue(ex.getMessage().contains("magic number"));
+    }
+
+    @Test
+    @DisplayName("FIX E: TIFF with IFD0 offset out of bounds is rejected with ValidationException")
+    void rejectTiff_IfdOffsetOutOfBounds() {
+        byte[] badOffset = new byte[] { 'I', 'I', 42, 0, 100, 0, 0, 0 }; // offset 100 exceeds length 8
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.parseTiffOrientation(badOffset, 0, badOffset.length));
+        assertTrue(ex.getMessage().contains("offset"));
+    }
+
+    @Test
+    @DisplayName("FIX E: TIFF with abnormal IFD entry count (0 or exceeding length) is rejected with ValidationException")
+    void rejectTiff_AbnormalEntryCount() {
+        // Entry count 0
+        byte[] zeroEntries = new byte[] {
+            'I', 'I', 42, 0, 8, 0, 0, 0, // Header: IFD0 at offset 8
+            0, 0                          // numEntries = 0
+        };
+        ValidationException ex1 = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.parseTiffOrientation(zeroEntries, 0, zeroEntries.length));
+        assertTrue(ex1.getMessage().contains("Số lượng entry"));
+
+        // Entry count 100 (exceeds data)
+        byte[] excessiveEntries = new byte[] {
+            'I', 'I', 42, 0, 8, 0, 0, 0,
+            100, 0
+        };
+        ValidationException ex2 = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.parseTiffOrientation(excessiveEntries, 0, excessiveEntries.length));
+        assertTrue(ex2.getMessage().contains("Số lượng entry"));
+    }
+
+    @Test
+    @DisplayName("FIX E: TIFF orientation tag with wrong type (not SHORT/LONG) is rejected with ValidationException")
+    void rejectTiff_OrientationWrongType() {
+        byte[] wrongType = new byte[] {
+            'I', 'I', 42, 0, 8, 0, 0, 0, // Header
+            1, 0,                         // numEntries = 1
+            0x12, 0x01,                   // Tag 0x0112 (Orientation)
+            2, 0,                         // Type 2 (ASCII) instead of 3 (SHORT)
+            1, 0, 0, 0,                   // Count 1
+            1, 0, 0, 0                    // Value 1
+        };
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.parseTiffOrientation(wrongType, 0, wrongType.length));
+        assertTrue(ex.getMessage().contains("kiểu dữ liệu"));
+    }
+
+    @Test
+    @DisplayName("FIX E: TIFF orientation tag with wrong count (!= 1) is rejected with ValidationException")
+    void rejectTiff_OrientationWrongCount() {
+        byte[] wrongCount = new byte[] {
+            'I', 'I', 42, 0, 8, 0, 0, 0,
+            1, 0,
+            0x12, 0x01,
+            3, 0,                         // Type 3 (SHORT)
+            2, 0, 0, 0,                   // Count 2 instead of 1
+            1, 0, 0, 0
+        };
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.parseTiffOrientation(wrongCount, 0, wrongCount.length));
+        assertTrue(ex.getMessage().contains("count"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = { 0, 9, 10 })
+    @DisplayName("FIX E: TIFF orientation tag with value 0 or outside 1..8 is rejected with ValidationException")
+    void rejectTiff_OrientationValueOutside1To8(int val) {
+        byte[] badValue = new byte[] {
+            'I', 'I', 42, 0, 8, 0, 0, 0,
+            1, 0,
+            0x12, 0x01,
+            3, 0,                         // Type 3 (SHORT)
+            1, 0, 0, 0,                   // Count 1
+            (byte) val, 0, 0, 0           // Value val
+        };
+        ValidationException ex = assertThrows(ValidationException.class,
+            () -> ImageMetadataProcessor.parseTiffOrientation(badValue, 0, badValue.length));
+        assertTrue(ex.getMessage().contains("không hợp lệ"));
+    }
 }

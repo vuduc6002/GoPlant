@@ -313,20 +313,20 @@ class MediaServiceTest {
     @DisplayName("deleteMedia transitions through DELETING checkpoint, calls storage delete, and completes DELETED")
     void deleteMedia_Success() {
         when(transactionCoordinator.beginDelete(mediaId, ownerId))
-            .thenReturn(MediaTransactionCoordinator.DeleteDecision.ofProceed("goplant-private-media", "users/file.jpg"));
+            .thenReturn(MediaTransactionCoordinator.DeleteDecision.ofProceed("goplant-private-media", "users/file.jpg", "token-xyz"));
 
         mediaService.deleteMedia(mediaId, ownerId);
 
         verify(transactionCoordinator).beginDelete(mediaId, ownerId);
         verify(storageGateway).delete("goplant-private-media", "users/file.jpg");
-        verify(transactionCoordinator).completeDelete(mediaId);
+        verify(transactionCoordinator).completeDelete(mediaId, "token-xyz");
     }
 
     @Test
     @DisplayName("deleteMedia preserves DELETING state when storage delete fails")
     void deleteMedia_StorageFailure_PreservesDeletingState() {
         when(transactionCoordinator.beginDelete(mediaId, ownerId))
-            .thenReturn(MediaTransactionCoordinator.DeleteDecision.ofProceed("goplant-private-media", "users/file.jpg"));
+            .thenReturn(MediaTransactionCoordinator.DeleteDecision.ofProceed("goplant-private-media", "users/file.jpg", "token-xyz"));
         doThrow(new StorageUnavailableException("Storage network error"))
             .when(storageGateway).delete("goplant-private-media", "users/file.jpg");
 
@@ -334,6 +334,7 @@ class MediaServiceTest {
 
         verify(transactionCoordinator).beginDelete(mediaId, ownerId);
         verify(storageGateway).delete("goplant-private-media", "users/file.jpg");
-        verify(transactionCoordinator, never()).completeDelete(any());
+        verify(transactionCoordinator).recordDeleteFailure(eq(mediaId), eq("token-xyz"), anyString());
+        verify(transactionCoordinator, never()).completeDelete(any(), any());
     }
 }

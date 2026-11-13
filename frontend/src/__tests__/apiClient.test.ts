@@ -1091,5 +1091,113 @@ describe('apiClient & Authentication Interceptors', () => {
 
       expect(adapterSpy).not.toHaveBeenCalled();
     });
+
+    it('FIX G: cleans multipart headers before early return on public endpoints or skipAuth', async () => {
+      let capturedConfig: any = null;
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        capturedConfig = config;
+        return {
+          status: 200,
+          data: { success: true },
+          headers: {},
+          config,
+        };
+      });
+
+      const fakeFormData = new FormData();
+      fakeFormData.append('avatar', 'image-bytes');
+
+      // Public endpoint
+      await apiClient.post('/auth/login', fakeFormData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+
+      expect(capturedConfig).toBeDefined();
+      const ct1 = typeof capturedConfig.headers.get === 'function'
+        ? capturedConfig.headers.get('Content-Type')
+        : capturedConfig.headers['Content-Type'];
+      expect(ct1).not.toBe('multipart/form-data');
+
+      // skipAuth route
+      await apiClient.post('/health', fakeFormData, {
+        skipAuth: true,
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+
+      const ct2 = typeof capturedConfig.headers.get === 'function'
+        ? capturedConfig.headers.get('Content-Type')
+        : capturedConfig.headers['Content-Type'];
+      expect(ct2).not.toBe('multipart/form-data');
+    });
+
+    it('FIX G: rejects with SESSION_USER_MISMATCH on expectedSessionGeneration mismatch for multipart upload', async () => {
+      const testSession: AuthSession = {
+        accessToken: 'valid-jwt-token',
+        tokenType: 'Bearer',
+        user: { id: 'usr_gen_test', email: 'gen@example.com', fullName: 'Gen User', roles: ['ROLE_USER'] },
+        savedAt: Date.now(),
+      };
+      await tokenStorage.saveSession(testSession);
+      const currentGen = tokenStorage.getSessionGeneration();
+
+      const fakeFormData = new FormData();
+      fakeFormData.append('file', 'data');
+      const adapterSpy = vi.fn();
+      apiClient.defaults.adapter = adapterSpy;
+
+      await expect(
+        apiClient.post('/media', fakeFormData, {
+          expectedUserId: 'usr_gen_test',
+          expectedSessionGeneration: currentGen + 999, // Mismatched generation
+        })
+      ).rejects.toMatchObject({
+        code: 'SESSION_USER_MISMATCH',
+      });
+
+      expect(adapterSpy).not.toHaveBeenCalled();
+    });
+
+    it('FIX G: preserves boundary-bearing Content-Type if adapter serializes boundary parameter', async () => {
+      let adapterReceivedConfig: any = null;
+      apiClient.defaults.adapter = vi.fn().mockImplementation(async (config) => {
+        adapterReceivedConfig = config;
+        // Simulate adapter / browser networking layer adding standard boundary
+        if (config.headers) {
+          if (typeof config.headers.set === 'function') {
+            config.headers.set('Content-Type', 'multipart/form-data; boundary=----WebKitFormBoundarySimulated123');
+          } else {
+            config.headers['Content-Type'] = 'multipart/form-data; boundary=----WebKitFormBoundarySimulated123';
+          }
+        }
+        return {
+          status: 200,
+          data: { success: true },
+          headers: {},
+          config,
+        };
+      });
+
+      const testSession: AuthSession = {
+        accessToken: 'valid-jwt-token-boundary',
+        tokenType: 'Bearer',
+        user: { id: 'usr_boundary', email: 'boundary@example.com', fullName: 'Boundary User', roles: ['ROLE_USER'] },
+        savedAt: Date.now(),
+      };
+      await tokenStorage.saveSession(testSession);
+
+      const fakeFormData = new FormData();
+      fakeFormData.append('file', 'test');
+
+      await apiClient.post('/media', fakeFormData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        expectedUserId: 'usr_boundary',
+      });
+
+      expect(adapterReceivedConfig).toBeDefined();
+      const finalCt = typeof adapterReceivedConfig.headers.get === 'function'
+        ? adapterReceivedConfig.headers.get('Content-Type')
+        : adapterReceivedConfig.headers['Content-Type'];
+      expect(finalCt).toContain('boundary=----WebKitFormBoundarySimulated123');
+    });
   });
 });

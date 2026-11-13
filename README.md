@@ -5,8 +5,8 @@ GoPlant là giải pháp ứng dụng di động hỗ trợ người dùng số 
 Kiến trúc mục tiêu của dự án là **Ứng dụng di động React Native + Expo (Android) kết nối qua RESTful API với Backend Spring Boot và cơ sở dữ liệu Supabase PostgreSQL**.
 
 > **Trạng thái phát triển hiện tại (Giai đoạn 5 — Hoàn thành G5.5.2b.2.1 Final Reconciliation & Pipeline Correction):**
-> - **Frontend (`frontend/`):** Xây dựng trên **React Native (`0.86.3`) + Expo SDK `57.0.33` + Expo Router `~57.0.31` + TypeScript Strict + Axios + TanStack React Query v5 + Expo SecureStore**. Đã hoàn thành Auth & Bảo mật, Species, Gardens, User Plants, Care Schedules, Care Logs, Growth Journals, Monitoring MVP G5.5.1, Camera Metadata CRUD G5.5.2a, và Media Client/Hooks G5.5.2b. Xử lý triệt để multipart FormData header boundary stripping trong interceptor trước early returns, đảm bảo tương thích upload. Bộ kiểm thử tự động đạt **254/254 Vitest tests** (`12` file kiểm thử) cùng `typecheck` và `eslint` đều pass `0 errors, 0 warnings`.
-> - **Backend (`backend/`):** Hoàn thành Backend **Java 21 + Spring Boot `4.1.1`** với đầy đủ **49/49 RESTful API** (40 API Core MVP + 2 API Monitoring G5.5.1 + 4 API Cameras G5.5.2a + 3 API Media G5.5.2b), bảo mật JWT (xác thực `role="service_role"` RFC 7519 qua Nimbus), phân quyền, kiểm soát sở hữu, `MediaUrlValidator` chống SSRF (hỗ trợ chặn toàn diện IP số, rút gọn, hex, octal, HTTPS enforcement), bộ xử lý ảnh `ImageMetadataProcessor` (pure Java, magic bytes, RIFF container bounds validation, WebP decompression protection, stripping EXIF GPS/thiết bị, xoay upright, SHA-256 VARCHAR(64)), gateway Supabase Private Bucket với timeout cấu hình và log sanitization (redact tokens/secrets), điều phối giao dịch độc lập tách biệt Storage HTTP I/O với database transaction, cơ chế đối soát distributed reconciliation an toàn với atomic leases (`MediaReconciliationService` + `SchedulingConfig`), Flyway Migrations `V1__initial_schema.sql`, `V2__media_objects.sql` và `V3__media_reconciliation_leases.sql`. Đạt **296/296 Unit & Integration Tests** (bao gồm 10 race condition tests).
+> - **Frontend (`frontend/`):** Xây dựng trên **React Native (`0.86.3`) + Expo SDK `57.0.33` + Expo Router `~57.0.31` + TypeScript Strict + Axios + TanStack React Query v5 + Expo SecureStore**. Đã hoàn thành Auth & Bảo mật, Species, Gardens, User Plants, Care Schedules, Care Logs, Growth Journals, Monitoring MVP G5.5.1, Camera Metadata CRUD G5.5.2a, và Media Client/Hooks G5.5.2b. Xử lý triệt để multipart FormData header boundary stripping trong interceptor trước early returns, đảm bảo tương thích upload. Bộ kiểm thử tự động đạt **257/257 Vitest tests** (`12` file kiểm thử) cùng `typecheck` và `eslint` đều pass `0 errors, 0 warnings`.
+> - **Backend (`backend/`):** Hoàn thành Backend **Java 21 + Spring Boot `4.1.1`** với đầy đủ **49/49 RESTful API** (40 API Core MVP + 2 API Monitoring G5.5.1 + 4 API Cameras G5.5.2a + 3 API Media G5.5.2b), bảo mật JWT (xác thực `role="service_role"` RFC 7519 qua Nimbus), phân quyền, kiểm soát sở hữu, `MediaUrlValidator` chống SSRF (hỗ trợ chặn toàn diện IP số, rút gọn, hex, octal, HTTPS enforcement), bộ xử lý ảnh `ImageMetadataProcessor` (pure Java, magic bytes, RIFF container bounds validation, WebP bitstream dimension verification trước raster decode, fail-closed TIFF/EXIF validation, stripping EXIF GPS/thiết bị, xoay upright, SHA-256 VARCHAR(64)), gateway Supabase Private Bucket với timeout cấu hình và log sanitization (redact tokens/secrets), điều phối giao dịch độc lập tách biệt Storage HTTP I/O với database transaction, cơ chế đối soát distributed reconciliation an toàn với strict distributed lease fencing (`MediaReconciliationService` + `SchedulingConfig`), Flyway Migrations `V1__initial_schema.sql`, `V2__media_objects.sql` và `V3__media_reconciliation_leases.sql`. Đạt **319/319 Unit & Integration Tests** (bao gồm 10 real concurrent race tests với `InMemoryStorageSimulator`).
 > - **Cơ sở dữ liệu & Đặc tả (`docs/`):** Thiết kế chuẩn hóa 12 bảng (`media_objects` với trường `sha256 VARCHAR(64)`, trạng thái `PENDING`, `READY`, `ATTACHED`, `DELETING`, `DELETED`, `RECONCILING`, `FAILED` cùng các cột `lease_token`, `lease_expires_at`, `attempt_count`, `last_attempt_at`, `next_retry_at`, `error_detail`), hợp đồng REST (`docs/api/api-contract.md` v1.3.0, `openapi.yaml` v1.3.0 — 49 endpoints). `MediaUrlValidator` đã triển khai đầy đủ; Rate Limiting hiện tại là đề xuất kiến trúc (Proposed). Hỗ trợ H2 local in-memory (dev nhanh, tắt Flyway), PostgreSQL + Flyway (`postgres` profile trên CI) và Supabase PostgreSQL (`supabase` profile).
 > - **Hướng dẫn chi tiết:** Xem thêm tại [docs/backend/backend-setup-guide.md](docs/backend/backend-setup-guide.md) và [frontend/README.md](frontend/README.md).
 
@@ -364,7 +364,7 @@ Menu điều khiển của Expo CLI sẽ xuất hiện:
 | `web` | `expo start --web` | Chạy ứng dụng trên nền tảng Web |
 | `typecheck` | `tsc --noEmit` | Kiểm tra tĩnh toàn bộ mã TypeScript theo cấu hình `tsconfig.json` |
 | `lint` | `expo lint` | Chạy bộ kiểm tra quy chuẩn mã nguồn ESLint v9 (`eslint-config-expo`) |
-| `test` | `vitest run` | Chạy toàn bộ bộ kiểm thử tự động Vitest (254 tests / 12 file) |
+| `test` | `vitest run` | Chạy toàn bộ bộ kiểm thử tự động Vitest (257 tests / 12 file) |
 | `reset-project` | `node ./scripts/reset-project.js` | Script dọn dẹp đưa template về trạng thái ban đầu (không dùng khi dev) |
 
 ---
@@ -427,7 +427,7 @@ npm.cmd run typecheck
 # 2. Kiểm tra quy chuẩn mã nguồn ESLint (0 errors, 0 warnings)
 npm.cmd run lint
 
-# 3. Chạy bộ kiểm thử tự động Vitest (254/254 PASS trên 12 file)
+# 3. Chạy bộ kiểm thử tự động Vitest (257/257 PASS trên 12 file)
 npm.cmd test
 
 # 4. Kiểm tra cấu hình Expo
@@ -445,7 +445,7 @@ Từ thư mục `E:\GoPlant\backend`, thực hiện:
 ```powershell
 .\mvnw.cmd clean verify
 ```
-Maven sẽ dọn dẹp, tải các dependency cần thiết, biên dịch Java 21, thực thi toàn bộ **296/296 Unit & Integration Tests** trên 22 file kiểm thử trong `src/test/java/` và tạo gói JAR tại `target/`. Kết quả đạt `BUILD SUCCESS`.
+Maven sẽ dọn dẹp, tải các dependency cần thiết, biên dịch Java 21, thực thi toàn bộ **319/319 Unit & Integration Tests** trên 24 file kiểm thử trong `src/test/java/` và tạo gói JAR tại `target/`. Kết quả đạt `BUILD SUCCESS`.
 
 ---
 

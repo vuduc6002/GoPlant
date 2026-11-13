@@ -33,7 +33,7 @@ public interface MediaRepository extends JpaRepository<Media, UUID> {
         WHERE (
             (m.status = com.cmc.plant_care_backend.model.enums.MediaStatus.PENDING AND m.createdAt <= :cutoff)
             OR (m.status = com.cmc.plant_care_backend.model.enums.MediaStatus.RECONCILING AND (m.leaseExpiresAt IS NULL OR m.leaseExpiresAt <= :now))
-            OR (m.status = com.cmc.plant_care_backend.model.enums.MediaStatus.DELETING AND m.updatedAt <= :cutoff)
+            OR (m.status = com.cmc.plant_care_backend.model.enums.MediaStatus.DELETING AND ((m.leaseExpiresAt IS NULL AND m.updatedAt <= :cutoff) OR (m.leaseExpiresAt IS NOT NULL AND m.leaseExpiresAt <= :now)))
         )
         AND (m.nextRetryAt IS NULL OR m.nextRetryAt <= :now)
         ORDER BY m.createdAt ASC
