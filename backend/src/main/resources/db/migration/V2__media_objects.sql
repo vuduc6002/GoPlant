@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS media_objects (
     object_key VARCHAR(500) NOT NULL,
     mime_type VARCHAR(100) NOT NULL,
     size_bytes BIGINT NOT NULL,
-    sha256 CHAR(64) NOT NULL,
+    sha256 VARCHAR(64) NOT NULL,
     width INTEGER NULL,
     height INTEGER NULL,
     status VARCHAR(20) NOT NULL DEFAULT 'PENDING',

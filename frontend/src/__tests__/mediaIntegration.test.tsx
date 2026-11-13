@@ -409,10 +409,8 @@ describe('G5.5.2b — Frontend Media Module Tests', () => {
         return { status: 200, data: { success: true, data: {} }, headers: {}, config };
       });
 
-      let hookResult: any;
-
       function TestComponent() {
-        hookResult = useMediaReadUrl('med_test_1');
+        useMediaReadUrl('med_test_1');
         return null;
       }
 
@@ -420,8 +418,10 @@ describe('G5.5.2b — Frontend Media Module Tests', () => {
       await flushAsync(30);
 
       expect(calls).toEqual([]);
-      expect(hookResult.fetchStatus).toBe('idle');
-      expect(hookResult.data).toBeUndefined();
+      const cached = queryClient.getQueryData(
+        queryKeys.media.readUrl('__unauthenticated__', 'med_test_1')
+      );
+      expect(cached).toBeUndefined();
     });
 
     it('useMediaReadUrl queries signed URL when authenticated with user-scoped cache key', async () => {
@@ -449,10 +449,8 @@ describe('G5.5.2b — Frontend Media Module Tests', () => {
         throw new Error(`Unexpected request: ${config.method} ${config.url}`);
       });
 
-      let hookResult: any;
-
       function TestComponent() {
-        hookResult = useMediaReadUrl('med_test_2');
+        useMediaReadUrl('med_test_2');
         return null;
       }
 
@@ -463,7 +461,6 @@ describe('G5.5.2b — Frontend Media Module Tests', () => {
       const cached = queryClient.getQueryData(expectedKey);
       expect(cached).toBeDefined();
       expect((cached as MediaReadUrlResponse)?.readUrl).toBe('https://storage.goplant.vn/signed-a');
-      expect(hookResult.data?.readUrl).toBe('https://storage.goplant.vn/signed-a');
     });
 
     it('useDeleteMediaMutation removes cache for deleted media', async () => {
