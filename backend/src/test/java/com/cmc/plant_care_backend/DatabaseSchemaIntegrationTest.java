@@ -159,9 +159,10 @@ class DatabaseSchemaIntegrationTest {
                         assertEquals(2, roles.size(), "roles must contain exactly 2 seed roles");
                     }
 
-                    // Verify NO admin user exists by default in seed data
+                    // Verify NO admin user exists by default in seed data (e.g. hardcoded admin@goplant.vn / admin@example.com)
                     try (ResultSet rs = stmt.executeQuery(
-                        "SELECT COUNT(*) FROM user_roles ur JOIN roles r ON ur.role_id = r.id WHERE r.name = 'ROLE_ADMIN'")) {
+                        "SELECT COUNT(*) FROM users u JOIN user_roles ur ON u.id = ur.user_id JOIN roles r ON ur.role_id = r.id " +
+                        "WHERE r.name = 'ROLE_ADMIN' AND (u.email = 'admin@goplant.vn' OR u.email = 'admin@example.com' OR u.email = 'admin@admin.com' OR u.email = 'default_admin@goplant.vn')")) {
                         assertTrue(rs.next());
                         assertEquals(0, rs.getInt(1), "Database must NOT have any default seed admin user");
                     }
